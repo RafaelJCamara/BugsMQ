@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BugsMQ.Core\BugsMQ.Core.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Observability\BugsMQ.Observability.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Transport.RabbitMQ\BugsMQ.Transport.RabbitMQ.csproj" />
+    <ProjectReference Include="..\BugsMQ.Samples.OrderProcessing.Contracts\BugsMQ.Samples.OrderProcessing.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

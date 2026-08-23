@@ -1,0 +1,5 @@
+<span
+  class="kind-badge"
+  [class.kind-badge--choreographed]="kind() === 'Choreographed'"
+  [title]="kind() === 'Choreographed' ? 'Choreographed: BugsMQ observes this saga\'s progress via events; it does not drive it.' : 'Orchestrated: BugsMQ\'s engine drives this saga\'s steps directly.'"
+>{{ kind() }}</span>

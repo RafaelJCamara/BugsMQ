@@ -1,0 +1,18 @@
+.kind-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.kind-badge--choreographed {
+  background: transparent;
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}

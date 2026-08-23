@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BugsMQ.Observability\BugsMQ.Observability.csproj" />
+    <ProjectReference Include="..\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />
+    <ProjectReference Include="..\BugsMQ.Transport.RabbitMQ\BugsMQ.Transport.RabbitMQ.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,65 @@
+<div class="page-header">
+  <h1>Sagas</h1>
+  <span class="count" *ngIf="!loading()">{{ totalCount() }} total</span>
+</div>
+
+<div class="filters">
+  <select [(ngModel)]="status" (change)="refresh()">
+    <option value="">All statuses</option>
+    <option *ngFor="let s of statuses" [value]="s">{{ s }}</option>
+  </select>
+
+  <select [(ngModel)]="kind" (change)="refresh()">
+    <option value="">All kinds</option>
+    <option *ngFor="let k of kinds" [value]="k">{{ k }}</option>
+  </select>
+
+  <select [(ngModel)]="sagaType" (change)="refresh()">
+    <option value="">All saga types</option>
+    <option *ngFor="let t of sagaTypes()" [value]="t.sagaType">{{ t.sagaType }}</option>
+  </select>
+
+  <input
+    type="search"
+    placeholder="Search by type or correlation id…"
+    [(ngModel)]="search"
+    (keyup.enter)="refresh()"
+  />
+
+  <button type="button" (click)="refresh()">Refresh</button>
+</div>
+
+@if (error(); as message) {
+  <div class="banner banner--error">{{ message }}</div>
+}
+
+@if (loading()) {
+  <div class="empty">Loading…</div>
+} @else if (sagas().length === 0) {
+  <div class="empty">No sagas match these filters yet.</div>
+} @else {
+  <table class="saga-table">
+    <thead>
+      <tr>
+        <th>Correlation Id</th>
+        <th>Saga Type</th>
+        <th>Kind</th>
+        <th>Current State</th>
+        <th>Status</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (saga of sagas(); track saga.correlationId) {
+        <tr [routerLink]="['/sagas', saga.correlationId]" class="saga-row">
+          <td class="mono">{{ saga.correlationId | slice: 0 : 8 }}…</td>
+          <td>{{ saga.sagaType }}</td>
+          <td><app-kind-badge [kind]="saga.kind" /></td>
+          <td>{{ saga.currentState }}</td>
+          <td><app-status-badge [status]="saga.status" /></td>
+          <td class="muted">{{ saga.updatedAtUtc | date: 'short' }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+}

@@ -1,0 +1,24 @@
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.status-badge--running { color: var(--status-running); }
+.status-badge--completed { color: var(--status-completed); }
+.status-badge--failed { color: var(--status-failed); }
+.status-badge--compensating { color: var(--status-compensating); }
+.status-badge--compensated { color: var(--status-compensated); }
+.status-badge--timedout { color: var(--status-timedout); }
+.status-badge--cancelled { color: var(--status-cancelled); }

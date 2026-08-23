@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bugsmq
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432" # host 5433 to avoid clashing with any other locally-running Postgres on 5432
+    volumes:
+      - bugsmq-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672" # management UI: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dashboard-api:
+    build:
+      context: .
+      dockerfile: src/BugsMQ.Dashboard.Api/Dockerfile
+    ports:
+      - "5080:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__BugsMQ: "Host=postgres;Port=5432;Database=bugsmq;Username=postgres;Password=postgres"
+      RabbitMq__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"
+      Dashboard__WebOrigin: "http://localhost:4200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  order-processing:
+    build:
+      context: .
+      dockerfile: samples/BugsMQ.Samples.OrderProcessing/Dockerfile
+    environment:
+      ConnectionStrings__BugsMQ: "Host=postgres;Port=5432;Database=bugsmq;Username=postgres;Password=postgres"
+      RabbitMq__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  bugsmq-postgres-data:

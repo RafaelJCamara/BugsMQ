@@ -1,0 +1,33 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+artifacts/
+
+## Test results
+TestResults/
+coverage/
+*.trx
+
+## Rider / VS Code
+.idea/
+.vscode/
+
+## Angular / Node
+dashboard-web/node_modules/
+dashboard-web/dist/
+dashboard-web/.angular/
+npm-debug.log*
+
+## Docker
+docker-data/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Secrets
+*.env
+appsettings.*.local.json

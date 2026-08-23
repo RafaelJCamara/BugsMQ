@@ -1,0 +1,81 @@
+<a class="back" routerLink="/sagas">&larr; All sagas</a>
+
+@if (loading()) {
+  <div class="empty">Loading…</div>
+} @else if (error(); as message) {
+  <div class="banner banner--error">{{ message }}</div>
+} @else if (detail(); as d) {
+  <div class="summary-card">
+    <div class="summary-top">
+      <div>
+        <h1>{{ d.summary.sagaType }}</h1>
+        <div class="mono muted">{{ d.summary.correlationId }}</div>
+      </div>
+      <div class="summary-actions">
+        <app-kind-badge [kind]="d.summary.kind" />
+        <app-status-badge [status]="d.summary.status" />
+      </div>
+    </div>
+
+    <dl class="summary-grid">
+      <dt>Current state</dt>
+      <dd>{{ d.summary.currentState }}</dd>
+      <dt>Version</dt>
+      <dd>{{ d.summary.version }}</dd>
+      <dt>Created</dt>
+      <dd>{{ d.summary.createdAtUtc | date: 'medium' }}</dd>
+      <dt>Updated</dt>
+      <dd>{{ d.summary.updatedAtUtc | date: 'medium' }}</dd>
+    </dl>
+
+    @if (d.summary.status === 'Failed' || d.summary.status === 'TimedOut') {
+      <div class="retry-row">
+        <button type="button" [disabled]="retrying()" (click)="retry()">
+          {{ retrying() ? 'Retrying…' : 'Retry this saga' }}
+        </button>
+        @if (retryMessage(); as msg) {
+          <span class="retry-message">{{ msg }}</span>
+        }
+      </div>
+    }
+  </div>
+
+  <div class="tabs">
+    <button type="button" [class.active]="tab() === 'timeline'" (click)="setTab('timeline')">Timeline</button>
+    <button type="button" [class.active]="tab() === 'data'" (click)="setTab('data')">Data</button>
+  </div>
+
+  @if (tab() === 'timeline') {
+    @if (timeline().length === 0) {
+      <div class="empty">No events recorded yet.</div>
+    } @else {
+      <ol class="timeline">
+        @for (entry of timeline(); track entry.sequenceNumber) {
+          <li class="timeline-entry" [class.timeline-entry--error]="entry.errorMessage">
+            <div class="timeline-entry-header">
+              <span class="entry-type">{{ entry.entryType }}</span>
+              <span class="muted">{{ entry.occurredAtUtc | date: 'HH:mm:ss.SSS' }}</span>
+            </div>
+            @if (entry.fromState || entry.toState) {
+              <div class="entry-transition">
+                {{ entry.fromState ?? '—' }} <span class="arrow">&rarr;</span> {{ entry.toState ?? '—' }}
+              </div>
+            }
+            @if (entry.messageType) {
+              <div class="entry-message mono">{{ entry.messageType }}</div>
+            }
+            @if (entry.errorMessage) {
+              <div class="entry-error">{{ entry.errorMessage }}</div>
+            }
+          </li>
+        }
+      </ol>
+    }
+  } @else {
+    @if (prettyDataJson) {
+      <pre class="data-json">{{ prettyDataJson }}</pre>
+    } @else {
+      <div class="empty">No state data recorded.</div>
+    }
+  }
+}

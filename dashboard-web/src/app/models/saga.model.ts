@@ -1,0 +1,81 @@
+export type SagaKind = 'Orchestrated' | 'Choreographed';
+
+export type SagaStatus =
+  | 'Running'
+  | 'Completed'
+  | 'Failed'
+  | 'Compensating'
+  | 'Compensated'
+  | 'TimedOut'
+  | 'Cancelled';
+
+export type SagaEntryType =
+  | 'SagaStarted'
+  | 'StateEntered'
+  | 'MessageReceived'
+  | 'UnexpectedEvent'
+  | 'StepStarted'
+  | 'StepSucceeded'
+  | 'StepFailed'
+  | 'CompensationStarted'
+  | 'CompensationStepSucceeded'
+  | 'CompensationStepFailed'
+  | 'TimeoutScheduled'
+  | 'TimeoutFired'
+  | 'TimeoutCancelled'
+  | 'ManualRetryRequested'
+  | 'SagaCompleted'
+  | 'SagaCancelled';
+
+export interface SagaSummary {
+  correlationId: string;
+  sagaType: string;
+  kind: SagaKind;
+  currentState: string;
+  status: SagaStatus;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+  version: number;
+}
+
+export interface SagaDetail {
+  summary: SagaSummary;
+  dataJson: string | null;
+}
+
+export interface SagaLogEntry {
+  sequenceNumber: number;
+  correlationId: string;
+  sagaType: string;
+  entryType: SagaEntryType;
+  fromState: string | null;
+  toState: string | null;
+  messageType: string | null;
+  messageId: string | null;
+  payloadJson: string | null;
+  errorMessage: string | null;
+  traceId: string | null;
+  spanId: string | null;
+  occurredAtUtc: string;
+}
+
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+}
+
+export interface SagaTypeInfo {
+  sagaType: string;
+  kind: SagaKind;
+}
+
+export interface SagaListFilter {
+  status?: SagaStatus;
+  sagaType?: string;
+  kind?: SagaKind;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
