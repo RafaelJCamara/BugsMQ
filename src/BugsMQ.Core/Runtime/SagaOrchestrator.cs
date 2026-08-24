@@ -180,7 +180,17 @@ public sealed class SagaOrchestrator<TState>(
         if (state is null || !string.Equals(state.CurrentState, timeout.ForState, StringComparison.Ordinal) || state.Status != SagaStatus.Running)
             return;
 
-        var expectedVersion = state.Version;
+        // Claim this timeout with a version-checked write BEFORE calling into the saga definition,
+        // which is where Compensate()/Publish() actually dispatch side effects. Without this, a normal
+        // message (e.g. a reply landing right at this state's timeout boundary) that reads the same
+        // snapshot version concurrently — before either branch has written back — would let this
+        // timeout publish its side effects regardless of whether its own later persist then loses the
+        // optimistic-concurrency check against that message's write. Claiming first folds the race
+        // into a single optimistic-concurrency envelope: a stale timeout is caught and abandoned right
+        // here, before anything can be published, rather than after.
+        if (!await TryPersistOrLogRaceLossAsync(state, timeout, sideEffectsAlreadyRan: false, cancellationToken))
+            return;
+
         await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutFired, fromState: timeout.ForState), cancellationToken);
 
         var visitedStates = await GetVisitedStatesAsync(timeout.CorrelationId, cancellationToken);
@@ -201,7 +211,15 @@ public sealed class SagaOrchestrator<TState>(
             await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutScheduled, toState: outcome.ToState), cancellationToken);
         }
 
-        await PersistAsync(state, isNew: false, expectedVersion, cancellationToken);
+        // The claim above only closes the race up to this point — definition.HandleTimeoutAsync just
+        // ran real Compensate()/Publish() I/O (and any step-level RetryPolicy delays), which is real
+        // wall-clock time a second concurrent write could land in. If that happens, this persist loses
+        // the same optimistic-concurrency check, but unlike the claim, the side effects above have
+        // already gone out — they can't be un-published. Logging this case distinctly (rather than
+        // letting it propagate to the dispatcher's generic catch-and-log) at least makes that
+        // distinction visible instead of indistinguishably silent.
+        if (!await TryPersistOrLogRaceLossAsync(state, timeout, sideEffectsAlreadyRan: true, cancellationToken))
+            return;
 
         if (outcome.FinalStatus == SagaStatus.Failed)
             BugsMqDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
@@ -209,6 +227,40 @@ public sealed class SagaOrchestrator<TState>(
             BugsMqDiagnostics.SagasCompleted.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
 
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+    }
+
+    /// <summary>
+    /// Persists <paramref name="state"/> with an optimistic-concurrency check against its current
+    /// Version, returning false (and logging) instead of throwing if a concurrent write already moved
+    /// the saga past this version. Used for both the up-front timeout claim and the final persist after
+    /// running the definition's timeout step — <paramref name="sideEffectsAlreadyRan"/> only changes the
+    /// log level/message, since a race lost at the final persist means Compensate()/Publish() already
+    /// fired and can't be un-sent, unlike a race lost at the claim.
+    /// </summary>
+    private async Task<bool> TryPersistOrLogRaceLossAsync(TState state, SagaTimeout timeout, bool sideEffectsAlreadyRan, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await PersistAsync(state, isNew: false, state.Version, cancellationToken);
+            return true;
+        }
+        catch (SagaConcurrencyException ex)
+        {
+            if (sideEffectsAlreadyRan)
+            {
+                logger.LogWarning(ex,
+                    "Timeout for saga {SagaType} correlation {CorrelationId} in state {State} lost a second race after its Compensate()/Publish() side effects already ran; those side effects were sent but this timeout's own state transition was not persisted",
+                    SagaType, timeout.CorrelationId, timeout.ForState);
+            }
+            else
+            {
+                logger.LogInformation(ex,
+                    "Timeout for saga {SagaType} correlation {CorrelationId} in state {State} lost the race to a concurrent update; skipping",
+                    SagaType, timeout.CorrelationId, timeout.ForState);
+            }
+
+            return false;
+        }
     }
 
     private async Task HandleCoreAsync(ReceivedMessage received, CancellationToken cancellationToken)

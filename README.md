@@ -266,11 +266,12 @@ shipment), and 7 still `Running` (mostly just-submitted; a couple genuinely stuc
 honest gap called out above, not something this pass hides). One saga's timeline directly confirmed
 `IsDuplicateAsync` dedup: a chaos-duplicated `OrderSubmitted` reached the orchestrator twice, and
 `SagaStarted` was logged exactly once. Another showed `Duplicate` and `Drop`/`Delay` compounding
-usefully: a duplicated `ReserveInventory` made `InventoryParticipant` reserve stock twice (plain
-participants have no dedup of their own — only the saga orchestrator does, an honest asymmetry worth
-knowing), and of the two resulting `InventoryReserved` replies, chaos dropped one and delayed the
-other; the delayed copy still got through and the saga proceeded normally — redundancy compensating
-for loss, the textbook at-least-once story.
+usefully: a duplicated `ReserveInventory` made `InventoryParticipant` reserve stock twice — at the
+time, plain participants had no dedup of their own, only the saga orchestrator did (an honest
+asymmetry this pass left as a known finding; since fixed, see "Timeout/message race fix" below) —
+and of the two resulting `InventoryReserved` replies, chaos dropped one and delayed the other; the
+delayed copy still got through and the saga proceeded normally — redundancy compensating for loss,
+the textbook at-least-once story.
 
 The more interesting catch: one saga's container log (`fail: SagaTimeoutDispatcherHostedService`,
 `SagaConcurrencyException: ... was not at expected version 1; it was updated concurrently`),
@@ -287,14 +288,71 @@ That's a real, pre-existing race between the timeout dispatcher and normal messa
 (distinct from the "concurrency-safe timeout claiming" fix, which only protects two dispatcher
 instances from double-claiming the same timeout row, not a timeout from racing a message on the same
 saga) — a genuine finding this pass surfaced but didn't fix, since fixing `SagaOrchestrator`'s
-timeout/message race is out of scope for a fault-injection *package*. Left here rather than quietly
-dropped, in keeping with how the rest of this README treats gaps chaos testing finds.
+timeout/message race was out of scope for a fault-injection *package*. Left here rather than quietly
+dropped, in keeping with how the rest of this README treats gaps chaos testing finds. **Fixed in a
+later pass** — see "Timeout/message race fix" below.
 
 `BugsMQ.Chaos.Tests` covers each fault type in isolation (trigger vs. no-trigger, both directions,
 the no-double-ack property of duplicate-inbound, the `RollTrigger`/`NextDelay` probability helpers'
 edge cases, and `AddBugsMqChaos`'s registration gating) using the same hand-written-fake xUnit style
 as the rest of the repo's tests — no mocking framework, `FakeTimeProvider` for the delay tests
 instead of real waits.
+
+## Timeout/message race fix
+
+Closes the race the chaos-testing pass above found but deliberately left unfixed. In
+`SagaOrchestrator<TState>.HandleTimeoutAsync` (`src/BugsMQ.Core/Runtime/SagaOrchestrator.cs`), a due
+timeout used to call straight into the saga definition — which is what runs `.Compensate()`/`.Publish()`
+side effects — *before* persisting anything. If a normal message read the same snapshot version
+concurrently (the exact "reply landed mere seconds before the timeout" scenario above), the timeout's
+side effects went out over the transport regardless of whether its own subsequent persist then lost
+the optimistic-concurrency check against that message's write.
+
+The fix: `HandleTimeoutAsync` now claims the timeout with a version-checked persist *before* calling
+into the saga definition at all, reusing the exact same `SagaConcurrencyException` mechanism that
+already protected the final write — just moved earlier. A stale timeout is now detected and abandoned
+before anything can be published, not after. A second, narrower window remains — a concurrent write can
+still land between the claim succeeding and the timeout's own final persist, since real
+`Compensate()`/`Publish()` I/O (and any step-level `RetryPolicy` delay) sits in between, and that
+persist has no further claim to fall back on — every design considered for this fix (a version recheck
+just before publishing, a claim-then-persist split, or folding claim-and-persist into one envelope)
+shares this same residual limitation, since none of them serialize against a write landing mid-step
+without a lock or an outbox-style deferred-publish redesign, both bigger changes than this fix's scope.
+What changed for that narrower case: it's now caught and logged distinctly
+(`"...lost a second race after its Compensate()/Publish() side effects already ran..."`) instead of
+propagating an uncaught `SagaConcurrencyException` out to `SagaTimeoutDispatcherHostedService`'s
+generic catch-and-log, which is what happened before this fix for *any* race, wide or narrow.
+
+`tests/BugsMQ.Core.Tests/SagaOrchestratorTimeoutRaceTests.cs` covers both windows deterministically —
+same controlled-fake technique as `SagaOrchestratorInfrastructureFailureTests`, decorating the
+snapshot store to inject a concurrent reply synchronously at the exact call site that matters, rather
+than relying on real timing. One test proves the pre-claim race no longer publishes any compensation
+side effect; the other documents the accepted post-claim leak and proves it now fails gracefully
+instead of throwing uncaught.
+
+Verified live against the real chaos-enabled docker-compose stack with the fix applied: a ~20-minute
+run processed 190 sagas (88 `Completed`, 37 `Failed`, 27 `TimedOut` via `AwaitingPayment` compensation,
+38 still `Running`) with zero sagas that were both `Completed` and had a `RefundPayment`/
+`ReleaseInventory` in their timeline, and zero `SagaConcurrencyException` anywhere in the logs — the
+exact race window that surfaced the original bug is narrow enough that this run's real chaos timing
+didn't happen to land in it (consistent with the original catch needing its own dedicated pass to
+find), but the deterministic tests above force both interleavings directly rather than depending on
+that timing.
+
+Two secondary gaps the original chaos pass also flagged got picked up here:
+
+- **Participant-level dedup.** `InventoryParticipant`/`PaymentParticipant`/`ShippingParticipant` had no
+  idempotency guard of their own, unlike the saga orchestrator's `IsDuplicateAsync` — a chaos-duplicated
+  command (or a genuine broker at-least-once redelivery) ran its business side effect twice, as the
+  `Duplicate`+`Drop`/`Delay` finding above shows for `ReserveInventory`. Fixed with a small, bounded,
+  process-local `MessageId` dedup guard added once to the shared `ParticipantService` base
+  (`samples/BugsMQ.Samples.OrderProcessing/Participants/ParticipantService.cs`), covering all three
+  participants — not durable across restarts, which is an honest limitation of its own, but enough to
+  absorb the near-immediate redelivery chaos testing (and a real broker) actually produces.
+- **`AwaitingInventory`/`AwaitingShipment` have no `WithTimeout`.** Left as-is, deliberately: the
+  "States without a configured timeout" paragraph above already documents this as an intentional
+  choice — chaos testing surfacing it as a real, honest gap rather than something to quietly patch in
+  the same pass that found it. Revisit only if that framing should change.
 
 ## Getting started
 

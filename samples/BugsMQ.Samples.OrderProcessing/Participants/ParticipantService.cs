@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using BugsMQ.Abstractions.Transport;
 using Microsoft.Extensions.Hosting;
@@ -12,6 +13,16 @@ namespace BugsMQ.Samples.OrderProcessing.Participants;
 /// </summary>
 internal abstract class ParticipantService(IMessageTransport transport, string consumerName, ILogger logger) : IHostedService
 {
+    // Bounds a chaos-duplicated delivery (BugsMQ.Chaos's Duplicate fault, or a genuine broker at-least-once
+    // redelivery) from running a participant's business side effect twice — e.g. reserving inventory or
+    // charging a card twice for the one ReserveInventory/ChargePayment command. Process-local and
+    // capacity-bounded rather than durable/TTL-based: good enough to absorb the kind of near-immediate
+    // redelivery chaos testing injects, not a substitute for a real idempotency store in a production participant.
+    private const int MaxTrackedMessageIds = 4096;
+
+    private readonly ConcurrentDictionary<string, byte> _seenMessageIds = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<string> _seenMessageIdOrder = new();
+
     private IDisposable? _subscription;
 
     protected abstract string QueueName { get; }
@@ -41,6 +52,13 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
             return;
         }
 
+        if (!TryClaim(received.MessageId))
+        {
+            logger.LogDebug("{Consumer} skipping duplicate delivery of {MessageId}", consumerName, received.MessageId);
+            await received.Ack.AckAsync(cancellationToken);
+            return;
+        }
+
         try
         {
             var message = JsonSerializer.Deserialize(received.Body.Span, entry.Key)
@@ -59,4 +77,18 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
     /// <summary>Publishes a reply stamped with this participant's identity, causally linked to the inbound message it's responding to — see MessageEnvelope.From.</summary>
     protected Task ReplyAsync<TMessage>(TMessage message, ReceivedMessage received, CancellationToken cancellationToken) where TMessage : notnull =>
         transport.PublishAsync(message, MessageEnvelope.From(consumerName, received.CorrelationId, causationId: received.MessageId), cancellationToken);
+
+    /// <summary>True (and records it) the first time this MessageId is seen; false for a repeat. Evicts the
+    /// oldest tracked id once the bound is exceeded, so long-running uptime can't grow this unbounded.</summary>
+    private bool TryClaim(string messageId)
+    {
+        if (!_seenMessageIds.TryAdd(messageId, 0))
+            return false;
+
+        _seenMessageIdOrder.Enqueue(messageId);
+        while (_seenMessageIdOrder.Count > MaxTrackedMessageIds && _seenMessageIdOrder.TryDequeue(out var oldest))
+            _seenMessageIds.TryRemove(oldest, out _);
+
+        return true;
+    }
 }
