@@ -20,12 +20,12 @@ public sealed class OrderSagaState : SagaState
 /// </summary>
 public sealed class OrderSaga : OrchestratedSagaDefinition<OrderSagaState>
 {
-    public readonly State<OrderSagaState> Submitted = default!;
-    public readonly State<OrderSagaState> AwaitingInventory = default!;
-    public readonly State<OrderSagaState> AwaitingPayment = default!;
-    public readonly State<OrderSagaState> AwaitingShipment = default!;
-    public readonly State<OrderSagaState> Completed = default!;
-    public readonly State<OrderSagaState> Failed = default!;
+    public State<OrderSagaState> Submitted { get; }
+    public State<OrderSagaState> AwaitingInventory { get; }
+    public State<OrderSagaState> AwaitingPayment { get; }
+    public State<OrderSagaState> AwaitingShipment { get; }
+    public State<OrderSagaState> Completed { get; }
+    public State<OrderSagaState> Failed { get; }
 
     public OrderSaga()
     {

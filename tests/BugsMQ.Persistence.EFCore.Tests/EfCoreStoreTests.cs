@@ -30,10 +30,7 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
 
     private BugsMqDbContext NewContext() => new(_options);
 
-    public async ValueTask DisposeAsync()
-    {
-        await _connection.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() => _connection.DisposeAsync();
 
     [Fact]
     public async Task InsertAndFind_RoundTripsTypedState()
@@ -60,7 +57,7 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         var found = await new EfCoreSagaSnapshotStore<TestState>(db2).FindAsync(correlationId);
 
         Assert.NotNull(found);
-        Assert.Equal("ORD-1", found!.OrderId);
+        Assert.Equal("ORD-1", found.OrderId);
         Assert.Equal("Started", found.CurrentState);
         Assert.Equal(0, found.Version);
     }
@@ -89,7 +86,7 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
             state = await store.FindAsync(correlationId);
             Assert.NotNull(state);
 
-            state!.CurrentState = "Next";
+            state.CurrentState = "Next";
             await store.UpdateAsync(state, expectedVersion: 0);
 
             Assert.Equal(1, state.Version);
@@ -229,8 +226,8 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         var types = await new EfCoreSagaSummaryReader(db2).GetSagaTypesAsync();
 
         Assert.Equal(2, types.Count);
-        Assert.Contains(types, t => t.SagaType == "OrderSaga" && t.Kind == SagaKind.Orchestrated);
-        Assert.Contains(types, t => t.SagaType == "ShippingSaga" && t.Kind == SagaKind.Choreographed);
+        Assert.Contains(types, t => string.Equals(t.SagaType, "OrderSaga", StringComparison.Ordinal) && t.Kind == SagaKind.Orchestrated);
+        Assert.Contains(types, t => string.Equals(t.SagaType, "ShippingSaga", StringComparison.Ordinal) && t.Kind == SagaKind.Choreographed);
     }
 
     [Fact]
@@ -255,7 +252,7 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         var json = await new EfCoreSagaSummaryReader(db2).GetDataJsonAsync(correlationId);
 
         Assert.NotNull(json);
-        Assert.Contains("\"OrderId\":\"ORD-9\"", json);
+        Assert.Contains("\"OrderId\":\"ORD-9\"", json, StringComparison.Ordinal);
     }
 
     [Fact]

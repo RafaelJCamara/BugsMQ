@@ -5,7 +5,7 @@ namespace BugsMQ.Persistence.EFCore;
 
 public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutStore
 {
-    public async Task ScheduleAsync(Guid correlationId, string sagaType, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
+    public Task ScheduleAsync(Guid correlationId, string sagaType, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
     {
         db.SagaTimeouts.Add(new SagaTimeoutEntity
         {
@@ -16,7 +16,7 @@ public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutSto
             Status = SagaTimeoutStatus.Pending,
         });
 
-        await db.SaveChangesAsync(cancellationToken);
+        return db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task CancelAsync(Guid correlationId, string forState, CancellationToken cancellationToken = default)
@@ -32,13 +32,26 @@ public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutSto
             await db.SaveChangesAsync(cancellationToken);
     }
 
+    private const string NpgsqlProviderName = "Npgsql.EntityFrameworkCore.PostgreSQL";
+
     /// <remarks>
-    /// Claims by loading due rows and marking them Fired in one SaveChanges — correct for a single
-    /// dispatcher instance. Running multiple BugsMQ.Dashboard.Api/worker instances concurrently could
-    /// race on the same row; a production-hardened version would use a provider-specific atomic
-    /// UPDATE...RETURNING/OUTPUT claim. Out of scope for v1.
+    /// On Postgres, claims via an atomic <c>UPDATE ... RETURNING</c> guarded by
+    /// <c>FOR UPDATE SKIP LOCKED</c>, safe for multiple concurrent
+    /// BugsMQ.Dashboard.Api/worker instances racing on the same due rows. Any other provider (e.g.
+    /// SQLite in tests) falls back to a plain load-then-update, which is only correct for a single
+    /// dispatcher instance — that fallback exists for provider portability, not as a v1 shortcut.
     /// </remarks>
-    public async Task<IReadOnlyList<SagaTimeout>> ClaimDueAsync(DateTimeOffset asOf, int batchSize, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<SagaTimeout>> ClaimDueAsync(DateTimeOffset asOf, int batchSize, CancellationToken cancellationToken = default) =>
+        string.Equals(db.Database.ProviderName, NpgsqlProviderName, StringComparison.Ordinal)
+            ? ClaimDueViaSkipLockedAsync(asOf, batchSize, cancellationToken)
+            : ClaimDueViaLoadAndUpdateAsync(asOf, batchSize, cancellationToken);
+
+    /// <summary>
+    /// Not safe for multiple concurrent dispatcher instances — two dispatchers can both load the same
+    /// due row before either marks it Fired. Only reached for non-Postgres providers, where a portable
+    /// atomic claim isn't available.
+    /// </summary>
+    private async Task<IReadOnlyList<SagaTimeout>> ClaimDueViaLoadAndUpdateAsync(DateTimeOffset asOf, int batchSize, CancellationToken cancellationToken)
     {
         var due = await db.SagaTimeouts
             .Where(x => x.Status == SagaTimeoutStatus.Pending && x.DueAtUtc <= asOf)
@@ -55,5 +68,37 @@ public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutSto
         await db.SaveChangesAsync(cancellationToken);
 
         return due.Select(x => new SagaTimeout(x.Id, x.CorrelationId, x.SagaType, x.ForState, x.DueAtUtc, x.Status)).ToList();
+    }
+
+    /// <summary>
+    /// A single statement claims and returns the due rows atomically, so two dispatchers racing on the
+    /// same due row can never both claim it. <c>RETURNING</c> doesn't guarantee row order, so the
+    /// caller's due-date ordering is reapplied in memory after materializing; no further LINQ can be
+    /// composed onto the raw SQL itself (EF can't wrap a bare UPDATE...RETURNING in a subquery).
+    /// </summary>
+    private async Task<IReadOnlyList<SagaTimeout>> ClaimDueViaSkipLockedAsync(DateTimeOffset asOf, int batchSize, CancellationToken cancellationToken)
+    {
+        var asOfUtc = asOf.UtcDateTime;
+        var pending = (int)SagaTimeoutStatus.Pending;
+        var fired = (int)SagaTimeoutStatus.Fired;
+
+        var claimed = await db.SagaTimeouts.FromSqlInterpolated($"""
+            UPDATE "SagaTimeouts" SET "Status" = {fired}
+            WHERE "Id" IN (
+                SELECT "Id" FROM "SagaTimeouts"
+                WHERE "Status" = {pending} AND "DueAtUtc" <= {asOfUtc}
+                ORDER BY "DueAtUtc"
+                LIMIT {batchSize}
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING "Id", "CorrelationId", "SagaType", "ForState", "DueAtUtc", "Status"
+            """)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        return claimed
+            .OrderBy(x => x.DueAtUtc)
+            .Select(x => new SagaTimeout(x.Id, x.CorrelationId, x.SagaType, x.ForState, x.DueAtUtc, x.Status))
+            .ToList();
     }
 }

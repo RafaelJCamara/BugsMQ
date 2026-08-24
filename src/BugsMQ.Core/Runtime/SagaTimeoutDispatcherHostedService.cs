@@ -16,7 +16,7 @@ internal sealed class SagaTimeoutDispatcherHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var runtimesBySagaType = runtimes.ToDictionary(r => r.SagaType);
+        var runtimesBySagaType = runtimes.ToDictionary(r => r.SagaType, StringComparer.Ordinal);
         if (runtimesBySagaType.Count == 0)
             return;
 

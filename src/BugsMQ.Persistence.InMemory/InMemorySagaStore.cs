@@ -73,7 +73,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         if (filter.Kind is { } kind)
             query = query.Where(s => s.Kind == kind);
         if (!string.IsNullOrWhiteSpace(filter.SagaType))
-            query = query.Where(s => s.SagaType == filter.SagaType);
+            query = query.Where(s => string.Equals(s.SagaType, filter.SagaType, StringComparison.Ordinal));
         if (!string.IsNullOrWhiteSpace(filter.Search))
         {
             var search = filter.Search;
@@ -101,7 +101,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         IReadOnlyList<SagaTypeInfo> types = _snapshots.Values
             .Select(s => new SagaTypeInfo(s.SagaType, s.Kind))
             .Distinct()
-            .OrderBy(t => t.SagaType)
+            .OrderBy(t => t.SagaType, StringComparer.Ordinal)
             .ToList();
 
         return Task.FromResult(types);
@@ -159,7 +159,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default)
     {
         var isDuplicate = _timelines.TryGetValue(correlationId, out var list) &&
-                           list.Any(e => e.MessageId == messageId);
+                           list.Any(e => string.Equals(e.MessageId, messageId, StringComparison.Ordinal));
         return Task.FromResult(isDuplicate);
     }
 
@@ -174,7 +174,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     {
         foreach (var (id, timeout) in _timeouts)
         {
-            if (timeout.CorrelationId == correlationId && timeout.ForState == forState && timeout.Status == SagaTimeoutStatus.Pending)
+            if (timeout.CorrelationId == correlationId && string.Equals(timeout.ForState, forState, StringComparison.Ordinal) && timeout.Status == SagaTimeoutStatus.Pending)
                 _timeouts[id] = timeout with { Status = SagaTimeoutStatus.Cancelled };
         }
 

@@ -23,11 +23,11 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         await _container.StartAsync();
 
         _options = new DbContextOptionsBuilder<BugsMqDbContext>()
-            .UseNpgsql(_container.GetConnectionString())
+            .UseNpgsql(_container.GetConnectionString(), npgsql => npgsql.MigrationsAssembly("BugsMQ.Persistence.EFCore.Postgres"))
             .Options;
 
         await using var db = new BugsMqDbContext(_options);
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync() => await _container.DisposeAsync();
@@ -49,8 +49,8 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         var types = await new EfCoreSagaSummaryReader(db2).GetSagaTypesAsync();
 
         Assert.Equal(2, types.Count);
-        Assert.Contains(types, t => t.SagaType == "OrderSaga" && t.Kind == SagaKind.Orchestrated);
-        Assert.Contains(types, t => t.SagaType == "ShippingSaga" && t.Kind == SagaKind.Choreographed);
+        Assert.Contains(types, t => string.Equals(t.SagaType, "OrderSaga", StringComparison.Ordinal) && t.Kind == SagaKind.Orchestrated);
+        Assert.Contains(types, t => string.Equals(t.SagaType, "ShippingSaga", StringComparison.Ordinal) && t.Kind == SagaKind.Choreographed);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         var summary = await reader.GetAsync(correlationId);
 
         Assert.NotNull(summary);
-        Assert.Equal("Completed", summary!.CurrentState);
+        Assert.Equal("Completed", summary.CurrentState);
         Assert.Equal(SagaStatus.Completed, summary.Status);
         Assert.Equal(1, summary.Version);
 
@@ -115,5 +115,31 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         Assert.Equal(2, due.Count);
         Assert.Equal(early, due[0].CorrelationId); // earliest due date claimed first
         Assert.Equal(late, due[1].CorrelationId);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_ConcurrentCallsNeverClaimTheSameTimeoutTwice()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaTimeoutStore(db);
+            for (var i = 0; i < 20; i++)
+                await store.ScheduleAsync(Guid.NewGuid(), "OrderSaga", "AwaitingPayment", now.AddSeconds(-1), CancellationToken.None);
+        }
+
+        // Two dispatcher instances (separate DbContexts/connections) racing on the same 20 due rows —
+        // FOR UPDATE SKIP LOCKED must partition them with no overlap, proving the atomic claim actually
+        // works under concurrency rather than just compiling.
+        await using var dbA = NewContext();
+        await using var dbB = NewContext();
+        var claimA = new EfCoreSagaTimeoutStore(dbA).ClaimDueAsync(now, batchSize: 20);
+        var claimB = new EfCoreSagaTimeoutStore(dbB).ClaimDueAsync(now, batchSize: 20);
+        var results = await Task.WhenAll(claimA, claimB);
+
+        var claimedIds = results.SelectMany(r => r).Select(t => t.Id).ToList();
+        Assert.Equal(20, claimedIds.Count);
+        Assert.Equal(claimedIds.Count, claimedIds.Distinct().Count());
     }
 }

@@ -33,7 +33,7 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
 
     private async Task HandleAsync(ReceivedMessage received, CancellationToken cancellationToken)
     {
-        var entry = Handlers.FirstOrDefault(h => h.Key.Name == received.MessageTypeName);
+        var entry = Handlers.FirstOrDefault(h => string.Equals(h.Key.Name, received.MessageTypeName, StringComparison.Ordinal));
 
         if (entry.Key is null)
         {

@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddBugsMqEngine(this IServiceCollection services, Action<SagaEngineBuilder> configure)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<SagaOrchestratorOptions>();
         services.TryAddSingleton<ISagaChangeNotifier>(NullSagaChangeNotifier.Instance);
         services.AddSingleton<ISagaRetryDispatcher, SagaRetryDispatcher>();
         services.AddHostedService<SagaEngineHostedService>();

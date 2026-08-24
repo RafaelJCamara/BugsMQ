@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using BugsMQ.Abstractions.Diagnostics;
 using BugsMQ.Abstractions.Notifications;
@@ -24,11 +25,14 @@ public sealed class SagaOrchestrator<TState>(
     ISagaChangeNotifier notifier,
     IServiceProvider services,
     TimeProvider timeProvider,
+    SagaOrchestratorOptions options,
     ILogger<SagaOrchestrator<TState>> logger)
     where TState : SagaState, new()
 {
+    private const string DeliveryAttemptHeader = "x-bugsmq-delivery-attempt";
+
     private readonly Dictionary<string, Type> _messageTypesByName =
-        definition.MessageTypes.ToDictionary(t => t.Name, t => t);
+        definition.MessageTypes.ToDictionary(t => t.Name, t => t, StringComparer.Ordinal);
 
     public string SagaType => definition.SagaType;
 
@@ -41,10 +45,83 @@ public sealed class SagaOrchestrator<TState>(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Unhandled error processing {MessageType} for saga {SagaType}; nacking for redelivery", received.MessageTypeName, SagaType);
-            await received.Ack.NackAsync(requeue: true, cancellationToken);
+            await HandleInfrastructureFailureAsync(received, ex, cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Handles a failure from outside the saga definition's own step logic (deserialize errors,
+    /// persistence-store exceptions, transport hiccups — HandleStepFailureAsync already handles
+    /// failures thrown by the saga's own steps by marking it Failed). Redelivers with an incremented
+    /// attempt count under the cap; once exhausted, records why and dead-letters instead of requeuing
+    /// forever. If the redelivery publish itself throws, that's deliberately left to propagate — it
+    /// reaches RabbitMqTransport's own dispatch-level catch, which nacks without requeue, so a
+    /// redelivery that can't even be attempted still fails safe into the dead-letter queue.
+    /// </summary>
+    private async Task HandleInfrastructureFailureAsync(ReceivedMessage received, Exception ex, CancellationToken cancellationToken)
+    {
+        var attempt = GetDeliveryAttempt(received.Headers);
+
+        if (attempt < options.MaxDeliveryAttempts)
+        {
+            logger.LogWarning(ex, "Infrastructure error processing {MessageType} for saga {SagaType} (attempt {Attempt}/{MaxAttempts}); redelivering",
+                received.MessageTypeName, SagaType, attempt + 1, options.MaxDeliveryAttempts);
+
+            var headers = new Dictionary<string, string>(received.Headers, StringComparer.Ordinal)
+            {
+                [DeliveryAttemptHeader] = (attempt + 1).ToString(CultureInfo.InvariantCulture),
+            };
+            var envelope = new MessageEnvelope(received.CorrelationId, received.MessageId, headers);
+
+            // Same CorrelationId/MessageId as the original delivery, not a fresh one: if a durable log
+            // entry for this exact message was already written before the failure, the dedupe check in
+            // HandleCoreAsync will correctly recognize the redelivered copy and skip it rather than
+            // reprocess it — the same safe-by-default behavior RabbitMQ's own requeue:true gives today.
+            await transport.PublishRawAsync(received.MessageTypeName, received.Body, envelope, cancellationToken);
+            await received.Ack.AckAsync(cancellationToken);
+            return;
+        }
+
+        logger.LogError(ex, "Infrastructure error processing {MessageType} for saga {SagaType} after {MaxAttempts} delivery attempts; dead-lettering",
+            received.MessageTypeName, SagaType, options.MaxDeliveryAttempts);
+
+        await RecordDeliveryExhaustedAsync(received, ex, cancellationToken);
+        await received.Ack.NackAsync(requeue: false, cancellationToken);
+    }
+
+    /// <summary>
+    /// Best-effort visibility for a dead-lettered message: the message is already durably routed to the
+    /// DLQ by the NackAsync that follows this call regardless of whether this succeeds, so failures
+    /// here are logged and swallowed rather than left to interfere with that.
+    /// </summary>
+    private async Task RecordDeliveryExhaustedAsync(ReceivedMessage received, Exception ex, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await LogAsync(SagaLogEntry.Create(received.CorrelationId, SagaType, SagaEntryType.DeliveryExhausted,
+                messageType: received.MessageTypeName, messageId: received.MessageId, errorMessage: ex.Message), cancellationToken);
+
+            var state = await snapshotStore.FindAsync(received.CorrelationId, cancellationToken);
+            if (state is not null && state.Status is not (SagaStatus.Completed or SagaStatus.Failed or SagaStatus.TimedOut))
+            {
+                var expectedVersion = state.Version;
+                state.Status = SagaStatus.Failed;
+                await PersistAsync(state, isNew: false, expectedVersion, cancellationToken);
+                await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+            }
+        }
+        catch (Exception loggingEx)
+        {
+            logger.LogError(loggingEx, "Failed to record delivery-exhausted state for saga {SagaType} correlation {CorrelationId}; message is still being dead-lettered",
+                SagaType, received.CorrelationId);
+        }
+    }
+
+    private static int GetDeliveryAttempt(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(DeliveryAttemptHeader, out var value) &&
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var attempt)
+            ? attempt
+            : 0;
 
     /// <summary>Manual, dashboard/API-triggered redrive of a Failed saga: replays the exact message that last failed.</summary>
     public async Task RetryAsync(Guid correlationId, CancellationToken cancellationToken)
@@ -77,7 +154,7 @@ public sealed class SagaOrchestrator<TState>(
             fromState: existing.CurrentState, messageType: lastFailure.MessageType, messageId: lastFailure.MessageId), cancellationToken);
 
         await RunStepAsync(existing, message, lastFailure.MessageType, lastFailure.MessageId ?? Guid.NewGuid().ToString("N"),
-            new Dictionary<string, string>(), isNew: false, cancellationToken);
+            new Dictionary<string, string>(StringComparer.Ordinal), isNew: false, cancellationToken);
     }
 
     /// <summary>Invoked by the timeout dispatcher for a due, previously-scheduled state timeout.</summary>
@@ -88,14 +165,14 @@ public sealed class SagaOrchestrator<TState>(
         // The saga may have already moved past this state (its pending timeout is cancelled on
         // transition, but a race with an in-flight timer tick is possible) or been deleted — either
         // way there's nothing to do.
-        if (state is null || state.CurrentState != timeout.ForState || state.Status != SagaStatus.Running)
+        if (state is null || !string.Equals(state.CurrentState, timeout.ForState, StringComparison.Ordinal) || state.Status != SagaStatus.Running)
             return;
 
         var expectedVersion = state.Version;
         await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutFired, fromState: timeout.ForState), cancellationToken);
 
         var visitedStates = await GetVisitedStatesAsync(timeout.CorrelationId, cancellationToken);
-        var context = new SagaContext<TState>(state, timeout.CorrelationId, new Dictionary<string, string>(), visitedStates, services, transport, cancellationToken);
+        var context = new SagaContext<TState>(state, timeout.CorrelationId, new Dictionary<string, string>(StringComparer.Ordinal), visitedStates, services, transport, cancellationToken);
 
         var outcome = await definition.HandleTimeoutAsync(context, timeout.ForState, cancellationToken);
         if (!outcome.WasHandled)
@@ -104,7 +181,7 @@ public sealed class SagaOrchestrator<TState>(
         await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.StepSucceeded,
             fromState: outcome.FromState, toState: outcome.ToState), cancellationToken);
 
-        if (outcome.ToState != outcome.FromState && definition.GetTimeout(outcome.ToState) is { } delay)
+        if (!string.Equals(outcome.ToState, outcome.FromState, StringComparison.Ordinal) && definition.GetTimeout(outcome.ToState) is { } delay)
         {
             var dueAt = timeProvider.GetUtcNow() + delay;
             await timeoutStore.ScheduleAsync(timeout.CorrelationId, SagaType, outcome.ToState, dueAt, cancellationToken);
@@ -211,19 +288,7 @@ public sealed class SagaOrchestrator<TState>(
         {
             stopwatch.Stop();
             BugsMqDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
-
-            state.Status = SagaStatus.Failed;
-            var payloadJson = JsonSerializer.Serialize(message, message.GetType());
-
-            await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.StepFailed,
-                fromState: fromState, messageType: messageTypeName, messageId: messageId,
-                payloadJson: payloadJson, errorMessage: ex.Message,
-                traceId: activity?.TraceId.ToString(), spanId: activity?.SpanId.ToString()), cancellationToken);
-
-            await PersistAsync(state, isNew, expectedVersion, cancellationToken);
-            BugsMqDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
-
-            await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+            await HandleStepFailureAsync(state, ex, correlationId, fromState, message, messageTypeName, messageId, isNew, expectedVersion, activity, cancellationToken);
             return;
         }
 
@@ -231,6 +296,29 @@ public sealed class SagaOrchestrator<TState>(
         BugsMqDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
         activity?.SetTag(BugsMqDiagnostics.TagToState, outcome.ToState);
 
+        await HandleStepSuccessAsync(state, outcome, correlationId, fromState, messageTypeName, messageId, isNew, expectedVersion, activity, cancellationToken);
+    }
+
+    private async Task HandleStepFailureAsync(TState state, Exception ex, Guid correlationId, string fromState, object message,
+        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, CancellationToken cancellationToken)
+    {
+        state.Status = SagaStatus.Failed;
+        var payloadJson = JsonSerializer.Serialize(message, message.GetType());
+
+        await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.StepFailed,
+            fromState: fromState, messageType: messageTypeName, messageId: messageId,
+            payloadJson: payloadJson, errorMessage: ex.Message,
+            traceId: activity?.TraceId.ToString(), spanId: activity?.SpanId.ToString()), cancellationToken);
+
+        await PersistAsync(state, isNew, expectedVersion, cancellationToken);
+        BugsMqDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
+
+        await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+    }
+
+    private async Task HandleStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
+        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, CancellationToken cancellationToken)
+    {
         if (!outcome.WasHandled)
         {
             await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.UnexpectedEvent,
@@ -242,7 +330,7 @@ public sealed class SagaOrchestrator<TState>(
             fromState: outcome.FromState, toState: outcome.ToState, messageType: messageTypeName, messageId: messageId,
             traceId: activity?.TraceId.ToString(), spanId: activity?.SpanId.ToString()), cancellationToken);
 
-        if (outcome.ToState != outcome.FromState)
+        if (!string.Equals(outcome.ToState, outcome.FromState, StringComparison.Ordinal))
         {
             await timeoutStore.CancelAsync(correlationId, outcome.FromState, cancellationToken);
 
@@ -275,14 +363,13 @@ public sealed class SagaOrchestrator<TState>(
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
     }
 
-    private async Task PersistAsync(TState state, bool isNew, int expectedVersion, CancellationToken cancellationToken)
+    private Task PersistAsync(TState state, bool isNew, int expectedVersion, CancellationToken cancellationToken)
     {
         state.UpdatedAtUtc = timeProvider.GetUtcNow();
 
-        if (isNew)
-            await snapshotStore.InsertAsync(state, cancellationToken);
-        else
-            await snapshotStore.UpdateAsync(state, expectedVersion, cancellationToken);
+        return isNew
+            ? snapshotStore.InsertAsync(state, cancellationToken)
+            : snapshotStore.UpdateAsync(state, expectedVersion, cancellationToken);
     }
 
     private async Task<IReadOnlyList<string>> GetVisitedStatesAsync(Guid correlationId, CancellationToken cancellationToken)
@@ -292,7 +379,7 @@ public sealed class SagaOrchestrator<TState>(
         return timeline
             .Where(e => e.ToState is not null)
             .Select(e => e.ToState!)
-            .Distinct()
+            .Distinct(StringComparer.Ordinal)
             .ToList();
     }
 

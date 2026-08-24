@@ -7,6 +7,7 @@ using BugsMQ.Transport.RabbitMQ;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -21,10 +22,18 @@ namespace BugsMQ.Dashboard.Api.Tests;
 /// </summary>
 public sealed class DashboardApiFactory : WebApplicationFactory<Program>
 {
+    /// <summary>Configured below so authenticated endpoint tests have a key to send; auth fails closed otherwise.</summary>
+    public const string TestApiKey = "test-api-key";
+
     public InMemoryMessageTransport Transport => Services.GetRequiredService<InMemoryMessageTransport>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["Dashboard:ApiKey"] = TestApiKey,
+        }));
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<BugsMqDbContext>>();

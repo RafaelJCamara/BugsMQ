@@ -1,7 +1,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY global.json Directory.Build.props Directory.Packages.props .editorconfig ./
 COPY src/BugsMQ.Abstractions/BugsMQ.Abstractions.csproj src/BugsMQ.Abstractions/
 COPY src/BugsMQ.Core/BugsMQ.Core.csproj src/BugsMQ.Core/
 COPY src/BugsMQ.Observability/BugsMQ.Observability.csproj src/BugsMQ.Observability/

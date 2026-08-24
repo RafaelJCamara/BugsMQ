@@ -1,14 +1,19 @@
-using BugsMQ.Dashboard.Api;
-using BugsMQ.Dashboard.Api.Endpoints;
-using BugsMQ.Dashboard.Api.Hubs;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using BugsMQ.Abstractions.Notifications;
+using BugsMQ.Dashboard.Api;
+using BugsMQ.Dashboard.Api.Auth;
+using BugsMQ.Dashboard.Api.Endpoints;
+using BugsMQ.Dashboard.Api.HealthChecks;
+using BugsMQ.Dashboard.Api.Hubs;
 using BugsMQ.Observability;
 using BugsMQ.Persistence.EFCore;
 using BugsMQ.Transport.RabbitMQ;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,7 +36,12 @@ builder.Services.AddCors(options => options.AddPolicy(CorsPolicy, policy =>
 // transport republish (see SagaEndpoints), not an in-process orchestrator call.
 var connectionString = builder.Configuration.GetConnectionString("BugsMQ")
     ?? "Host=localhost;Port=5432;Database=bugsmq;Username=postgres;Password=postgres";
-builder.Services.AddBugsMqEfCore(db => db.UseNpgsql(connectionString));
+// Migrations live in BugsMQ.Persistence.EFCore.Postgres (not BugsMQ.Persistence.EFCore) so the latter
+// can stay free of any Npgsql-specific reference/generated code — it only depends on
+// Microsoft.EntityFrameworkCore, not any specific provider. MigrationsAssembly points EF Core at the
+// Postgres project's assembly instead of the DbContext's own.
+builder.Services.AddBugsMqEfCore(db => db.UseNpgsql(connectionString,
+    npgsql => npgsql.MigrationsAssembly("BugsMQ.Persistence.EFCore.Postgres")));
 
 builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
 builder.Services.AddBugsMqOpenTelemetry();
@@ -39,22 +49,30 @@ builder.Services.AddBugsMqOpenTelemetry();
 builder.Services.AddSingleton<ISagaChangeNotifier, SignalRSagaChangeNotifier>();
 builder.Services.AddHostedService<SagaChangePollingService>();
 
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres")
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq");
+
+builder.Services.AddAuthentication(ApiKeyAuthenticationDefaults.SchemeName)
+    .AddScheme<ApiKeyAuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationDefaults.SchemeName, configureOptions: null);
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
-// Sample-only convenience: create the schema if it doesn't exist yet (a real deployment would use
-// versioned `dotnet ef` migrations). Non-fatal if Postgres isn't reachable yet — e.g. under
-// WebApplicationFactory in tests, or if this container wins the startup race against the DB — the
-// app still starts; DB-backed endpoints simply fail until it's schema is created by this or another process.
+// Apply versioned EF Core migrations at startup. Non-fatal if Postgres isn't reachable yet — e.g.
+// under WebApplicationFactory in tests, or if this container wins the startup race against the DB —
+// the app still starts; DB-backed endpoints simply fail until the schema is migrated by this or
+// another process.
 using (var scope = app.Services.CreateScope())
 {
     try
     {
         var db = scope.ServiceProvider.GetRequiredService<BugsMqDbContext>();
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
     }
     catch (Exception ex)
     {
-        app.Logger.LogWarning(ex, "Could not ensure the BugsMQ schema exists at startup; will retry lazily on first request.");
+        app.Logger.LogWarning(ex, "Could not apply BugsMQ migrations at startup; will retry lazily on first request.");
     }
 }
 
@@ -63,11 +81,44 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors(CorsPolicy);
 
-app.MapSagaEndpoints();
-app.MapHub<SagaHub>("/hubs/saga");
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.UseAuthentication();
+app.UseAuthorization();
 
-app.Run();
+app.MapSagaEndpoints();
+app.MapHub<SagaHub>("/hubs/saga").RequireAuthorization();
+// Left unauthenticated: infra probes (docker-compose healthcheck, orchestrators) hit this without a key.
+app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = WriteHealthResponseAsync });
+
+await app.RunAsync();
+
+// Preserves the endpoint's original { "status": "healthy" } response shape (extended with a per-check
+// breakdown) instead of the health-checks middleware's default plain-text body.
+static Task WriteHealthResponseAsync(HttpContext context, HealthReport report)
+{
+    context.Response.ContentType = "application/json";
+
+    var payload = new
+    {
+        status = ToStatusString(report.Status),
+        checks = report.Entries.Select(e => new
+        {
+            name = e.Key,
+            status = ToStatusString(e.Value.Status),
+            description = e.Value.Description,
+        }),
+    };
+
+    return context.Response.WriteAsync(JsonSerializer.Serialize(payload));
+}
+
+static string ToStatusString(HealthStatus status) => status switch
+{
+    HealthStatus.Healthy => "healthy",
+    HealthStatus.Degraded => "degraded",
+    _ => "unhealthy",
+};
 
 /// <summary>Exposed so BugsMQ.Dashboard.Api.Tests can boot the app via WebApplicationFactory.</summary>
+#pragma warning disable S1118 // required marker type for WebApplicationFactory<Program>, not a utility class
 public partial class Program;
+#pragma warning restore S1118

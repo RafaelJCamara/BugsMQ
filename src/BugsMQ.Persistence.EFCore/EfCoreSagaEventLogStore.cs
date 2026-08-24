@@ -39,8 +39,8 @@ public sealed class EfCoreSagaEventLogStore(BugsMqDbContext db) : ISagaEventLogS
         return entities.Select(ToLogEntry).ToList();
     }
 
-    public async Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
-        await db.SagaEventLog.AsNoTracking().AnyAsync(x => x.CorrelationId == correlationId && x.MessageId == messageId, cancellationToken);
+    public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
+        db.SagaEventLog.AsNoTracking().AnyAsync(x => x.CorrelationId == correlationId && x.MessageId == messageId, cancellationToken);
 
     private static SagaLogEntry ToLogEntry(SagaEventLogEntity e) =>
         new(e.Id, e.CorrelationId, e.SagaType, e.EntryType, e.FromState, e.ToState, e.MessageType, e.MessageId,

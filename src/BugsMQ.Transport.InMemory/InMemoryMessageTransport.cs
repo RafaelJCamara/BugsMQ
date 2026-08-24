@@ -20,14 +20,20 @@ public sealed class InMemoryMessageTransport : IMessageTransport
     private sealed record Subscriber(TransportSubscription Subscription, Func<ReceivedMessage, CancellationToken, Task> Handler);
 
     /// <summary>All messages published/sent so far, for test assertions. Cleared by <see cref="Reset"/>.</summary>
-    public IReadOnlyList<PublishedMessage> Published
+    public IReadOnlyList<PublishedMessage> GetPublished()
     {
-        get { lock (_publishedLock) { return _published.ToList(); } }
+        lock (_publishedLock)
+        {
+            return _published.ToList();
+        }
     }
 
     public void Reset()
     {
-        lock (_publishedLock) { _published.Clear(); }
+        lock (_publishedLock)
+        {
+            _published.Clear();
+        }
     }
 
     public Task PublishAsync<TMessage>(TMessage message, MessageEnvelope envelope, CancellationToken cancellationToken = default)
@@ -58,11 +64,14 @@ public sealed class InMemoryMessageTransport : IMessageTransport
 
     private async Task DispatchAsync(object? message, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, string? destination, CancellationToken cancellationToken)
     {
-        lock (_publishedLock) { _published.Add(new PublishedMessage(message, messageTypeName, envelope, destination)); }
+        lock (_publishedLock)
+        {
+            _published.Add(new PublishedMessage(message, messageTypeName, envelope, destination));
+        }
 
         foreach (var subscriber in _subscribers.Values)
         {
-            if (!subscriber.Subscription.MessageTypes.Any(t => t.Name == messageTypeName))
+            if (!subscriber.Subscription.MessageTypes.Any(t => string.Equals(t.Name, messageTypeName, StringComparison.Ordinal)))
                 continue;
 
             var received = new ReceivedMessage(
@@ -70,7 +79,7 @@ public sealed class InMemoryMessageTransport : IMessageTransport
                 envelope.CorrelationId,
                 envelope.MessageId,
                 body,
-                envelope.Headers ?? new Dictionary<string, string>(),
+                envelope.Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
                 NoOpAckContext.Instance);
 
             await subscriber.Handler(received, cancellationToken);

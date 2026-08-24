@@ -12,6 +12,8 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
     where TState : SagaState, new()
 {
     private readonly SagaDefinitionModel<TState> _model = new();
+    private IReadOnlyCollection<Type>? _messageTypes;
+    private IReadOnlyCollection<Type>? _initiatingMessageTypes;
 
     public string SagaType { get; }
 
@@ -25,10 +27,18 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
     public string InitialStateName =>
         _model.InitialStateName ?? throw new SagaDefinitionException($"Saga '{SagaType}' never declared an InitialState(...).");
 
+    /// <summary>Computed once (the DSL registration table is immutable after the derived constructor runs) and cached.</summary>
     public IReadOnlyCollection<Type> MessageTypes =>
+        _messageTypes ??= ComputeMessageTypes();
+
+    /// <summary>Computed once (the DSL registration table is immutable after the derived constructor runs) and cached.</summary>
+    public IReadOnlyCollection<Type> InitiatingMessageTypes =>
+        _initiatingMessageTypes ??= ComputeInitiatingMessageTypes();
+
+    private IReadOnlyCollection<Type> ComputeMessageTypes() =>
         _model.StepsByState.Values.SelectMany(byType => byType.Keys).Distinct().ToArray();
 
-    public IReadOnlyCollection<Type> InitiatingMessageTypes =>
+    private IReadOnlyCollection<Type> ComputeInitiatingMessageTypes() =>
         _model.StepsByState.TryGetValue(InitialStateName, out var steps) ? steps.Keys.ToArray() : [];
 
     public bool CanInitiate(Type messageType) => InitiatingMessageTypes.Contains(messageType);
@@ -43,7 +53,7 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
         return new State<TState>(name);
     }
 
-    protected State<TState> State(string name) => new(name);
+    protected static State<TState> State(string name) => new(name);
 
     protected StateBuilder<TState> During(params State<TState>[] states) =>
         new(_model, states.Select(s => s.Name).ToArray());

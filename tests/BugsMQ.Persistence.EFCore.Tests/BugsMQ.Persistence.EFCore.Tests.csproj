@@ -6,6 +6,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />
+    <!-- Needed so the Postgres-only migrations assembly is loadable at runtime for MigrateAsync(). -->
+    <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore.Postgres\BugsMQ.Persistence.EFCore.Postgres.csproj" />
   </ItemGroup>
 
   <ItemGroup>

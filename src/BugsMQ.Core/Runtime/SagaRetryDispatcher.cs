@@ -10,7 +10,7 @@ internal sealed class SagaRetryDispatcher(IEnumerable<ISagaRuntime> runtimes) : 
 {
     public Task RetryAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
-        var runtime = runtimes.FirstOrDefault(r => r.SagaType == sagaType)
+        var runtime = runtimes.FirstOrDefault(r => string.Equals(r.SagaType, sagaType, StringComparison.Ordinal))
                       ?? throw new InvalidOperationException($"No saga is registered with type '{sagaType}'.");
 
         return runtime.RetryAsync(correlationId, cancellationToken);

@@ -3,8 +3,12 @@ using BugsMQ.Core.Dsl;
 
 namespace BugsMQ.Core.Tests;
 
+// Empty records are intentional: correlation is carried by the message envelope in tests, so these
+// zero-payload markers just need a distinct CLR type for routing/deserialization.
+#pragma warning disable S2094
 public sealed record FlakyWithPolicy;
 public sealed record AlwaysFailsWithPolicy;
+#pragma warning restore S2094
 
 public sealed class TestOrderSagaState : SagaState
 {
@@ -17,29 +21,35 @@ public sealed class TestOrderSagaState : SagaState
 
 public sealed record OrderSubmitted(string OrderId, decimal Amount);
 public sealed record ReserveInventory(Guid CorrelationId, string OrderId);
+#pragma warning disable S2094
 public sealed record InventoryReserved;
 public sealed record InventoryReservationFailed;
+#pragma warning restore S2094
 public sealed record ChargePayment(Guid CorrelationId, decimal Amount);
+#pragma warning disable S2094
 public sealed record PaymentCharged;
 public sealed record PaymentFailed;
+#pragma warning restore S2094
 public sealed record ReleaseInventory(Guid CorrelationId);
+#pragma warning disable S2094
 public sealed record FlakyStep;
+#pragma warning restore S2094
 
 public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaState>
 {
-    public readonly State<TestOrderSagaState> Submitted = default!;
-    public readonly State<TestOrderSagaState> AwaitingInventory = default!;
-    public readonly State<TestOrderSagaState> AwaitingPayment = default!;
-    public readonly State<TestOrderSagaState> Completed = default!;
-    public readonly State<TestOrderSagaState> Failed = default!;
+    public State<TestOrderSagaState> Submitted { get; }
+    public State<TestOrderSagaState> AwaitingInventory { get; }
+    public State<TestOrderSagaState> AwaitingPayment { get; }
+    public State<TestOrderSagaState> Completed { get; }
+    public State<TestOrderSagaState> Failed { get; }
 
     /// <summary>Shared across replays so a test can make a step fail once then succeed on manual retry.</summary>
-    public int FlakyStepAttempts;
+    public int FlakyStepAttempts { get; set; }
 
     /// <summary>Attempt counter for the in-process, step-level RetryPolicy tests (distinct from manual whole-saga retry above).</summary>
-    public int FlakyWithPolicyAttempts;
+    public int FlakyWithPolicyAttempts { get; set; }
 
-    public int AlwaysFailsWithPolicyAttempts;
+    public int AlwaysFailsWithPolicyAttempts { get; set; }
 
     public TestOrderSaga()
     {

@@ -9,6 +9,7 @@
     <Project Path="src/BugsMQ.Dashboard.Api/BugsMQ.Dashboard.Api.csproj" />
     <Project Path="src/BugsMQ.Observability/BugsMQ.Observability.csproj" />
     <Project Path="src/BugsMQ.Persistence.EFCore/BugsMQ.Persistence.EFCore.csproj" />
+    <Project Path="src/BugsMQ.Persistence.EFCore.Postgres/BugsMQ.Persistence.EFCore.Postgres.csproj" />
     <Project Path="src/BugsMQ.Persistence.InMemory/BugsMQ.Persistence.InMemory.csproj" />
     <Project Path="src/BugsMQ.Testing/BugsMQ.Testing.csproj" />
     <Project Path="src/BugsMQ.Transport.InMemory/BugsMQ.Transport.InMemory.csproj" />

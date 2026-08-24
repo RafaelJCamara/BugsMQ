@@ -22,7 +22,7 @@ internal sealed class OrderSubmitter(IMessageTransport transport, ILogger<OrderS
             await SubmitOrderAsync(stoppingToken);
     }
 
-    private async Task SubmitOrderAsync(CancellationToken cancellationToken)
+    private Task SubmitOrderAsync(CancellationToken cancellationToken)
     {
         var orderId = $"ORD-{DateTime.UtcNow:yyyyMMdd}-{Interlocked.Increment(ref _orderNumber):D4}";
         var order = new OrderSubmitted(orderId, $"CUST-{Random.Shared.Next(1000, 9999)}", Math.Round((decimal)(Random.Shared.NextDouble() * 480 + 20), 2));
@@ -32,6 +32,6 @@ internal sealed class OrderSubmitter(IMessageTransport transport, ILogger<OrderS
         // No BugsMQ correlation exists yet — the saga engine mints one on receipt since OrderSubmitted
         // is registered as an initiating event. This id is only for the envelope; the sample doesn't
         // need to track it further.
-        await transport.PublishAsync(order, MessageEnvelope.New(Guid.NewGuid()), cancellationToken);
+        return transport.PublishAsync(order, MessageEnvelope.New(Guid.NewGuid()), cancellationToken);
     }
 }

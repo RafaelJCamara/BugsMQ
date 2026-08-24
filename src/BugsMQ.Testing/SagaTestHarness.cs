@@ -81,7 +81,7 @@ public sealed class SagaTestHarness<TDefinition, TState> : IAsyncDisposable
         var orchestrator = _provider.GetRequiredService<SagaOrchestrator<TState>>();
         var due = await timeoutStore.ClaimDueAsync(TimeProvider.GetUtcNow(), batchSize: 1000, cancellationToken);
 
-        foreach (var timeout in due.Where(t => t.SagaType == Saga.SagaType))
+        foreach (var timeout in due.Where(t => string.Equals(t.SagaType, Saga.SagaType, StringComparison.Ordinal)))
             await orchestrator.HandleTimeoutAsync(timeout, cancellationToken);
 
         return this;
@@ -95,26 +95,26 @@ public sealed class SagaTestHarness<TDefinition, TState> : IAsyncDisposable
         return this;
     }
 
-    public async Task<TState?> FindStateAsync(CancellationToken cancellationToken = default)
+    public Task<TState?> FindStateAsync(CancellationToken cancellationToken = default)
     {
         var store = _provider.GetRequiredService<ISagaSnapshotStore<TState>>();
-        return await store.FindAsync(CorrelationId, cancellationToken);
+        return store.FindAsync(CorrelationId, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(CancellationToken cancellationToken = default)
     {
         var log = _provider.GetRequiredService<ISagaEventLogStore>();
-        return await log.GetTimelineAsync(CorrelationId, cancellationToken);
+        return log.GetTimelineAsync(CorrelationId, cancellationToken);
     }
 
     /// <summary>All messages published so far across every correlation id in this harness (publish and send).</summary>
-    public IReadOnlyList<object> Published => _transport.Published.Select(p => p.Message).OfType<object>().ToList();
+    public IReadOnlyList<object> GetPublished() => _transport.GetPublished().Select(p => p.Message).OfType<object>().ToList();
 
     public async Task<TState> AssertStateAsync(State<TState> expected, CancellationToken cancellationToken = default)
     {
         var state = await RequireStateAsync(cancellationToken);
 
-        if (state.CurrentState != expected.Name)
+        if (!string.Equals(state.CurrentState, expected.Name, StringComparison.Ordinal))
             throw new SagaAssertionException($"Expected saga '{CorrelationId}' to be in state '{expected.Name}' but it was in '{state.CurrentState}'.");
 
         return state;
@@ -132,13 +132,13 @@ public sealed class SagaTestHarness<TDefinition, TState> : IAsyncDisposable
 
     public void AssertPublished<TMessage>(Func<TMessage, bool>? predicate = null)
     {
-        if (!Published.OfType<TMessage>().Any(m => predicate is null || predicate(m)))
+        if (!GetPublished().OfType<TMessage>().Any(m => predicate is null || predicate(m)))
             throw new SagaAssertionException($"Expected a published message of type '{typeof(TMessage).Name}' matching the predicate, but none was found.");
     }
 
     public void AssertNotPublished<TMessage>(Func<TMessage, bool>? predicate = null)
     {
-        if (Published.OfType<TMessage>().Any(m => predicate is null || predicate(m)))
+        if (GetPublished().OfType<TMessage>().Any(m => predicate is null || predicate(m)))
             throw new SagaAssertionException($"Expected no published message of type '{typeof(TMessage).Name}' matching the predicate, but at least one was found.");
     }
 

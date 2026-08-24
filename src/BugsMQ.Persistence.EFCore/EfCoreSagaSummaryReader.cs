@@ -37,16 +37,16 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
         return new PagedResult<SagaSummary>(items, page, pageSize, totalCount);
     }
 
-    public async Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
     {
-        return await db.SagaInstances.AsNoTracking()
+        return db.SagaInstances.AsNoTracking()
             .Where(x => x.CorrelationId == correlationId)
             .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    public async Task<string?> GetDataJsonAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
-        await db.SagaInstances.AsNoTracking()
+    public Task<string?> GetDataJsonAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
+        db.SagaInstances.AsNoTracking()
             .Where(x => x.CorrelationId == correlationId)
             .Select(x => x.DataJson)
             .FirstOrDefaultAsync(cancellationToken);

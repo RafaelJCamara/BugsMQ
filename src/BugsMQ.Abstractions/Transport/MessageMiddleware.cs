@@ -7,13 +7,13 @@ namespace BugsMQ.Abstractions.Transport;
 /// </summary>
 public interface IOutboundMessageMiddleware
 {
-    Task InvokeAsync(OutboundMessageContext context, Func<OutboundMessageContext, Task> next);
+    Task InvokeAsync(OutboundMessageContext context, Func<OutboundMessageContext, Task> nextAsync);
 }
 
 /// <summary>Seam for cross-cutting behavior around inbound message delivery — same rationale as <see cref="IOutboundMessageMiddleware"/>.</summary>
 public interface IInboundMessageMiddleware
 {
-    Task InvokeAsync(InboundMessageContext context, Func<InboundMessageContext, Task> next);
+    Task InvokeAsync(InboundMessageContext context, Func<InboundMessageContext, Task> nextAsync);
 }
 
 public sealed class OutboundMessageContext(object message, MessageEnvelope envelope, string destinationHint)

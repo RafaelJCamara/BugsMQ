@@ -31,7 +31,7 @@ public sealed class MiddlewarePipelineTransport(
     }
 
     public Task<IDisposable> SubscribeAsync(TransportSubscription subscription, Func<ReceivedMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default) =>
-        inner.SubscribeAsync(subscription, (received, ct) => RunInboundAsync(received, ct, handler), cancellationToken);
+        inner.SubscribeAsync(subscription, (received, ct) => RunInboundAsync(received, handler, ct), cancellationToken);
 
     // Bypasses the middleware pipeline: this path is used for administrative redrive (the dashboard's
     // manual retry), not mainstream saga traffic, and it carries pre-serialized bytes rather than a
@@ -53,7 +53,7 @@ public sealed class MiddlewarePipelineTransport(
         return pipeline(context);
     }
 
-    private Task RunInboundAsync(ReceivedMessage received, CancellationToken cancellationToken, Func<ReceivedMessage, CancellationToken, Task> terminal)
+    private Task RunInboundAsync(ReceivedMessage received, Func<ReceivedMessage, CancellationToken, Task> terminal, CancellationToken cancellationToken)
     {
         Func<InboundMessageContext, Task> pipeline = ctx => ctx.Suppressed ? Task.CompletedTask : terminal(ctx.Message, cancellationToken);
 

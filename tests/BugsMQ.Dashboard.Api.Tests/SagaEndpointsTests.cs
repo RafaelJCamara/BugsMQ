@@ -26,12 +26,13 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     public SagaEndpointsTests()
     {
         _client = _factory.CreateClient();
+        _client.DefaultRequestHeaders.Add("X-Api-Key", DashboardApiFactory.TestApiKey);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _client.Dispose();
-        await _factory.DisposeAsync();
+        return _factory.DisposeAsync();
     }
 
     private async Task<Guid> SeedSagaAsync(string sagaType, string currentState, SagaStatus status, SagaKind kind = SagaKind.Orchestrated)
@@ -63,7 +64,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var result = await _client.GetFromJsonAsync<PagedResult<SagaSummary>>("/api/sagas", JsonOptions);
 
         Assert.NotNull(result);
-        Assert.Empty(result!.Items);
+        Assert.Empty(result.Items);
         Assert.Equal(0, result.TotalCount);
     }
 
@@ -109,7 +110,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{correlationId}", JsonOptions);
 
         Assert.NotNull(detail);
-        Assert.Equal(correlationId, detail!.Summary.CorrelationId);
+        Assert.Equal(correlationId, detail.Summary.CorrelationId);
         Assert.Equal("Submitted", detail.Summary.CurrentState);
         Assert.NotNull(detail.DataJson);
     }
@@ -131,7 +132,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{correlationId}/timeline", JsonOptions);
 
         Assert.NotNull(timeline);
-        Assert.Equal(2, timeline!.Count);
+        Assert.Equal(2, timeline.Count);
         Assert.Equal(SagaEntryType.SagaStarted, timeline[0].EntryType);
         Assert.Equal(SagaEntryType.StepSucceeded, timeline[1].EntryType);
     }
@@ -146,9 +147,9 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var types = await _client.GetFromJsonAsync<List<SagaTypeInfo>>("/api/saga-types", JsonOptions);
 
         Assert.NotNull(types);
-        Assert.Contains(types!, t => t.SagaType == sagaType && t.Kind == SagaKind.Orchestrated);
+        Assert.Contains(types, t => string.Equals(t.SagaType, sagaType, StringComparison.Ordinal) && t.Kind == SagaKind.Orchestrated);
         // Only one entry per (SagaType, Kind) pair even though two instances share it.
-        Assert.Single(types!, t => t.SagaType == sagaType);
+        Assert.Single(types, t => string.Equals(t.SagaType, sagaType, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -191,10 +192,10 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        Assert.Contains(_factory.Transport.Published, p =>
-            p.MessageTypeName == "ReserveInventory" &&
+        Assert.Contains(_factory.Transport.GetPublished(), p =>
+            string.Equals(p.MessageTypeName, "ReserveInventory", StringComparison.Ordinal) &&
             p.Envelope.CorrelationId == correlationId &&
-            p.Envelope.MessageId != "m1"); // fresh id, not a re-delivery of the original
+            !string.Equals(p.Envelope.MessageId, "m1", StringComparison.Ordinal)); // fresh id, not a re-delivery of the original
 
         var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{correlationId}/timeline", JsonOptions);
         Assert.Contains(timeline!, e => e.EntryType == SagaEntryType.ManualRetryRequested);
@@ -218,10 +219,10 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         Assert.Equal("Submitted", detail!.Summary.CurrentState);
         Assert.Equal(SagaStatus.Running, detail.Summary.Status);
 
-        Assert.Contains(_factory.Transport.Published, p =>
-            p.MessageTypeName == "OrderSubmitted" &&
+        Assert.Contains(_factory.Transport.GetPublished(), p =>
+            string.Equals(p.MessageTypeName, "OrderSubmitted", StringComparison.Ordinal) &&
             p.Envelope.CorrelationId == correlationId &&
-            p.Envelope.MessageId != "m0");
+            !string.Equals(p.Envelope.MessageId, "m0", StringComparison.Ordinal));
     }
 
     [Fact]

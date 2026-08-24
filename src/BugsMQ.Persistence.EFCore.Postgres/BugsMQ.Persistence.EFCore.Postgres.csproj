@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- This project holds nothing but dotnet-ef generated migration code, which routinely trips the
+       repo-wide analyzer rules (method length, array-literal-as-argument, etc.) in ways that aren't
+       worth hand-editing generated files to avoid. Disabling analyzers here (not repo-wide) keeps
+       every hand-written project fully covered. -->
+  <PropertyGroup>
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

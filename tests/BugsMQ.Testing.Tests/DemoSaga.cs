@@ -9,16 +9,20 @@ public sealed class DemoSagaState : SagaState
 }
 
 public sealed record OrderPlaced(string OrderId);
+// Empty records are intentional: correlation is carried by the message envelope in tests, so these
+// zero-payload markers just need a distinct CLR type for routing/deserialization.
+#pragma warning disable S2094
 public sealed record ShipmentConfirmed;
 public sealed record ShipmentFailed;
+#pragma warning restore S2094
 public sealed record ReleaseHold(Guid CorrelationId);
 
 public sealed class DemoSaga : OrchestratedSagaDefinition<DemoSagaState>
 {
-    public readonly State<DemoSagaState> Placed = default!;
-    public readonly State<DemoSagaState> AwaitingShipment = default!;
-    public readonly State<DemoSagaState> Shipped = default!;
-    public readonly State<DemoSagaState> Failed = default!;
+    public State<DemoSagaState> Placed { get; }
+    public State<DemoSagaState> AwaitingShipment { get; }
+    public State<DemoSagaState> Shipped { get; }
+    public State<DemoSagaState> Failed { get; }
 
     public DemoSaga()
     {

@@ -1,7 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import * as signalR from '@microsoft/signalr';
 import { Subject } from 'rxjs';
-import { HUB_URL } from '../api-config';
+import { DASHBOARD_API_KEY, HUB_URL } from '../api-config';
 import { SagaLogEntry, SagaSummary } from '../models/saga.model';
 
 @Injectable({ providedIn: 'root' })
@@ -15,7 +15,7 @@ export class SagaHubService implements OnDestroy {
   private async ensureStarted(): Promise<void> {
     if (!this.connection) {
       this.connection = new signalR.HubConnectionBuilder()
-        .withUrl(HUB_URL)
+        .withUrl(HUB_URL, { accessTokenFactory: () => DASHBOARD_API_KEY })
         .withAutomaticReconnect()
         .build();
 

@@ -6,8 +6,10 @@ namespace BugsMQ.Transport.RabbitMQ.Tests;
 
 public sealed record PingMessage(string Text);
 
+#pragma warning disable CA1001 // _connectionManager is disposed in DisposeAsync() via xUnit's IAsyncLifetime, not IAsyncDisposable
 public sealed class RabbitMqTransportTests : IAsyncLifetime
 {
+#pragma warning restore CA1001
     private readonly RabbitMqContainer _container = new RabbitMqBuilder("rabbitmq:4-management").Build();
     private RabbitMqConnectionManager _connectionManager = null!;
     private RabbitMqTransport _transport = null!;
@@ -77,5 +79,16 @@ public sealed class RabbitMqTransportTests : IAsyncLifetime
         var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
         Assert.Same(tcs.Task, completed);
         Assert.Equal(correlationId, (await tcs.Task).CorrelationId);
+    }
+
+    [Fact]
+    public async Task Publish_ToUnboundRoutingKey_ThrowsUnroutablePublishException()
+    {
+        // No subscriber has ever bound a queue for this message type, so with publisher confirms +
+        // mandatory:true the broker must return it as unroutable rather than silently dropping it.
+        var ex = await Assert.ThrowsAsync<MessageTransportPublishException>(() =>
+            _transport.PublishAsync(new PingMessage("nobody's listening"), MessageEnvelope.New(Guid.NewGuid())));
+
+        Assert.True(ex.IsUnroutable);
     }
 }

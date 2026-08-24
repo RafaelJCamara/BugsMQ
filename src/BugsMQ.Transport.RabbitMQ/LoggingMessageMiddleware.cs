@@ -10,20 +10,20 @@ namespace BugsMQ.Transport.RabbitMQ;
 /// </summary>
 public sealed class LoggingOutboundMiddleware(ILogger<LoggingOutboundMiddleware> logger) : IOutboundMessageMiddleware
 {
-    public async Task InvokeAsync(OutboundMessageContext context, Func<OutboundMessageContext, Task> next)
+    public Task InvokeAsync(OutboundMessageContext context, Func<OutboundMessageContext, Task> nextAsync)
     {
         logger.LogDebug("Publishing {MessageType} (correlation {CorrelationId}) to {Destination}",
             context.Message.GetType().Name, context.Envelope.CorrelationId, context.DestinationHint);
-        await next(context);
+        return nextAsync(context);
     }
 }
 
 public sealed class LoggingInboundMiddleware(ILogger<LoggingInboundMiddleware> logger) : IInboundMessageMiddleware
 {
-    public async Task InvokeAsync(InboundMessageContext context, Func<InboundMessageContext, Task> next)
+    public Task InvokeAsync(InboundMessageContext context, Func<InboundMessageContext, Task> nextAsync)
     {
         logger.LogDebug("Received {MessageType} (correlation {CorrelationId})",
             context.Message.MessageTypeName, context.Message.CorrelationId);
-        await next(context);
+        return nextAsync(context);
     }
 }
