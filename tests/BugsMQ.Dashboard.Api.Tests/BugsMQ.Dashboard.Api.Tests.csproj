@@ -6,6 +6,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\BugsMQ.Dashboard.Api\BugsMQ.Dashboard.Api.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Persistence.InMemory\BugsMQ.Persistence.InMemory.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Transport.InMemory\BugsMQ.Transport.InMemory.csproj" />
   </ItemGroup>
 
   <ItemGroup>

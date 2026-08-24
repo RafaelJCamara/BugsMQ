@@ -156,4 +156,63 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Equal(_saga.Failed.Name, state!.CurrentState);
         Assert.Equal(SagaStatus.TimedOut, state.Status);
     }
+
+    [Fact]
+    public async Task StepLevelRetryPolicy_RetriesInProcessUntilItSucceeds()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await _transport.PublishAsync(new OrderSubmitted("ORD-5", 12m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new FlakyWithPolicy(), MessageEnvelope.New(correlationId));
+
+        // The whole point of a step-level RetryPolicy is that all attempts happen inside ONE message
+        // handling call — no manual intervention, no separate delivery, no Failed status in between.
+        Assert.Equal(3, _saga.FlakyWithPolicyAttempts);
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(_saga.AwaitingPayment.Name, state!.CurrentState);
+        Assert.Equal(SagaStatus.Running, state.Status);
+    }
+
+    [Fact]
+    public async Task StepLevelRetryPolicy_MarksFailedOnceAttemptsAreExhausted()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await _transport.PublishAsync(new OrderSubmitted("ORD-6", 8m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new AlwaysFailsWithPolicy(), MessageEnvelope.New(correlationId));
+
+        Assert.Equal(2, _saga.AlwaysFailsWithPolicyAttempts); // MaxAttempts: 2, and it never succeeds
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(SagaStatus.Failed, state!.Status);
+        Assert.Equal(_saga.AwaitingInventory.Name, state.CurrentState); // parked where it failed, no transition ran
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.StepFailed && e.MessageType == nameof(AlwaysFailsWithPolicy));
+    }
+
+    [Fact]
+    public async Task DuplicateMessageId_IsSkippedAndDoesNotReprocess()
+    {
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-7", 20m), MessageEnvelope.New(correlationId));
+
+        var duplicateEnvelope = new MessageEnvelope(correlationId, "fixed-message-id-123");
+        await _transport.PublishAsync(new InventoryReserved(), duplicateEnvelope);
+        await _transport.PublishAsync(new InventoryReserved(), duplicateEnvelope); // same correlation + same message id: a genuine redelivery
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(_saga.AwaitingPayment.Name, state!.CurrentState); // advanced exactly once, not twice
+
+        var chargePaymentCount = _transport.Published.Count(p => p.Message is ChargePayment);
+        Assert.Equal(1, chargePaymentCount); // the ChargePayment side effect only fired once
+    }
 }

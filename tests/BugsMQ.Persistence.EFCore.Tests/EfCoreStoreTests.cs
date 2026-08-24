@@ -209,4 +209,87 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         Assert.Equal(1, failedOnly.TotalCount);
         Assert.Equal(SagaStatus.Failed, failedOnly.Items[0].Status);
     }
+
+    [Fact]
+    public async Task GetSagaTypesAsync_ReturnsDistinctTypesAcrossInstances()
+    {
+        // Regression test: GetSagaTypesAsync originally projected straight into the SagaTypeInfo
+        // record inside Distinct()/OrderBy(), which Npgsql's provider could not translate to SQL —
+        // only caught against a real Postgres, not SQLite. Keeping this test here (and the sibling
+        // Postgres Testcontainers test) so both providers are exercised for this exact query shape.
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaSnapshotStore<TestState>(db);
+            await store.InsertAsync(new TestState { CorrelationId = Guid.NewGuid(), SagaType = "OrderSaga", Kind = SagaKind.Orchestrated, CurrentState = "A", CreatedAtUtc = DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow });
+            await store.InsertAsync(new TestState { CorrelationId = Guid.NewGuid(), SagaType = "OrderSaga", Kind = SagaKind.Orchestrated, CurrentState = "B", CreatedAtUtc = DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow });
+            await store.InsertAsync(new TestState { CorrelationId = Guid.NewGuid(), SagaType = "ShippingSaga", Kind = SagaKind.Choreographed, CurrentState = "A", CreatedAtUtc = DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow });
+        }
+
+        await using var db2 = NewContext();
+        var types = await new EfCoreSagaSummaryReader(db2).GetSagaTypesAsync();
+
+        Assert.Equal(2, types.Count);
+        Assert.Contains(types, t => t.SagaType == "OrderSaga" && t.Kind == SagaKind.Orchestrated);
+        Assert.Contains(types, t => t.SagaType == "ShippingSaga" && t.Kind == SagaKind.Choreographed);
+    }
+
+    [Fact]
+    public async Task GetDataJsonAsync_ReturnsSerializedState()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+            {
+                CorrelationId = correlationId,
+                SagaType = "TestSaga",
+                CurrentState = "Started",
+                OrderId = "ORD-9",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db2 = NewContext();
+        var json = await new EfCoreSagaSummaryReader(db2).GetDataJsonAsync(correlationId);
+
+        Assert.NotNull(json);
+        Assert.Contains("\"OrderId\":\"ORD-9\"", json);
+    }
+
+    [Fact]
+    public async Task ResetStateAsync_UpdatesColumnsAndKeepsEmbeddedJsonInSync()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+            {
+                CorrelationId = correlationId,
+                SagaType = "TestSaga",
+                CurrentState = "Failed",
+                Status = SagaStatus.Failed,
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using (var db2 = NewContext())
+            await new EfCoreSagaSummaryReader(db2).ResetStateAsync(correlationId, "Submitted", SagaStatus.Running);
+
+        // The entity-level columns (read via ISagaSummaryReader) and the embedded DataJson (read via
+        // ISagaSnapshotStore<TState>, which is what the orchestrator actually uses) must agree —
+        // this is exactly the class of bug that once let Version drift out of sync with DataJson.
+        await using var db3 = NewContext();
+        var summary = await new EfCoreSagaSummaryReader(db3).GetAsync(correlationId);
+        Assert.Equal("Submitted", summary!.CurrentState);
+        Assert.Equal(SagaStatus.Running, summary.Status);
+
+        await using var db4 = NewContext();
+        var typedState = await new EfCoreSagaSnapshotStore<TestState>(db4).FindAsync(correlationId);
+        Assert.Equal("Submitted", typedState!.CurrentState);
+        Assert.Equal(SagaStatus.Running, typedState.Status);
+    }
 }

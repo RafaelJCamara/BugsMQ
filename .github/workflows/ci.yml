@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  dotnet:
+    name: .NET build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore BugsMQ.slnx
+
+      - name: Build
+        run: dotnet build BugsMQ.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test BugsMQ.slnx --no-build --configuration Release --logger "console;verbosity=normal"
+
+  angular:
+    name: Angular build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx ng build
+
+      - name: Test
+        run: npx ng test --watch=false

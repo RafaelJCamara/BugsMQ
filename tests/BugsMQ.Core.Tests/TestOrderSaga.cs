@@ -3,6 +3,9 @@ using BugsMQ.Core.Dsl;
 
 namespace BugsMQ.Core.Tests;
 
+public sealed record FlakyWithPolicy;
+public sealed record AlwaysFailsWithPolicy;
+
 public sealed class TestOrderSagaState : SagaState
 {
     public string? OrderId { get; set; }
@@ -33,6 +36,11 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
     /// <summary>Shared across replays so a test can make a step fail once then succeed on manual retry.</summary>
     public int FlakyStepAttempts;
 
+    /// <summary>Attempt counter for the in-process, step-level RetryPolicy tests (distinct from manual whole-saga retry above).</summary>
+    public int FlakyWithPolicyAttempts;
+
+    public int AlwaysFailsWithPolicyAttempts;
+
     public TestOrderSaga()
     {
         Submitted = InitialState(nameof(Submitted));
@@ -62,6 +70,23 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                     if (FlakyStepAttempts == 1)
                         throw new InvalidOperationException("simulated transient failure");
                 })
+                .TransitionTo(AwaitingPayment)
+            .When<FlakyWithPolicy>()
+                .Then((_, _) =>
+                {
+                    FlakyWithPolicyAttempts++;
+                    if (FlakyWithPolicyAttempts < 3)
+                        throw new InvalidOperationException("transient failure, should be retried in-process");
+                })
+                .Retry(RetryPolicy.Exponential(maxAttempts: 3, baseDelay: TimeSpan.FromMilliseconds(1)))
+                .TransitionTo(AwaitingPayment)
+            .When<AlwaysFailsWithPolicy>()
+                .Then((_, _) =>
+                {
+                    AlwaysFailsWithPolicyAttempts++;
+                    throw new InvalidOperationException("always fails");
+                })
+                .Retry(RetryPolicy.Exponential(maxAttempts: 2, baseDelay: TimeSpan.FromMilliseconds(1)))
                 .TransitionTo(AwaitingPayment);
 
         During(AwaitingPayment)
