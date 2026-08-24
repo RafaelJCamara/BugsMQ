@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\BugsMQ.Chaos\BugsMQ.Chaos.csproj" />
     <ProjectReference Include="..\..\src\BugsMQ.Core\BugsMQ.Core.csproj" />
     <ProjectReference Include="..\..\src\BugsMQ.Observability\BugsMQ.Observability.csproj" />
     <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />

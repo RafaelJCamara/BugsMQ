@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/BugsMQ.Abstractions/BugsMQ.Abstractions.csproj" />
+    <Project Path="src/BugsMQ.Chaos/BugsMQ.Chaos.csproj" />
     <Project Path="src/BugsMQ.Core/BugsMQ.Core.csproj" />
     <Project Path="src/BugsMQ.Dashboard.Api/BugsMQ.Dashboard.Api.csproj" />
     <Project Path="src/BugsMQ.Observability/BugsMQ.Observability.csproj" />
@@ -16,6 +17,7 @@
     <Project Path="src/BugsMQ.Transport.RabbitMQ/BugsMQ.Transport.RabbitMQ.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BugsMQ.Chaos.Tests/BugsMQ.Chaos.Tests.csproj" />
     <Project Path="tests/BugsMQ.Core.Tests/BugsMQ.Core.Tests.csproj" />
     <Project Path="tests/BugsMQ.Dashboard.Api.Tests/BugsMQ.Dashboard.Api.Tests.csproj" />
     <Project Path="tests/BugsMQ.Persistence.EFCore.Tests/BugsMQ.Persistence.EFCore.Tests.csproj" />

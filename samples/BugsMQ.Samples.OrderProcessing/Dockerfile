@@ -3,6 +3,7 @@ WORKDIR /src
 
 COPY global.json Directory.Build.props Directory.Packages.props .editorconfig ./
 COPY src/BugsMQ.Abstractions/BugsMQ.Abstractions.csproj src/BugsMQ.Abstractions/
+COPY src/BugsMQ.Chaos/BugsMQ.Chaos.csproj src/BugsMQ.Chaos/
 COPY src/BugsMQ.Core/BugsMQ.Core.csproj src/BugsMQ.Core/
 COPY src/BugsMQ.Observability/BugsMQ.Observability.csproj src/BugsMQ.Observability/
 COPY src/BugsMQ.Persistence.EFCore/BugsMQ.Persistence.EFCore.csproj src/BugsMQ.Persistence.EFCore/

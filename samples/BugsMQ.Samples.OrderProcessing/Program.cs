@@ -1,3 +1,4 @@
+using BugsMQ.Chaos;
 using BugsMQ.Core;
 using BugsMQ.Observability;
 using BugsMQ.Persistence.EFCore;
@@ -13,6 +14,13 @@ var builder = Host.CreateApplicationBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("BugsMQ")
     ?? "Host=localhost;Port=5432;Database=bugsmq;Username=postgres;Password=postgres";
 builder.Services.AddBugsMqEfCore(db => db.UseNpgsql(connectionString));
+
+// Opt-in only (default off, see appsettings.json/docker-compose.chaos.yml): registration order
+// relative to AddBugsMqRabbitMq below doesn't matter — MiddlewarePipelineTransport only resolves
+// registered IOutboundMessageMiddleware/IInboundMessageMiddleware lazily, once IMessageTransport is
+// first requested, by which point every AddXyz call here has already run.
+if (builder.Configuration.GetValue("Chaos:Enabled", defaultValue: false))
+    builder.Services.AddBugsMqChaos(o => builder.Configuration.GetSection("Chaos").Bind(o));
 
 builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
 // Wraps the transport so every SubscribeAsync call (the saga engine's and the participants' alike)

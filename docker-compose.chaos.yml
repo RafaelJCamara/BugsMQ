@@ -1,0 +1,23 @@
+# Chaos overlay: layer this on top of docker-compose.yml to exercise BugsMQ's reliability features
+# (RabbitMQ publisher confirms, the OrderSaga AwaitingPayment timeout + compensation, at-least-once
+# dedup) against injected transport faults, instead of only the sample's own built-in 5-20%
+# simulated-failure rates in the Payment/Inventory/Shipping participants. See BugsMQ.Chaos and
+# README.md's "Chaos-engineering transport middleware" section for what each fault does.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.chaos.yml up -d --build
+#
+# Plain `docker compose up` (no chaos file) behaves exactly as before — chaos is opt-in, off by
+# default (Chaos:Enabled in appsettings.json).
+services:
+  order-processing:
+    environment:
+      Chaos__Enabled: "true"
+      Chaos__Delay__Enabled: "true"
+      Chaos__Delay__Probability: "0.15"
+      Chaos__Delay__MinDelay: "00:00:00.2"
+      Chaos__Delay__MaxDelay: "00:00:04"
+      Chaos__Drop__Enabled: "true"
+      Chaos__Drop__Probability: "0.04"
+      Chaos__Duplicate__Enabled: "true"
+      Chaos__Duplicate__Probability: "0.1"
+      Chaos__Duplicate__ExtraDeliveries: "1"
