@@ -13,7 +13,7 @@ public static class SagaEndpoints
     {
         var group = app.MapGroup("/api/sagas").WithTags("Sagas").RequireAuthorization();
 
-        group.MapGet("", async (ISagaSummaryReader reader, SagaStatus? status, string? sagaType, SagaKind? kind, string? search, int page = 1, int pageSize = 25, CancellationToken ct = default) =>
+        group.MapGet("", async (ISagaSummaryReader reader, SagaStatus? status, string? sagaType, SagaKind? kind, string? search, int page = 1, int pageSize = 25, SagaSortColumn? sortBy = null, bool sortDescending = false, CancellationToken ct = default) =>
         {
             var filter = new SagaListFilter
             {
@@ -23,6 +23,8 @@ public static class SagaEndpoints
                 Search = search,
                 Page = page <= 0 ? 1 : page,
                 PageSize = pageSize <= 0 ? 25 : pageSize,
+                SortBy = sortBy,
+                SortDescending = sortDescending,
             };
 
             return Results.Ok(await reader.ListAsync(filter, ct));
@@ -44,6 +46,9 @@ public static class SagaEndpoints
             Results.Ok(await log.GetTimelineAsync(correlationId, ct)))
         .WithName("GetSagaTimeline");
 
+        group.MapGet("/{correlationId:guid}/map", GetSagaMapAsync)
+        .WithName("GetSagaMap");
+
         group.MapPost("/{correlationId:guid}/retry", RetrySagaAsync)
         .WithName("RetrySaga");
 
@@ -51,6 +56,18 @@ public static class SagaEndpoints
             .WithTags("Sagas")
             .WithName("ListSagaTypes")
             .RequireAuthorization();
+    }
+
+    private static async Task<IResult> GetSagaMapAsync(Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, IServiceTopologyStore topologyStore, CancellationToken ct)
+    {
+        var summary = await reader.GetAsync(correlationId, ct);
+        if (summary is null)
+            return Results.NotFound();
+
+        var timeline = await log.GetTimelineAsync(correlationId, ct);
+        var topology = await topologyStore.GetAllAsync(ct);
+
+        return Results.Ok(SagaMapBuilder.Build(summary, timeline, topology));
     }
 
     private static async Task<IResult> RetrySagaAsync(Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, ISagaAdminStore admin, IMessageTransport transport, CancellationToken ct)

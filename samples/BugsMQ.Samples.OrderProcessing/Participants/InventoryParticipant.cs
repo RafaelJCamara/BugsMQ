@@ -9,10 +9,15 @@ internal sealed class InventoryParticipant(IMessageTransport transport, ILogger<
 {
     protected override string QueueName => "bugsmq.participant.inventory";
 
-    protected override IReadOnlyDictionary<Type, Func<object, Guid, CancellationToken, Task>> Handlers { get; } =
-        new Dictionary<Type, Func<object, Guid, CancellationToken, Task>>
+    private IReadOnlyDictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>>? _handlers;
+
+    // A getter (not a field initializer) so the handler delegates below can call the inherited
+    // ReplyAsync — field initializers run before the base constructor finishes and can't reference
+    // instance members yet (CS0236); this builds the dictionary lazily on first use instead.
+    protected override IReadOnlyDictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>> Handlers =>
+        _handlers ??= new Dictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>>
         {
-            [typeof(ReserveInventory)] = async (msg, correlationId, ct) =>
+            [typeof(ReserveInventory)] = async (msg, received, ct) =>
             {
                 var m = (ReserveInventory)msg;
                 await Task.Delay(Random.Shared.Next(150, 500), ct);
@@ -20,12 +25,12 @@ internal sealed class InventoryParticipant(IMessageTransport transport, ILogger<
                 if (Random.Shared.NextDouble() < 0.1)
                 {
                     logger.LogWarning("Order {OrderId}: out of stock", m.OrderId);
-                    await transport.PublishAsync(new InventoryReservationFailed(correlationId, m.OrderId, "Out of stock"), MessageEnvelope.New(correlationId), ct);
+                    await ReplyAsync(new InventoryReservationFailed(received.CorrelationId, m.OrderId, "Out of stock"), received, ct);
                 }
                 else
                 {
                     logger.LogInformation("Order {OrderId}: inventory reserved", m.OrderId);
-                    await transport.PublishAsync(new InventoryReserved(correlationId, m.OrderId), MessageEnvelope.New(correlationId), ct);
+                    await ReplyAsync(new InventoryReserved(received.CorrelationId, m.OrderId), received, ct);
                 }
             },
             [typeof(ReleaseInventory)] = (msg, _, _) =>

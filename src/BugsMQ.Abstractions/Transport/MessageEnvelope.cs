@@ -6,6 +6,30 @@ public sealed record MessageEnvelope(
     string MessageId,
     IReadOnlyDictionary<string, string>? Headers = null)
 {
+    /// <summary>Stamped by whoever publishes, so the receiving service can learn who sent a message — see MessageEnvelope.From.</summary>
+    public const string SourceServiceHeader = "x-bugsmq-source-service";
+
+    /// <summary>The MessageId of the inbound message being handled when this envelope's message was published, if any — the map's causation-stitching key.</summary>
+    public const string CausationIdHeader = "x-bugsmq-causation-id";
+
     public static MessageEnvelope New(Guid correlationId, IReadOnlyDictionary<string, string>? headers = null) =>
         new(correlationId, Guid.NewGuid().ToString("N"), headers);
+
+    /// <summary>Stamps the publisher's service identity (and, if this publish was caused by handling an inbound message, that message's id) onto the envelope's headers.</summary>
+    public static MessageEnvelope From(string sourceService, Guid correlationId, string? causationId = null, IReadOnlyDictionary<string, string>? headers = null)
+    {
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (headers is not null)
+        {
+            foreach (var (key, value) in headers)
+                merged[key] = value;
+        }
+
+        merged[SourceServiceHeader] = sourceService;
+        if (causationId is not null)
+            merged[CausationIdHeader] = causationId;
+
+        return new MessageEnvelope(correlationId, Guid.NewGuid().ToString("N"), merged);
+    }
 }

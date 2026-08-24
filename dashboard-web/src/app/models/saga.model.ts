@@ -25,7 +25,10 @@ export type SagaEntryType =
   | 'TimeoutCancelled'
   | 'ManualRetryRequested'
   | 'SagaCompleted'
-  | 'SagaCancelled';
+  | 'SagaCancelled'
+  | 'DeliveryExhausted'
+  | 'MessagePublished'
+  | 'MessageSent';
 
 export interface SagaSummary {
   correlationId: string;
@@ -71,6 +74,8 @@ export interface SagaTypeInfo {
   kind: SagaKind;
 }
 
+export type SagaSortColumn = 'UpdatedAt' | 'Status';
+
 export interface SagaListFilter {
   status?: SagaStatus;
   sagaType?: string;
@@ -78,4 +83,49 @@ export interface SagaListFilter {
   search?: string;
   page?: number;
   pageSize?: number;
+  sortBy?: SagaSortColumn;
+  sortDescending?: boolean;
+}
+
+export type SagaMapNodeKind = 'Initiator' | 'Orchestrator' | 'Participant' | 'Unresolved';
+
+export type SagaMapNodeStatus = 'ok' | 'failed' | 'unanswered';
+
+export interface SagaMapNode {
+  id: string;
+  displayName: string;
+  kind: SagaMapNodeKind;
+  status: SagaMapNodeStatus;
+  messagesIn: number;
+  messagesOut: number;
+}
+
+export interface SagaMapEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  messageType: string;
+  messageId: string | null;
+  isCompensation: boolean;
+  failed: boolean;
+  unanswered: boolean;
+  occurredAtUtc: string;
+}
+
+export interface SagaMapEvent {
+  sequenceNumber: number;
+  edgeId: string | null;
+  nodeId: string | null;
+  entryType: SagaEntryType;
+  messageType: string | null;
+  errorMessage: string | null;
+  occurredAtUtc: string;
+}
+
+export interface SagaMap {
+  summary: SagaSummary;
+  nodes: SagaMapNode[];
+  edges: SagaMapEdge[];
+  events: SagaMapEvent[];
+  failureEventIndex: number | null;
 }

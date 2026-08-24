@@ -15,11 +15,12 @@ namespace BugsMQ.Persistence.InMemory;
 /// round-trips state through JSON on every read/write, exactly like a real persistence provider, so
 /// tests exercise real snapshot isolation instead of accidentally sharing object references with the orchestrator.
 /// </summary>
-public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, ISagaTimeoutStore, ISagaAdminStore
+public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, ISagaTimeoutStore, ISagaAdminStore, IServiceTopologyStore
 {
     private readonly ConcurrentDictionary<Guid, StoredSnapshot> _snapshots = new();
     private readonly ConcurrentDictionary<Guid, ImmutableList<SagaLogEntry>> _timelines = new();
     private readonly ConcurrentDictionary<long, SagaTimeout> _timeouts = new();
+    private readonly ConcurrentDictionary<(string ServiceName, string MessageType), ServiceTopologyEntry> _topology = new();
     private long _sequence;
     private long _timeoutId;
 
@@ -80,13 +81,24 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
             query = query.Where(s => s.SagaType.Contains(search, StringComparison.OrdinalIgnoreCase) || s.CorrelationId.ToString().Contains(search, StringComparison.OrdinalIgnoreCase));
         }
 
-        var ordered = query.OrderByDescending(s => s.UpdatedAtUtc).ToList();
+        var ordered = ApplySort(query, filter).ToList();
         var page = Math.Max(filter.Page, 1);
         var pageSize = Math.Max(filter.PageSize, 1);
         var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
         return Task.FromResult(new PagedResult<SagaSummary>(items, page, pageSize, ordered.Count));
     }
+
+    /// <summary>Ties (e.g. many sagas sharing a Status) always break by UpdatedAtUtc descending, so
+    /// paging through a sorted list stays stable instead of reshuffling ties between pages.</summary>
+    private static IOrderedEnumerable<SagaSummary> ApplySort(IEnumerable<SagaSummary> query, SagaListFilter filter) =>
+        filter.SortBy switch
+        {
+            SagaSortColumn.Status when filter.SortDescending => query.OrderByDescending(s => s.Status).ThenByDescending(s => s.UpdatedAtUtc),
+            SagaSortColumn.Status => query.OrderBy(s => s.Status).ThenByDescending(s => s.UpdatedAtUtc),
+            SagaSortColumn.UpdatedAt when !filter.SortDescending => query.OrderBy(s => s.UpdatedAtUtc),
+            _ => query.OrderByDescending(s => s.UpdatedAtUtc),
+        };
 
     public Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
     {
@@ -156,10 +168,14 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         return Task.FromResult(result);
     }
 
+    // Narrowed to inbound entry types — see EfCoreSagaEventLogStore.IsDuplicateAsync for why: outbound
+    // entries now also carry a MessageId, and HandleInfrastructureFailureAsync's redelivery path
+    // deliberately relies on this check recognizing only a reused *inbound* MessageId.
     public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default)
     {
         var isDuplicate = _timelines.TryGetValue(correlationId, out var list) &&
-                           list.Any(e => string.Equals(e.MessageId, messageId, StringComparison.Ordinal));
+                           list.Any(e => string.Equals(e.MessageId, messageId, StringComparison.Ordinal) &&
+                                         (e.EntryType == SagaEntryType.SagaStarted || e.EntryType == SagaEntryType.MessageReceived));
         return Task.FromResult(isDuplicate);
     }
 
@@ -199,5 +215,17 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         }
 
         return Task.FromResult<IReadOnlyList<SagaTimeout>>(claimed);
+    }
+
+    public Task RecordAsync(string serviceName, string messageType, string queueName, DateTimeOffset seenAtUtc, CancellationToken cancellationToken = default)
+    {
+        _topology[(serviceName, messageType)] = new ServiceTopologyEntry(serviceName, messageType, queueName, seenAtUtc);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ServiceTopologyEntry>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<ServiceTopologyEntry> result = _topology.Values.ToList();
+        return Task.FromResult(result);
     }
 }

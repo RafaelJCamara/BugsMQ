@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { API_BASE_URL } from '../api-config';
-import { PagedResult, SagaDetail, SagaLogEntry, SagaSummary, SagaTypeInfo } from '../models/saga.model';
+import { PagedResult, SagaDetail, SagaLogEntry, SagaMap, SagaSummary, SagaTypeInfo } from '../models/saga.model';
 import { SagaApiService } from './saga-api.service';
 
 describe('SagaApiService', () => {
@@ -81,6 +81,31 @@ describe('SagaApiService', () => {
     const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123/timeline`);
     expect(req.request.method).toBe('GET');
     req.flush(entries);
+  });
+
+  it('getMap() requests the map endpoint', () => {
+    const map: SagaMap = {
+      summary: {
+        correlationId: 'abc-123',
+        sagaType: 'OrderSaga',
+        kind: 'Orchestrated',
+        currentState: 'Completed',
+        status: 'Completed',
+        createdAtUtc: '2026-01-01T00:00:00Z',
+        updatedAtUtc: '2026-01-01T00:00:01Z',
+        version: 1,
+      },
+      nodes: [],
+      edges: [],
+      events: [],
+      failureEventIndex: null,
+    };
+
+    service.getMap('abc-123').subscribe((result) => expect(result).toBe(map));
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123/map`);
+    expect(req.request.method).toBe('GET');
+    req.flush(map);
   });
 
   it('retry() posts to the retry endpoint', () => {

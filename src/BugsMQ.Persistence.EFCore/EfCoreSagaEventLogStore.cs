@@ -21,6 +21,9 @@ public sealed class EfCoreSagaEventLogStore(BugsMqDbContext db) : ISagaEventLogS
             TraceId = entry.TraceId,
             SpanId = entry.SpanId,
             OccurredAtUtc = entry.OccurredAtUtc,
+            SourceService = entry.SourceService,
+            DestinationService = entry.DestinationService,
+            CausationId = entry.CausationId,
         };
 
         db.SagaEventLog.Add(entity);
@@ -39,10 +42,14 @@ public sealed class EfCoreSagaEventLogStore(BugsMqDbContext db) : ISagaEventLogS
         return entities.Select(ToLogEntry).ToList();
     }
 
+    // Narrowed to inbound entry types: outbound entries (MessagePublished/MessageSent) now also carry a
+    // MessageId, and this check must keep recognizing only a genuine redelivery of an inbound message —
+    // see HandleInfrastructureFailureAsync, which deliberately relies on this with a reused MessageId.
     public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
-        db.SagaEventLog.AsNoTracking().AnyAsync(x => x.CorrelationId == correlationId && x.MessageId == messageId, cancellationToken);
+        db.SagaEventLog.AsNoTracking().AnyAsync(x => x.CorrelationId == correlationId && x.MessageId == messageId &&
+            (x.EntryType == SagaEntryType.SagaStarted || x.EntryType == SagaEntryType.MessageReceived), cancellationToken);
 
     private static SagaLogEntry ToLogEntry(SagaEventLogEntity e) =>
         new(e.Id, e.CorrelationId, e.SagaType, e.EntryType, e.FromState, e.ToState, e.MessageType, e.MessageId,
-            e.PayloadJson, e.ErrorMessage, e.TraceId, e.SpanId, e.OccurredAtUtc);
+            e.PayloadJson, e.ErrorMessage, e.TraceId, e.SpanId, e.OccurredAtUtc, e.SourceService, e.DestinationService, e.CausationId);
 }

@@ -4,7 +4,7 @@ import { Subject, of, throwError } from 'rxjs';
 import { vi } from 'vitest';
 import { SagaApiService } from '../../services/saga-api.service';
 import { SagaHubService } from '../../services/saga-hub.service';
-import { SagaDetail as SagaDetailModel, SagaLogEntry, SagaStatus, SagaSummary } from '../../models/saga.model';
+import { SagaDetail as SagaDetailModel, SagaLogEntry, SagaMap as SagaMapModel, SagaStatus, SagaSummary } from '../../models/saga.model';
 import { SagaDetail } from './saga-detail';
 
 function makeDetail(overrides: Partial<SagaSummary> = {}): SagaDetailModel {
@@ -21,6 +21,17 @@ function makeDetail(overrides: Partial<SagaSummary> = {}): SagaDetailModel {
       ...overrides,
     },
     dataJson: null,
+  };
+}
+
+function makeMap(overrides: Partial<SagaMapModel> = {}): SagaMapModel {
+  return {
+    summary: makeDetail().summary,
+    nodes: [],
+    edges: [],
+    events: [],
+    failureEventIndex: null,
+    ...overrides,
   };
 }
 
@@ -44,7 +55,12 @@ function makeEntry(overrides: Partial<SagaLogEntry> = {}): SagaLogEntry {
 }
 
 describe('SagaDetail', () => {
-  let apiMock: { get: ReturnType<typeof vi.fn>; getTimeline: ReturnType<typeof vi.fn>; retry: ReturnType<typeof vi.fn> };
+  let apiMock: {
+    get: ReturnType<typeof vi.fn>;
+    getTimeline: ReturnType<typeof vi.fn>;
+    getMap: ReturnType<typeof vi.fn>;
+    retry: ReturnType<typeof vi.fn>;
+  };
   let hubMock: {
     sagaUpdated$: Subject<SagaSummary>;
     timelineEntryAdded$: Subject<{ correlationId: string; entry: SagaLogEntry }>;
@@ -52,10 +68,11 @@ describe('SagaDetail', () => {
     unsubscribeFromSaga: ReturnType<typeof vi.fn>;
   };
 
-  function setup(detail: SagaDetailModel = makeDetail(), timeline: SagaLogEntry[] = []) {
+  function setup(detail: SagaDetailModel = makeDetail(), timeline: SagaLogEntry[] = [], map: SagaMapModel = makeMap()) {
     apiMock = {
       get: vi.fn().mockReturnValue(of(detail)),
       getTimeline: vi.fn().mockReturnValue(of(timeline)),
+      getMap: vi.fn().mockReturnValue(of(map)),
       retry: vi.fn(),
     };
     hubMock = {
@@ -178,7 +195,7 @@ describe('SagaDetail', () => {
 
   it('setTab switches the active tab', () => {
     const fixture = setup();
-    expect(fixture.componentInstance.tab()).toBe('timeline');
+    expect(fixture.componentInstance.tab()).toBe('map'); // Map is the default tab
 
     fixture.componentInstance.setTab('data');
 
@@ -219,5 +236,40 @@ describe('SagaDetail', () => {
     hubMock.timelineEntryAdded$.next({ correlationId: 'other-id', entry });
 
     expect(fixture.componentInstance.timeline()).toEqual([]);
+  });
+
+  it('loads the map alongside the timeline', () => {
+    const map = makeMap();
+    const fixture = setup(makeDetail(), [], map);
+
+    expect(apiMock.getMap).toHaveBeenCalledWith('saga-1');
+    expect(fixture.componentInstance.map()).toEqual(map);
+  });
+
+  it('re-fetches the map (not incrementally, via a whole re-fetch) when a live saga update arrives', () => {
+    const fixture = setup();
+    expect(apiMock.getMap).toHaveBeenCalledTimes(1);
+
+    hubMock.sagaUpdated$.next(fixture.componentInstance.detail()!.summary);
+
+    expect(apiMock.getMap).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-fetch the map for a live saga update on a different correlation id', () => {
+    const fixture = setup();
+    const other: SagaSummary = { ...fixture.componentInstance.detail()!.summary, correlationId: 'other-id' };
+
+    hubMock.sagaUpdated$.next(other);
+
+    expect(apiMock.getMap).toHaveBeenCalledTimes(1);
+  });
+
+  it('switching to the Map tab renders the saga-map component once the map has loaded', () => {
+    const fixture = setup();
+    fixture.componentInstance.setTab('map');
+    fixture.detectChanges();
+
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-saga-map')).not.toBeNull();
   });
 });

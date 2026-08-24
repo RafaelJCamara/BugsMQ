@@ -10,6 +10,8 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
 
     public DbSet<SagaTimeoutEntity> SagaTimeouts => Set<SagaTimeoutEntity>();
 
+    public DbSet<SagaConsumerRegistrationEntity> SagaConsumerRegistrations => Set<SagaConsumerRegistrationEntity>();
+
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         configurationBuilder.Properties<DateTimeOffset>().HaveConversion<DateTimeOffsetToUtcDateTimeConverter>();
@@ -38,6 +40,9 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
             b.Property(x => x.ToState).HasMaxLength(200);
             b.Property(x => x.MessageType).HasMaxLength(400);
             b.Property(x => x.MessageId).HasMaxLength(200);
+            b.Property(x => x.SourceService).HasMaxLength(200);
+            b.Property(x => x.DestinationService).HasMaxLength(200);
+            b.Property(x => x.CausationId).HasMaxLength(200);
             b.HasIndex(x => new { x.CorrelationId, x.Id });
             // Not unique: a single inbound message legitimately produces multiple entries
             // (MessageReceived, then StepSucceeded/StepFailed) sharing one MessageId — this index is
@@ -52,6 +57,16 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
             b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
             b.Property(x => x.ForState).HasMaxLength(200).IsRequired();
             b.HasIndex(x => new { x.Status, x.DueAtUtc });
+        });
+
+        modelBuilder.Entity<SagaConsumerRegistrationEntity>(b =>
+        {
+            b.ToTable("SagaConsumerRegistrations");
+            b.HasKey(x => new { x.ServiceName, x.MessageType });
+            b.Property(x => x.ServiceName).HasMaxLength(200).IsRequired();
+            b.Property(x => x.MessageType).HasMaxLength(400).IsRequired();
+            b.Property(x => x.QueueName).HasMaxLength(400).IsRequired();
+            b.HasIndex(x => x.MessageType);
         });
     }
 }

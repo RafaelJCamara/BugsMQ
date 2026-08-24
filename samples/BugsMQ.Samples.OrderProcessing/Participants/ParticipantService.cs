@@ -16,7 +16,7 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
 
     protected abstract string QueueName { get; }
 
-    protected abstract IReadOnlyDictionary<Type, Func<object, Guid, CancellationToken, Task>> Handlers { get; }
+    protected abstract IReadOnlyDictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>> Handlers { get; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -46,7 +46,7 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
             var message = JsonSerializer.Deserialize(received.Body.Span, entry.Key)
                           ?? throw new InvalidOperationException($"Failed to deserialize {received.MessageTypeName}.");
 
-            await entry.Value(message, received.CorrelationId, cancellationToken);
+            await entry.Value(message, received, cancellationToken);
             await received.Ack.AckAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -55,4 +55,8 @@ internal abstract class ParticipantService(IMessageTransport transport, string c
             await received.Ack.NackAsync(requeue: false, cancellationToken);
         }
     }
+
+    /// <summary>Publishes a reply stamped with this participant's identity, causally linked to the inbound message it's responding to — see MessageEnvelope.From.</summary>
+    protected Task ReplyAsync<TMessage>(TMessage message, ReceivedMessage received, CancellationToken cancellationToken) where TMessage : notnull =>
+        transport.PublishAsync(message, MessageEnvelope.From(consumerName, received.CorrelationId, causationId: received.MessageId), cancellationToken);
 }

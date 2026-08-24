@@ -289,4 +289,91 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         Assert.Equal("Submitted", typedState!.CurrentState);
         Assert.Equal(SagaStatus.Running, typedState.Status);
     }
+
+    [Fact]
+    public async Task EventLog_ServiceMapFields_RoundTrip()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            var log = new EfCoreSagaEventLogStore(db);
+            await log.AppendAsync(SagaLogEntry.Create(correlationId, "TestSaga", SagaEntryType.MessagePublished,
+                messageType: "ReserveInventory", messageId: "out-1",
+                sourceService: "TestSaga", destinationService: "InventoryService", causationId: "in-1"));
+        }
+
+        await using var db2 = NewContext();
+        var timeline = await new EfCoreSagaEventLogStore(db2).GetTimelineAsync(correlationId);
+
+        var entry = Assert.Single(timeline);
+        Assert.Equal("TestSaga", entry.SourceService);
+        Assert.Equal("InventoryService", entry.DestinationService);
+        Assert.Equal("in-1", entry.CausationId);
+    }
+
+    [Fact]
+    public async Task EventLog_PreMigrationRow_ReadsWithNullServiceMapFields()
+    {
+        var correlationId = Guid.NewGuid();
+
+        // Simulates a row written before this feature: no SourceService/DestinationService/CausationId
+        // at all, exactly what EF leaves the new nullable columns as for pre-existing data.
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaEventLogStore(db).AppendAsync(
+                SagaLogEntry.Create(correlationId, "TestSaga", SagaEntryType.SagaStarted, toState: "Started", messageId: "m1"));
+        }
+
+        await using var db2 = NewContext();
+        var timeline = await new EfCoreSagaEventLogStore(db2).GetTimelineAsync(correlationId);
+
+        var entry = Assert.Single(timeline);
+        Assert.Null(entry.SourceService);
+        Assert.Null(entry.DestinationService);
+        Assert.Null(entry.CausationId);
+    }
+
+    [Fact]
+    public async Task IsDuplicateAsync_IgnoresOutboundEntries()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            var log = new EfCoreSagaEventLogStore(db);
+            await log.AppendAsync(SagaLogEntry.Create(correlationId, "TestSaga", SagaEntryType.SagaStarted, toState: "Started", messageId: "in-1"));
+            await log.AppendAsync(SagaLogEntry.Create(correlationId, "TestSaga", SagaEntryType.MessagePublished, messageType: "Reserve", messageId: "shared-id"));
+        }
+
+        await using var db2 = NewContext();
+        var log2 = new EfCoreSagaEventLogStore(db2);
+
+        Assert.False(await log2.IsDuplicateAsync(correlationId, "shared-id")); // only an outbound row carries this id
+        Assert.True(await log2.IsDuplicateAsync(correlationId, "in-1"));
+    }
+
+    [Fact]
+    public async Task ServiceTopologyStore_RecordAsync_IsIdempotentAndUpdatesQueueName()
+    {
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreServiceTopologyStore(db);
+            await store.RecordAsync("InventoryService", "ReserveInventory", "bugsmq.participant.inventory", DateTimeOffset.UtcNow.AddMinutes(-5));
+        }
+
+        await using (var db2 = NewContext())
+        {
+            var store2 = new EfCoreServiceTopologyStore(db2);
+            await store2.RecordAsync("InventoryService", "ReserveInventory", "bugsmq.participant.inventory.v2", DateTimeOffset.UtcNow);
+        }
+
+        await using var db3 = NewContext();
+        var entries = await new EfCoreServiceTopologyStore(db3).GetAllAsync();
+
+        var entry = Assert.Single(entries);
+        Assert.Equal("InventoryService", entry.ServiceName);
+        Assert.Equal("ReserveInventory", entry.MessageType);
+        Assert.Equal("bugsmq.participant.inventory.v2", entry.QueueName); // refreshed, not duplicated
+    }
 }

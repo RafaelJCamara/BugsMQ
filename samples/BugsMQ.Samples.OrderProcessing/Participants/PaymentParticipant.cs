@@ -9,10 +9,15 @@ internal sealed class PaymentParticipant(IMessageTransport transport, ILogger<Pa
 {
     protected override string QueueName => "bugsmq.participant.payment";
 
-    protected override IReadOnlyDictionary<Type, Func<object, Guid, CancellationToken, Task>> Handlers { get; } =
-        new Dictionary<Type, Func<object, Guid, CancellationToken, Task>>
+    private IReadOnlyDictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>>? _handlers;
+
+    // A getter (not a field initializer) so the handler delegates below can call the inherited
+    // ReplyAsync — field initializers run before the base constructor finishes and can't reference
+    // instance members yet (CS0236); this builds the dictionary lazily on first use instead.
+    protected override IReadOnlyDictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>> Handlers =>
+        _handlers ??= new Dictionary<Type, Func<object, ReceivedMessage, CancellationToken, Task>>
         {
-            [typeof(ChargePayment)] = async (msg, correlationId, ct) =>
+            [typeof(ChargePayment)] = async (msg, received, ct) =>
             {
                 var m = (ChargePayment)msg;
                 await Task.Delay(Random.Shared.Next(150, 500), ct);
@@ -29,12 +34,12 @@ internal sealed class PaymentParticipant(IMessageTransport transport, ILogger<Pa
                 if (roll < 0.2)
                 {
                     logger.LogWarning("Order {OrderId}: card declined", m.OrderId);
-                    await transport.PublishAsync(new PaymentFailed(correlationId, m.OrderId, "Card declined"), MessageEnvelope.New(correlationId), ct);
+                    await ReplyAsync(new PaymentFailed(received.CorrelationId, m.OrderId, "Card declined"), received, ct);
                 }
                 else
                 {
                     logger.LogInformation("Order {OrderId}: payment charged", m.OrderId);
-                    await transport.PublishAsync(new PaymentCharged(correlationId, m.OrderId), MessageEnvelope.New(correlationId), ct);
+                    await ReplyAsync(new PaymentCharged(received.CorrelationId, m.OrderId), received, ct);
                 }
             },
             [typeof(RefundPayment)] = (msg, _, _) =>

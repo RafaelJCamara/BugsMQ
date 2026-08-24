@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISagaAdminStore>(sp => sp.GetRequiredService<EfCoreSagaSummaryReader>());
         services.AddScoped<ISagaEventLogStore, EfCoreSagaEventLogStore>();
         services.AddScoped<ISagaTimeoutStore, EfCoreSagaTimeoutStore>();
+        services.AddScoped<IServiceTopologyStore, EfCoreServiceTopologyStore>();
         return services;
     }
 }

@@ -32,6 +32,6 @@ internal sealed class OrderSubmitter(IMessageTransport transport, ILogger<OrderS
         // No BugsMQ correlation exists yet — the saga engine mints one on receipt since OrderSubmitted
         // is registered as an initiating event. This id is only for the envelope; the sample doesn't
         // need to track it further.
-        return transport.PublishAsync(order, MessageEnvelope.New(Guid.NewGuid()), cancellationToken);
+        return transport.PublishAsync(order, MessageEnvelope.From("OrderSubmitter", Guid.NewGuid()), cancellationToken);
     }
 }

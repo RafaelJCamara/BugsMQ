@@ -123,6 +123,18 @@ public sealed class SagaOrchestrator<TState>(
             ? attempt
             : 0;
 
+    /// <summary>The publisher-stamped service identity carried on an inbound message, if any — see MessageEnvelope.From.</summary>
+    private static string? GetSourceService(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(MessageEnvelope.SourceServiceHeader, out var value) ? value : null;
+
+    /// <summary>
+    /// The MessageId of whatever outbound message this inbound one is a reply to, if the publisher
+    /// stamped one — this is what SagaMapBuilder stitches a reply's SourceService back onto the
+    /// original outbound edge's destination.
+    /// </summary>
+    private static string? GetCausationId(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(MessageEnvelope.CausationIdHeader, out var value) ? value : null;
+
     /// <summary>Manual, dashboard/API-triggered redrive of a Failed saga: replays the exact message that last failed.</summary>
     public async Task RetryAsync(Guid correlationId, CancellationToken cancellationToken)
     {
@@ -172,7 +184,8 @@ public sealed class SagaOrchestrator<TState>(
         await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutFired, fromState: timeout.ForState), cancellationToken);
 
         var visitedStates = await GetVisitedStatesAsync(timeout.CorrelationId, cancellationToken);
-        var context = new SagaContext<TState>(state, timeout.CorrelationId, new Dictionary<string, string>(StringComparer.Ordinal), visitedStates, services, transport, cancellationToken);
+        var context = new SagaContext<TState>(state, timeout.CorrelationId, new Dictionary<string, string>(StringComparer.Ordinal), visitedStates,
+            services, transport, SagaType, inboundMessageId: null, LogAsync, cancellationToken);
 
         var outcome = await definition.HandleTimeoutAsync(context, timeout.ForState, cancellationToken);
         if (!outcome.WasHandled)
@@ -240,7 +253,8 @@ public sealed class SagaOrchestrator<TState>(
             // exact initiating message against the saga once reset back to its initial state.
             await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.SagaStarted,
                 toState: existing.CurrentState, messageType: received.MessageTypeName, messageId: received.MessageId,
-                payloadJson: System.Text.Encoding.UTF8.GetString(received.Body.Span)), cancellationToken);
+                payloadJson: System.Text.Encoding.UTF8.GetString(received.Body.Span),
+                sourceService: GetSourceService(received.Headers), causationId: GetCausationId(received.Headers)), cancellationToken);
         }
         else if (await eventLog.IsDuplicateAsync(correlationId, received.MessageId, cancellationToken))
         {
@@ -266,10 +280,11 @@ public sealed class SagaOrchestrator<TState>(
             state.Status = SagaStatus.Running;
 
         await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.MessageReceived,
-            messageType: messageTypeName, messageId: messageId), cancellationToken);
+            messageType: messageTypeName, messageId: messageId,
+            sourceService: GetSourceService(headers), causationId: GetCausationId(headers)), cancellationToken);
 
         var visitedStates = await GetVisitedStatesAsync(correlationId, cancellationToken);
-        var context = new SagaContext<TState>(state, correlationId, headers, visitedStates, services, transport, cancellationToken);
+        var context = new SagaContext<TState>(state, correlationId, headers, visitedStates, services, transport, SagaType, messageId, LogAsync, cancellationToken);
 
         using var activity = BugsMqDiagnostics.ActivitySource.StartActivity($"saga.step {SagaType}.{fromState}");
         activity?.SetTag(BugsMqDiagnostics.TagSagaType, SagaType);

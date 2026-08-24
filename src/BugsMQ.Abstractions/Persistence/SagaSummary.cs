@@ -26,6 +26,11 @@ public sealed class SagaListFilter
     public int Page { get; init; } = 1;
 
     public int PageSize { get; init; } = 25;
+
+    /// <summary>Null keeps the default ordering (most-recently-updated first).</summary>
+    public SagaSortColumn? SortBy { get; init; }
+
+    public bool SortDescending { get; init; }
 }
 
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount);

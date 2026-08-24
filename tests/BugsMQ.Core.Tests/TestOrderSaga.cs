@@ -109,7 +109,8 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                 .Finalize(SagaStatus.Failed);
 
         Compensate(AwaitingInventory, (ctx, ct) => ctx.PublishAsync(new ReleaseInventory(ctx.CorrelationId), ct));
+        Compensate(AwaitingPayment, (_, _) => throw new InvalidOperationException("simulated compensation failure"));
 
-        WithTimeout(AwaitingPayment, TimeSpan.FromMinutes(5), t => t.TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
+        WithTimeout(AwaitingPayment, TimeSpan.FromMinutes(5), t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
     }
 }

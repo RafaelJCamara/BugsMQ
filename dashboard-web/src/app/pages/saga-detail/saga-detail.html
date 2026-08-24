@@ -41,11 +41,18 @@
   </div>
 
   <div class="tabs">
+    <button type="button" [class.active]="tab() === 'map'" (click)="setTab('map')">Map</button>
     <button type="button" [class.active]="tab() === 'timeline'" (click)="setTab('timeline')">Timeline</button>
     <button type="button" [class.active]="tab() === 'data'" (click)="setTab('data')">Data</button>
   </div>
 
-  @if (tab() === 'timeline') {
+  @if (tab() === 'map') {
+    @if (map(); as m) {
+      <app-saga-map [map]="m" />
+    } @else {
+      <div class="empty">Loading map…</div>
+    }
+  } @else if (tab() === 'timeline') {
     @if (timeline().length === 0) {
       <div class="empty">No events recorded yet.</div>
     } @else {

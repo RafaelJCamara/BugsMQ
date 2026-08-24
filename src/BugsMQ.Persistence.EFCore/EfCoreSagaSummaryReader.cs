@@ -27,8 +27,7 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
         var pageSize = Math.Max(filter.PageSize, 1);
 
         var totalCount = await query.CountAsync(cancellationToken);
-        var items = await query
-            .OrderByDescending(x => x.UpdatedAtUtc)
+        var items = await ApplySort(query, filter)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
@@ -36,6 +35,17 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
 
         return new PagedResult<SagaSummary>(items, page, pageSize, totalCount);
     }
+
+    /// <summary>Ties (e.g. many sagas sharing a Status) always break by UpdatedAtUtc descending, so
+    /// paging through a sorted list stays stable instead of reshuffling ties between pages.</summary>
+    private static IOrderedQueryable<SagaInstanceEntity> ApplySort(IQueryable<SagaInstanceEntity> query, SagaListFilter filter) =>
+        filter.SortBy switch
+        {
+            SagaSortColumn.Status when filter.SortDescending => query.OrderByDescending(x => x.Status).ThenByDescending(x => x.UpdatedAtUtc),
+            SagaSortColumn.Status => query.OrderBy(x => x.Status).ThenByDescending(x => x.UpdatedAtUtc),
+            SagaSortColumn.UpdatedAt when !filter.SortDescending => query.OrderBy(x => x.UpdatedAtUtc),
+            _ => query.OrderByDescending(x => x.UpdatedAtUtc),
+        };
 
     public Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
     {

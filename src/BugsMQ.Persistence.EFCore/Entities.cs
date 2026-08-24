@@ -56,6 +56,12 @@ public sealed class SagaEventLogEntity
     public string? SpanId { get; set; }
 
     public DateTimeOffset OccurredAtUtc { get; set; }
+
+    public string? SourceService { get; set; }
+
+    public string? DestinationService { get; set; }
+
+    public string? CausationId { get; set; }
 }
 
 public sealed class SagaTimeoutEntity
@@ -71,4 +77,16 @@ public sealed class SagaTimeoutEntity
     public DateTimeOffset DueAtUtc { get; set; }
 
     public SagaTimeoutStatus Status { get; set; }
+}
+
+/// <summary>One (service, message type) consumer binding, learned from a real SubscribeAsync call. Composite key gives upsert idempotency for free.</summary>
+public sealed class SagaConsumerRegistrationEntity
+{
+    public string ServiceName { get; set; } = string.Empty;
+
+    public string MessageType { get; set; } = string.Empty;
+
+    public string QueueName { get; set; } = string.Empty;
+
+    public DateTimeOffset LastSeenAtUtc { get; set; }
 }

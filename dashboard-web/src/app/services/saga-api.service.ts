@@ -7,6 +7,7 @@ import {
   SagaDetail,
   SagaListFilter,
   SagaLogEntry,
+  SagaMap,
   SagaSummary,
   SagaTypeInfo,
 } from '../models/saga.model';
@@ -24,6 +25,7 @@ export class SagaApiService {
     if (filter.search) params = params.set('search', filter.search);
     params = params.set('page', filter.page ?? 1);
     params = params.set('pageSize', filter.pageSize ?? 25);
+    if (filter.sortBy) params = params.set('sortBy', filter.sortBy).set('sortDescending', filter.sortDescending ?? false);
 
     return this.http.get<PagedResult<SagaSummary>>(this.baseUrl, { params });
   }
@@ -34,6 +36,10 @@ export class SagaApiService {
 
   getTimeline(correlationId: string): Observable<SagaLogEntry[]> {
     return this.http.get<SagaLogEntry[]>(`${this.baseUrl}/${correlationId}/timeline`);
+  }
+
+  getMap(correlationId: string): Observable<SagaMap> {
+    return this.http.get<SagaMap>(`${this.baseUrl}/${correlationId}/map`);
   }
 
   retry(correlationId: string): Observable<void> {

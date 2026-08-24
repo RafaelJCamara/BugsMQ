@@ -14,7 +14,12 @@ public sealed record SagaLogEntry(
     string? ErrorMessage,
     string? TraceId,
     string? SpanId,
-    DateTimeOffset OccurredAtUtc)
+    DateTimeOffset OccurredAtUtc,
+    // Appended after OccurredAtUtc, each defaulted, so every existing positional `new SagaLogEntry(...)`
+    // call site (notably EfCoreSagaEventLogStore.ToLogEntry) keeps compiling unchanged.
+    string? SourceService = null,
+    string? DestinationService = null,
+    string? CausationId = null)
 {
     public static SagaLogEntry Create(
         Guid correlationId,
@@ -28,7 +33,11 @@ public sealed record SagaLogEntry(
         string? errorMessage = null,
         string? traceId = null,
         string? spanId = null,
-        DateTimeOffset? occurredAtUtc = null) =>
+        DateTimeOffset? occurredAtUtc = null,
+        string? sourceService = null,
+        string? destinationService = null,
+        string? causationId = null) =>
         new(0, correlationId, sagaType, entryType, fromState, toState, messageType, messageId,
-            payloadJson, errorMessage, traceId, spanId, occurredAtUtc ?? DateTimeOffset.UtcNow);
+            payloadJson, errorMessage, traceId, spanId, occurredAtUtc ?? DateTimeOffset.UtcNow,
+            sourceService, destinationService, causationId);
 }

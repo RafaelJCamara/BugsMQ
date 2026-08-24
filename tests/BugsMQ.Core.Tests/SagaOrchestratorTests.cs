@@ -155,6 +155,15 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.NotNull(state);
         Assert.Equal(_saga.Failed.Name, state.CurrentState);
         Assert.Equal(SagaStatus.TimedOut, state.Status);
+
+        // The saga had already reserved inventory before this timeout fired — that hold must not be
+        // left dangling, so the timeout's .Compensate() releases it just like a PaymentFailed would.
+        Assert.Contains(_transport.GetPublished(), p => p.Message is ReleaseInventory);
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
     }
 
     [Fact]
@@ -214,5 +223,125 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
 
         var chargePaymentCount = _transport.GetPublished().Count(p => p.Message is ChargePayment);
         Assert.Equal(1, chargePaymentCount); // the ChargePayment side effect only fired once
+    }
+
+    [Fact]
+    public async Task OutboundMessage_IsLoggedWithSourceServiceAndCausationId()
+    {
+        var correlationId = Guid.NewGuid();
+        var inboundEnvelope = MessageEnvelope.New(correlationId);
+
+        await _transport.PublishAsync(new OrderSubmitted("ORD-8", 30m), inboundEnvelope);
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+
+        var published = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished &&
+            string.Equals(e.MessageType, nameof(ReserveInventory), StringComparison.Ordinal));
+        Assert.Equal(_saga.SagaType, published.SourceService);
+        Assert.Equal(inboundEnvelope.MessageId, published.CausationId);
+        Assert.NotNull(published.MessageId);
+    }
+
+    [Fact]
+    public async Task InboundMessage_RecordsTheStampedSourceServiceHeader()
+    {
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-9", 15m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.From("InventoryService", correlationId));
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+
+        var received = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessageReceived &&
+            string.Equals(e.MessageType, nameof(InventoryReserved), StringComparison.Ordinal));
+        Assert.Equal("InventoryService", received.SourceService);
+    }
+
+    [Fact]
+    public async Task ReplyCausationId_StitchesBackToTheOutboundMessageThatCausedIt()
+    {
+        // End-to-end version of the causation-stitching contract SagaMapBuilder relies on: a
+        // participant replying with MessageEnvelope.From(..., causationId: received.MessageId) must
+        // round-trip through the orchestrator so the inbound MessageReceived entry's CausationId
+        // equals the outbound MessagePublished entry's MessageId — that's the only thing that lets the
+        // map join a reply back to the request it answers.
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-13", 22m), MessageEnvelope.New(correlationId));
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var outboundMessageId = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished).MessageId!;
+
+        await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.From("InventoryService", correlationId, causationId: outboundMessageId));
+
+        var timelineAfterReply = await eventLog.GetTimelineAsync(correlationId);
+        var received = Assert.Single(timelineAfterReply, e => e.EntryType == SagaEntryType.MessageReceived &&
+            string.Equals(e.MessageType, nameof(InventoryReserved), StringComparison.Ordinal));
+        Assert.Equal(outboundMessageId, received.CausationId);
+    }
+
+    [Fact]
+    public async Task Compensation_EmitsStartedAndStepSucceededEntries()
+    {
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-10", 10m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new PaymentFailed(), MessageEnvelope.New(correlationId));
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
+
+        var succeeded = Assert.Single(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
+        Assert.Equal(_saga.AwaitingInventory.Name, succeeded.FromState);
+    }
+
+    [Fact]
+    public async Task Compensation_StepThatThrows_LogsStepFailedButLaterStepsStillRun()
+    {
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-11", 25m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new PaymentFailed(), MessageEnvelope.New(correlationId));
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+
+        var failed = Assert.Single(timeline, e => e.EntryType == SagaEntryType.CompensationStepFailed);
+        Assert.Equal(_saga.AwaitingPayment.Name, failed.FromState);
+        Assert.Contains("simulated compensation failure", failed.ErrorMessage, StringComparison.Ordinal);
+
+        var succeeded = Assert.Single(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
+        Assert.Equal(_saga.AwaitingInventory.Name, succeeded.FromState);
+
+        // AwaitingPayment's compensation runs first (most-recently-visited) and throws, but
+        // AwaitingInventory's ReleaseInventory publish still happens afterward — one failing
+        // compensation step must not abandon the rest.
+        Assert.Contains(_transport.GetPublished(), p => p.Message is ReleaseInventory);
+    }
+
+    [Fact]
+    public async Task IsDuplicateCheck_IgnoresOutboundEntries_SoALaterInboundMessageReusingThatIdStillProcesses()
+    {
+        var correlationId = Guid.NewGuid();
+        await _transport.PublishAsync(new OrderSubmitted("ORD-12", 18m), MessageEnvelope.New(correlationId));
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var outboundMessageId = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished).MessageId!;
+
+        // A coincidental collision between an inbound MessageId and an earlier *outbound* entry's
+        // MessageId must not be mistaken for a redelivery — IsDuplicateAsync only recognizes inbound
+        // entry types (SagaStarted/MessageReceived).
+        Assert.False(await eventLog.IsDuplicateAsync(correlationId, outboundMessageId));
+
+        await _transport.PublishAsync(new InventoryReserved(), new MessageEnvelope(correlationId, outboundMessageId));
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(_saga.AwaitingPayment.Name, state.CurrentState); // processed, not skipped as a dup
     }
 }

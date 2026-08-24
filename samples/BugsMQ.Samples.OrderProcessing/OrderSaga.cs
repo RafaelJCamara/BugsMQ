@@ -76,7 +76,10 @@ public sealed class OrderSaga : OrchestratedSagaDefinition<OrderSagaState>
         Compensate(AwaitingInventory, (ctx, ct) => ctx.PublishAsync(new ReleaseInventory(ctx.CorrelationId, ctx.Saga.OrderId!), ct));
         Compensate(AwaitingPayment, (ctx, ct) => ctx.PublishAsync(new RefundPayment(ctx.CorrelationId, ctx.Saga.OrderId!), ct));
 
+        // By the time this timeout can fire, InventoryReserved already succeeded — the hung payment
+        // gateway must not leave that hold dangling, so release it (and defensively refund, in case
+        // the gateway silently charged before going quiet) exactly like the PaymentFailed branch does.
         WithTimeout(AwaitingPayment, TimeSpan.FromSeconds(30),
-            t => t.TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
+            t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
     }
 }

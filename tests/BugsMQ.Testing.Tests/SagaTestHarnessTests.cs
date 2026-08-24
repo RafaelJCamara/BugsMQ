@@ -1,3 +1,4 @@
+using BugsMQ.Abstractions.Persistence;
 using BugsMQ.Abstractions.Sagas;
 
 namespace BugsMQ.Testing.Tests;
@@ -60,5 +61,26 @@ public sealed class SagaTestHarnessTests
             .WhenAsync(new ShipmentConfirmed());
 
         await harness.AssertNoSagaCreatedAsync();
+    }
+
+    [Fact]
+    public async Task Timeline_ExposesServiceMapFieldsOnOutboundAndCompensationEntries()
+    {
+        await using var harness = new SagaTestHarness<DemoSaga, DemoSagaState>();
+
+        await harness.Given(Guid.NewGuid())
+            .WhenAsync(new OrderPlaced("ORD-4"));
+        await harness.WhenAsync(new ShipmentFailed());
+
+        var timeline = await harness.GetTimelineAsync();
+
+        var compensatingPublish = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished);
+        Assert.Equal(harness.Saga.SagaType, compensatingPublish.SourceService);
+        Assert.NotNull(compensatingPublish.MessageId);
+
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
+        Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
+
+        harness.AssertPublished<ReleaseHold>();
     }
 }

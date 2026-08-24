@@ -64,7 +64,7 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
 
     protected void WithTimeout(State<TState> state, TimeSpan after, Action<TimeoutBuilder<TState>> configure)
     {
-        var builder = new TimeoutBuilder<TState>();
+        var builder = new TimeoutBuilder<TState>(_model);
         configure(builder);
         _model.Timeouts[state.Name] = (after, builder.Step);
     }

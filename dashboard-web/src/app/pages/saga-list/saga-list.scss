@@ -64,6 +64,20 @@ button:hover {
   border: 1px solid rgba(239, 85, 102, 0.3);
 }
 
+.banner--info {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.banner--info button {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+
 .empty {
   color: var(--text-muted);
   padding: 2rem 0;
@@ -89,6 +103,20 @@ button:hover {
   border-bottom: 1px solid var(--border);
 }
 
+.saga-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.saga-table th.sortable:hover {
+  color: var(--text);
+}
+
+.sort-indicator {
+  margin-left: 0.3rem;
+  font-size: 0.65rem;
+}
+
 .saga-table td {
   padding: 0.6rem 0.9rem;
   border-bottom: 1px solid var(--border);
@@ -109,4 +137,32 @@ button:hover {
 
 .muted {
   color: var(--text-muted);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.page-size {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-right: auto;
+}
+
+.page-size select {
+  padding: 0.3rem 0.5rem;
+}
+
+.pagination button:disabled {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  filter: none;
 }

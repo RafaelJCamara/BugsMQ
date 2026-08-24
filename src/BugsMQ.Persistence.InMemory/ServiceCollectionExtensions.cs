@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISagaEventLogStore>(sp => sp.GetRequiredService<InMemorySagaStore>());
         services.AddSingleton<ISagaTimeoutStore>(sp => sp.GetRequiredService<InMemorySagaStore>());
         services.AddSingleton<ISagaAdminStore>(sp => sp.GetRequiredService<InMemorySagaStore>());
+        services.AddSingleton<IServiceTopologyStore>(sp => sp.GetRequiredService<InMemorySagaStore>());
         services.AddSingleton(typeof(ISagaSnapshotStore<>), typeof(InMemorySagaSnapshotStore<>));
         return services;
     }

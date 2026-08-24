@@ -12,9 +12,13 @@ public static class ApiKeyAuthenticationDefaults
     public const string SchemeName = "ApiKey";
     public const string HeaderName = "X-Api-Key";
 
-    /// <summary>SignalR clients can't set custom headers on the WebSocket upgrade, only on the initial
-    /// negotiate call — the JS client's <c>accessTokenFactory</c> option instead sends the token via
-    /// this query string parameter on every request, including the upgrade.</summary>
+    /// <summary>SignalR's JS client sends the <c>accessTokenFactory</c> token as this header
+    /// (<c>Bearer &lt;token&gt;</c>) on plain HTTP calls — notably the negotiate POST.</summary>
+    public const string BearerPrefix = "Bearer ";
+
+    /// <summary>SignalR clients can't set custom headers (including Authorization) on the WebSocket
+    /// upgrade itself — only on the initial negotiate call — so the JS client falls back to sending
+    /// the <c>accessTokenFactory</c> token via this query string parameter for the upgrade request.</summary>
     public const string QueryStringParameterName = "access_token";
 }
 
@@ -24,9 +28,10 @@ public sealed class ApiKeyAuthenticationSchemeOptions : AuthenticationSchemeOpti
 
 /// <summary>
 /// Validates a single shared secret (<c>Dashboard:ApiKey</c> in configuration) sent via the
-/// <see cref="ApiKeyAuthenticationDefaults.HeaderName"/> header, falling back to the
-/// <see cref="ApiKeyAuthenticationDefaults.QueryStringParameterName"/> query string for SignalR. Fails
-/// closed: an unconfigured key denies every request rather than silently disabling auth.
+/// <see cref="ApiKeyAuthenticationDefaults.HeaderName"/> header, an <c>Authorization: Bearer</c>
+/// header, or the <see cref="ApiKeyAuthenticationDefaults.QueryStringParameterName"/> query string
+/// (the latter two for SignalR — see <see cref="ApiKeyAuthenticationDefaults"/>). Fails closed: an
+/// unconfigured key denies every request rather than silently disabling auth.
 /// </summary>
 public sealed class ApiKeyAuthenticationHandler(
     IOptionsMonitor<ApiKeyAuthenticationSchemeOptions> options,
@@ -42,6 +47,7 @@ public sealed class ApiKeyAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.Fail("Dashboard:ApiKey is not configured."));
 
         var providedKey = Request.Headers[ApiKeyAuthenticationDefaults.HeaderName].FirstOrDefault()
+            ?? GetBearerToken(Request.Headers.Authorization.FirstOrDefault())
             ?? Request.Query[ApiKeyAuthenticationDefaults.QueryStringParameterName].FirstOrDefault();
 
         if (string.IsNullOrEmpty(providedKey) || !FixedTimeEquals(providedKey, configuredKey))
@@ -52,6 +58,11 @@ public sealed class ApiKeyAuthenticationHandler(
         var ticket = new AuthenticationTicket(principal, ApiKeyAuthenticationDefaults.SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));
     }
+
+    private static string? GetBearerToken(string? authorizationHeader) =>
+        authorizationHeader?.StartsWith(ApiKeyAuthenticationDefaults.BearerPrefix, StringComparison.OrdinalIgnoreCase) == true
+            ? authorizationHeader[ApiKeyAuthenticationDefaults.BearerPrefix.Length..]
+            : null;
 
     private static bool FixedTimeEquals(string a, string b)
     {

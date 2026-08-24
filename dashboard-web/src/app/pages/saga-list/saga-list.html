@@ -4,17 +4,17 @@
 </div>
 
 <div class="filters">
-  <select [(ngModel)]="status" (change)="refresh()">
+  <select [(ngModel)]="status" (change)="onFilterChange()">
     <option value="">All statuses</option>
     <option *ngFor="let s of statuses" [value]="s">{{ s }}</option>
   </select>
 
-  <select [(ngModel)]="kind" (change)="refresh()">
+  <select [(ngModel)]="kind" (change)="onFilterChange()">
     <option value="">All kinds</option>
     <option *ngFor="let k of kinds" [value]="k">{{ k }}</option>
   </select>
 
-  <select [(ngModel)]="sagaType" (change)="refresh()">
+  <select [(ngModel)]="sagaType" (change)="onFilterChange()">
     <option value="">All saga types</option>
     <option *ngFor="let t of sagaTypes()" [value]="t.sagaType">{{ t.sagaType }}</option>
   </select>
@@ -23,7 +23,7 @@
     type="search"
     placeholder="Search by type or correlation id…"
     [(ngModel)]="search"
-    (keyup.enter)="refresh()"
+    (keyup.enter)="onFilterChange()"
   />
 
   <button type="button" (click)="refresh()">Refresh</button>
@@ -31,6 +31,13 @@
 
 @if (error(); as message) {
   <div class="banner banner--error">{{ message }}</div>
+}
+
+@if (newSagasAvailable() > 0) {
+  <div class="banner banner--info">
+    {{ newSagasAvailable() }} new saga{{ newSagasAvailable() === 1 ? '' : 's' }} since this page loaded —
+    <button type="button" (click)="refresh()">Refresh</button>
+  </div>
 }
 
 @if (loading()) {
@@ -45,8 +52,18 @@
         <th>Saga Type</th>
         <th>Kind</th>
         <th>Current State</th>
-        <th>Status</th>
-        <th>Updated</th>
+        <th class="sortable" (click)="toggleSort('Status')">
+          Status
+          @if (sortColumn() === 'Status') {
+            <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+          }
+        </th>
+        <th class="sortable" (click)="toggleSort('UpdatedAt')">
+          Updated
+          @if (sortColumn() === 'UpdatedAt') {
+            <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+          }
+        </th>
       </tr>
     </thead>
     <tbody>
@@ -62,4 +79,16 @@
       }
     </tbody>
   </table>
+
+  <div class="pagination">
+    <label class="page-size">
+      Rows per page
+      <select [(ngModel)]="pageSize" (change)="onFilterChange()">
+        <option *ngFor="let size of pageSizes" [ngValue]="size">{{ size }}</option>
+      </select>
+    </label>
+    <button type="button" (click)="prevPage()" [disabled]="page() <= 1">Previous</button>
+    <span class="muted">Page {{ page() }}</span>
+    <button type="button" (click)="nextPage()" [disabled]="!hasNextPage()">Next</button>
+  </div>
 }

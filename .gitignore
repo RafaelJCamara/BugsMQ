@@ -28,6 +28,9 @@ docker-data/
 .DS_Store
 Thumbs.db
 
+## Browser automation scratch output (Playwright MCP)
+.playwright-mcp/
+
 ## Secrets
 *.env
 appsettings.*.local.json
