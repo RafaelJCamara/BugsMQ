@@ -590,17 +590,48 @@ appeared as an inbound message in both.
 
 ## Getting started
 
+**Build and test:**
+
 ```bash
 dotnet build BugsMQ.slnx
 dotnet test BugsMQ.slnx          # unit + Testcontainers-backed Postgres/RabbitMQ tests (needs Docker)
 
 cd dashboard-web && npm install && npx ng test --watch=false && npx ng build
+```
 
+**Run it.** Bring the backend up first — the dashboard is a pure client of the API and has nothing to
+show until sagas exist:
+
+```bash
 docker compose up -d --build     # Postgres + RabbitMQ + dashboard API + OrderProcessing sample
 curl http://localhost:5080/health
 curl -H "X-Api-Key: dev-local-only-change-me" http://localhost:5080/api/sagas
 ```
 
-The docker-compose Postgres volume was created under the old `EnsureCreatedAsync()` schema
-bootstrap; if you have one from before this pass, run `docker compose down -v` once before
-`docker compose up` so `MigrateAsync()` isn't applied against an untracked schema.
+Then serve the dashboard UI. This is a dev server, deliberately not part of `docker-compose.yml`:
+nothing in the compose stack serves the SPA, so `ng build` alone gets you a bundle in `dist/` that
+nothing is hosting.
+
+```bash
+cd dashboard-web && npx ng serve     # http://localhost:4200
+```
+
+Port 4200 is not incidental — it is the origin `docker-compose.yml` grants CORS access via
+`Dashboard__WebOrigin`. Serving the SPA anywhere else means the API rejects its requests until you
+change that value to match.
+
+| What | Where | Notes |
+| --- | --- | --- |
+| Dashboard UI | http://localhost:4200 | `ng serve`; must match `Dashboard__WebOrigin` |
+| Dashboard API | http://localhost:5080 | API key `dev-local-only-change-me` (see "Dashboard API authentication") |
+| RabbitMQ management | http://localhost:15672 | `guest` / `guest` |
+| Postgres | `localhost:5433` | `postgres`/`postgres`, database `bugsmq`. Host port is 5433, not 5432, so it can't clash with a Postgres you already run locally |
+
+The `OrderProcessing` sample submits orders on a loop as soon as it starts, so the saga list fills on
+its own — there is nothing to trigger by hand.
+
+Note on the Postgres volume: the original one was created under the old `EnsureCreatedAsync()` schema
+bootstrap. If yours predates the migrations pass, run `docker compose down -v` once before
+`docker compose up` so `MigrateAsync()` isn't applied against an untracked schema. This does **not**
+apply to a volume that has already had the versioned migrations applied — those upgrade in place, and
+wiping one only costs you your saga history.
