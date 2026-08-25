@@ -27,6 +27,13 @@ public sealed class OrderSaga : OrchestratedSagaDefinition<OrderSagaState>
     public State<OrderSagaState> Completed { get; }
     public State<OrderSagaState> Failed { get; }
 
+    /// <summary>
+    /// How long any one participant gets to reply before its state is treated as stalled. Generous
+    /// against the participants' 150–500ms simulated work and chaos mode's 4s inbound delay ceiling, so
+    /// it fires on genuinely lost messages rather than on ordinary slowness.
+    /// </summary>
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(30);
+
     public OrderSaga()
     {
         Submitted = InitialState(nameof(Submitted));
@@ -73,13 +80,39 @@ public sealed class OrderSaga : OrchestratedSagaDefinition<OrderSagaState>
                 .TransitionTo(Failed)
                 .Finalize(SagaStatus.Failed);
 
+        ConfigureRecovery();
+    }
+
+    /// <summary>
+    /// How a stalled or failed order unwinds. Split out of the constructor purely for length; it reads
+    /// as one topic, and every rule here is about undoing work rather than driving the order forward.
+    /// </summary>
+    private void ConfigureRecovery()
+    {
         Compensate(AwaitingInventory, (ctx, ct) => ctx.PublishAsync(new ReleaseInventory(ctx.CorrelationId, ctx.Saga.OrderId!), ct));
         Compensate(AwaitingPayment, (ctx, ct) => ctx.PublishAsync(new RefundPayment(ctx.CorrelationId, ctx.Saga.OrderId!), ct));
 
-        // By the time this timeout can fire, InventoryReserved already succeeded — the hung payment
-        // gateway must not leave that hold dangling, so release it (and defensively refund, in case
-        // the gateway silently charged before going quiet) exactly like the PaymentFailed branch does.
-        WithTimeout(AwaitingPayment, TimeSpan.FromSeconds(30),
-            t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
+        // Every state that waits on a reply gets a timeout. Each is the same shape —
+        // Compensate().TransitionTo(Failed).Finalize(TimedOut) — but unwinds a different amount of
+        // work, because Compensate() walks the states this instance actually visited, most-recent
+        // first, and runs whichever have a Compensate(state, ...) registered above:
+        //
+        //   AwaitingInventory — releases the hold that ReserveInventory may or may not have taken.
+        //   AwaitingPayment   — releases the hold (InventoryReserved definitely succeeded to get here)
+        //                       and defensively refunds, in case a hung gateway charged before going
+        //                       quiet; the same pair the PaymentFailed branch compensates.
+        //   AwaitingShipment  — refunds and releases, identical to the ShipmentFailed branch, since
+        //                       both inventory and payment succeeded before the carrier went silent.
+        //
+        // A timeout here always means "no reply arrived in time", never "the participant declined" —
+        // a decline is a real reply and takes the explicit ...Failed branch instead. So compensation is
+        // necessarily defensive: the request may well have succeeded with only its reply lost, so the
+        // compensating messages must be safe to receive for work that never happened. That is a real
+        // constraint this sample places on its participants, not an incidental detail.
+        foreach (var awaitingReply in new[] { AwaitingInventory, AwaitingPayment, AwaitingShipment })
+        {
+            WithTimeout(awaitingReply, ReplyTimeout,
+                t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
+        }
     }
 }

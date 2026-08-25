@@ -49,6 +49,7 @@ public sealed class PostShipmentState : SagaState
 public sealed class PostShipmentChoreography : ChoreographedSagaDefinition<PostShipmentState>
 {
     public State<PostShipmentState> AwaitingFulfilment { get; }
+    public State<PostShipmentState> Shipped { get; }
     public State<PostShipmentState> Notified { get; }
     public State<PostShipmentState> PointsAwarded { get; }
     public State<PostShipmentState> Invoiced { get; }
@@ -64,6 +65,7 @@ public sealed class PostShipmentChoreography : ChoreographedSagaDefinition<PostS
     public PostShipmentChoreography()
     {
         AwaitingFulfilment = InitialState(nameof(AwaitingFulfilment));
+        Shipped = State(nameof(Shipped));
         Notified = State(nameof(Notified));
         PointsAwarded = State(nameof(PointsAwarded));
         Invoiced = State(nameof(Invoiced));
@@ -71,11 +73,19 @@ public sealed class PostShipmentChoreography : ChoreographedSagaDefinition<PostS
 
         // Opens the instance and captures the tracking number, but is not itself a branch of the join:
         // OrderShipped is the trigger the other three services are reacting to, not one of their results.
+        //
+        // It records Shipped rather than the initial AwaitingFulfilment, and that is load-bearing rather
+        // than cosmetic. The orchestrator schedules a timeout only on a real transition
+        // (ToState != FromState), and OrderShipped usually creates the instance, so its FromState is the
+        // initial state — recording AwaitingFulfilment here would be a self-transition, schedule nothing,
+        // and leave an order whose three post-shipment events were all lost stuck Running forever. Caught
+        // by checking TimeoutScheduled rows against the live stack: every other milestone had hundreds,
+        // AwaitingFulfilment had none.
         On<OrderShipped>()
             .StartsNewInstance()
             .CorrelateBy(m => m.OrderId, s => s.OrderId)
             .Then((ctx, m) => ctx.Saga.TrackingNumber = m.TrackingNumber)
-            .RecordState(AwaitingFulfilment);
+            .RecordState(Shipped);
 
         On<CustomerNotified>()
             .StartsNewInstance()
@@ -100,10 +110,13 @@ public sealed class PostShipmentChoreography : ChoreographedSagaDefinition<PostS
 
         // Every non-terminal milestone needs its own timeout registration, not just the first. Timeouts
         // are keyed on CurrentState and the orchestrator cancels the pending one whenever the saga
-        // transitions away — so a single WithTimeout(AwaitingFulfilment, ...) would only ever catch an
-        // order where *nothing* came back, and would be silently cancelled by the first branch to report,
-        // leaving a saga stalled at two-of-three to hang forever.
-        foreach (var milestone in new[] { AwaitingFulfilment, Notified, PointsAwarded, Invoiced })
+        // transitions away — so registering only on the first milestone would be silently cancelled by
+        // the first branch to report, leaving a saga stalled at two-of-three to hang forever.
+        //
+        // AwaitingFulfilment is deliberately absent: it is the initial state, so nothing ever transitions
+        // into it and a timeout registered on it could never be scheduled. Shipped exists precisely so
+        // the instance-creating event has a real transition to carry one.
+        foreach (var milestone in new[] { Shipped, Notified, PointsAwarded, Invoiced })
         {
             WithTimeout(milestone, FulfilmentStallTimeout,
                 t => t.TransitionTo(Abandoned).Finalize(SagaStatus.TimedOut));
