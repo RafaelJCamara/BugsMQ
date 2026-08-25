@@ -13,6 +13,24 @@ internal sealed class StepDefinition<TState> where TState : SagaState, new()
 
     public string? TargetStateName { get; set; }
 
+    /// <summary>
+    /// Set instead of <see cref="TargetStateName"/> when where this step goes next depends on the
+    /// saga's accumulated state rather than on the step alone — an orchestrated fan-out/join, where
+    /// each branch's reply either leaves the saga gathering or, if it was the last one outstanding,
+    /// releases it to the next state.
+    /// </summary>
+    public Func<TState, string>? TargetStateSelector { get; set; }
+
+    /// <summary>
+    /// The single place the fixed and computed forms are collapsed, so the two DSLs can't drift on
+    /// which wins — the same reason <see cref="ResolveFinalStatus"/>, <see cref="StepExecutor"/>, and
+    /// <see cref="CompensationRunner"/> are shared. Evaluated after the step's actions have run, so a
+    /// selector sees what they just wrote. Falls back to <paramref name="fromState"/> so a step that
+    /// declares no transition at all stays put, which is the long-standing behaviour.
+    /// </summary>
+    public string ResolveTargetState(TState state, string fromState) =>
+        TargetStateSelector is not null ? TargetStateSelector(state) : TargetStateName ?? fromState;
+
     public SagaStatus? FinalStatus { get; set; }
 
     /// <summary>

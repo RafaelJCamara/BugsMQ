@@ -79,6 +79,41 @@ public sealed class EventBuilder<TState, TMessage> : StateBuilder<TState>
     public EventBuilder<TState, TMessage> TransitionTo(State<TState> state)
     {
         _step.TargetStateName = state.Name;
+        _step.TargetStateSelector = null;
+        return this;
+    }
+
+    /// <summary>
+    /// Chooses the next state from the saga's accumulated state, evaluated after this step's actions
+    /// have run so it sees what they just wrote.
+    /// <para>
+    /// This is the join half of a parallel fan-out. Dispatching branches in parallel already worked —
+    /// <c>.Publish(...)</c> chains, so one step can send several commands at once — but the replies
+    /// then arrive in an order nobody controls, and the fixed <c>TransitionTo(state)</c> could only move
+    /// on unconditionally. Returning the gathering state keeps the saga waiting; returning the next
+    /// state releases it. Register the same selector on every branch and whichever reply happens to be
+    /// last is the one that advances the saga, without any branch assuming it is last:
+    /// </para>
+    /// <code>
+    /// During(Gathering)
+    ///     .When&lt;InventoryReserved&gt;()
+    ///         .Then((ctx, _) =&gt; ctx.Saga.InventoryDone = true)
+    ///         .TransitionTo(s =&gt; s.AllBranchesDone ? ReadyToShip : Gathering)
+    ///     .When&lt;PaymentCharged&gt;()
+    ///         .Then((ctx, _) =&gt; ctx.Saga.PaymentDone = true)
+    ///         .TransitionTo(s =&gt; s.AllBranchesDone ? ReadyToShip : Gathering);
+    /// </code>
+    /// <para>
+    /// Returning the gathering state is a self-transition, which the orchestrator treats as "no
+    /// transition": it does not cancel or reschedule that state's timeout. That is the behaviour a join
+    /// wants — one deadline covers the whole gather, rather than each arriving branch silently
+    /// extending it — but it does mean a branch cannot carry its own separate deadline.
+    /// </para>
+    /// </summary>
+    public EventBuilder<TState, TMessage> TransitionTo(Func<TState, State<TState>> selector)
+    {
+        _step.TargetStateSelector = state => selector(state).Name;
+        _step.TargetStateName = null;
         return this;
     }
 
@@ -86,6 +121,25 @@ public sealed class EventBuilder<TState, TMessage> : StateBuilder<TState>
     public EventBuilder<TState, TMessage> Finalize(SagaStatus status)
     {
         _step.FinalStatus = status;
+        _step.FinalStatusSelector = null;
+        return this;
+    }
+
+    /// <summary>
+    /// Terminal-or-not decided from the saga's accumulated state, evaluated after this step's actions
+    /// have run. Return null for "handled, but not terminal yet".
+    /// <para>
+    /// Needed for a fan-out join whose completion *is* the saga's ending. Ordinarily an orchestrated
+    /// saga expresses a conditional ending by gating on state — put the ending in its own
+    /// <c>During(...)</c> — but that does not reach the case where the last branch to arrive must both
+    /// release the join and finish the saga in one step, because no branch knows it is last. A fixed
+    /// <c>Finalize(status)</c> on each branch would complete the saga on the first reply.
+    /// </para>
+    /// </summary>
+    public EventBuilder<TState, TMessage> Finalize(Func<TState, SagaStatus?> selector)
+    {
+        _step.FinalStatusSelector = selector;
+        _step.FinalStatus = null;
         return this;
     }
 

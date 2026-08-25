@@ -50,10 +50,10 @@ an independent fan-out tracked under the same correlation id) — see "Choreogra
 OrderProcessing sample" below.
 
 **What's deliberately out of scope for v1** (per the original commit's own roadmap note, not
-addressed in this pass): additional transport adapters (MassTransit/Wolverine). Also out of scope:
-parallel/fan-out saga steps and sub-saga composition. The SignalR hub and polling service, listed
-here as an untested gap through several passes, are covered as of "SignalR hub and polling service
-tests" below.
+addressed in this pass): additional transport adapters (MassTransit/Wolverine) and sub-saga
+composition. Parallel/fan-out saga steps, also on that original list, are covered as of "Parallel
+fan-out and join" below. The SignalR hub and polling service, listed here as an untested gap through
+several passes, are covered as of "SignalR hub and polling service tests".
 
 Chaos-engineering transport middleware — listed as out of scope in the original v1 roadmap note,
 with the `MessageMiddleware`/`MiddlewarePipelineTransport` seam left in place unused specifically so
@@ -683,6 +683,70 @@ regress silently elsewhere.
 saga transitions *into* a state, so instances that entered `AwaitingInventory`/`AwaitingShipment` before
 this change have no timeout row and never will. They stay stuck. Draining them would need a separate
 backfill — deliberately not smuggled into this pass.
+
+## Parallel fan-out and join
+
+Closes the last engine item from the original v1 roadmap note: an orchestrated saga can now dispatch
+several branches at once and wait for all of them, instead of being limited to one message per state.
+
+**Half of it already worked.** `.Publish(...)` chains, so a single step could always dispatch several
+commands — the fan-out needed no new DSL at all. What was missing was the *join*: replies come back in
+an order nobody controls, and `TransitionTo(state)` was unconditional, so there was no way to express
+"stay here until the last branch reports."
+
+That is the same shape as the choreography join one pass earlier, so it got the same treatment — a
+state-dependent overload rather than a new subsystem:
+
+```csharp
+During(Gathering)
+    .When<StockReserved>()
+        .Then((ctx, _) => ctx.Saga.StockReserved = true)
+        .TransitionTo(s => s.AllBranchesReady ? ReadyToShip : Gathering)
+    .When<PaymentAuthorized>()
+        .Then((ctx, _) => ctx.Saga.PaymentAuthorized = true)
+        .TransitionTo(s => s.AllBranchesReady ? ReadyToShip : Gathering);
+```
+
+Returning the gathering state keeps the saga waiting; returning the next state releases it. Register
+the same selector on every branch and whichever reply lands last is the one that advances the saga,
+with no branch assuming it is last. `StepDefinition.ResolveTargetState` is the single place the fixed
+and computed forms are collapsed, so the orchestrated and choreographed DSLs can't drift — the same
+reason `ResolveFinalStatus`, `StepExecutor`, and `CompensationRunner` are shared.
+
+**One timeout covers the whole gather.** Returning the gathering state is a self-transition, which the
+orchestrator treats as "no transition" and therefore neither cancels nor reschedules that state's
+timeout. That is what a join wants — an arriving branch must not silently extend the deadline — but it
+does mean a branch can't carry a separate deadline of its own.
+
+**A correction to an earlier claim in this README.** The choreography pass said `Finalize(selector)`
+was deliberately *not* added to the orchestrated `EventBuilder`, on the reasoning that orchestration
+gates by state and so can express a conditional ending as separate `During(...)` branches. That holds
+in general but not for a *terminal* join, where the last branch to arrive must both release the join
+and finish the saga, and no branch knows it is last — a fixed `Finalize(status)` on each branch would
+complete the saga on the first reply. `EventBuilder` now has the overload too, and the old note is
+corrected in place.
+
+**A silent engine limitation found while writing the tests, now loud.** Giving the second test saga the
+same `TState` as the first made it vanish: `AddSaga<TDefinition, TState>` registers the definition as
+`ISagaDefinition<TState>`, so a second saga sharing a state class silently wins the registration and
+the first never runs — no error, its messages simply go nowhere. `AddSaga` now throws a
+`SagaDefinitionException` at registration instead, because the runtime symptom (an inexplicably missing
+saga) points nowhere near the cause. Each saga needs its own state class even if two would be
+structurally identical.
+
+**Coverage.** `ParallelFanOutJoinTests` pins the fan-out (one step, three outbound commands), the join
+across all six arrival orders, the terminal-join variant across all six, that arriving branches don't
+reset the gather timeout, and that a stalled gather still times out and compensates.
+`SagaRegistrationTests` pins the duplicate-state guard. Verified by mutation rather than assumed:
+making `ResolveTargetState` ignore its selector fails 13 tests, all of them in the fan-out suite and
+nothing else.
+
+**Not wired into the OrderProcessing sample**, deliberately. The obvious demonstration would be
+reserving inventory and authorizing payment in parallel rather than in sequence — but `OrderSaga` is
+this project's reference for the linear shape, and several README sections describe its exact
+compensation ordering and timeout behaviour. Restructuring it is a product decision about what the
+sample is *for*, not a detail to fold into the pass that built the primitive. The same split as the
+choreographed DSL, which shipped one pass ahead of its sample wiring.
 
 ## Getting started
 

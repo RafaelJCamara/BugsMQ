@@ -88,7 +88,7 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
 
         await ExecuteStepAsync(step, context, message, cancellationToken);
 
-        var toState = step.TargetStateName ?? fromState;
+        var toState = step.ResolveTargetState(context.Saga, fromState);
         context.Saga.CurrentState = toState;
 
         // Resolved after the step's actions have run, so a selector sees the state they just wrote —
@@ -107,7 +107,7 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
 
         await ExecuteStepAsync(timeout.Step, context, TimeoutSignal.Instance, cancellationToken);
 
-        var toState = timeout.Step.TargetStateName ?? forState;
+        var toState = timeout.Step.ResolveTargetState(context.Saga, forState);
         context.Saga.CurrentState = toState;
 
         var finalStatus = timeout.Step.ResolveFinalStatus(context.Saga);

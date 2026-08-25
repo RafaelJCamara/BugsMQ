@@ -122,9 +122,10 @@ public sealed class ChoreographyEventBuilder<TState, TMessage>
     /// without any of them assuming it is last.
     /// </para>
     /// <para>
-    /// Deliberately not added to <see cref="EventBuilder{TState,TMessage}"/>: an orchestrated saga gates
-    /// its steps by current state, so a conditional ending is already expressible there as separate
-    /// <c>During(...)</c> branches. A choreography has no such gate, which is exactly why it needs this.
+    /// <see cref="EventBuilder{TState,TMessage}"/> has the same overload. It was initially left off on
+    /// the reasoning that an orchestrated saga gates by current state and so can express a conditional
+    /// ending as separate <c>During(...)</c> branches — true in general, but not for a terminal fan-out
+    /// join, where the last branch to arrive must finish the saga and no branch knows it is last.
     /// </para>
     /// </summary>
     public ChoreographyEventBuilder<TState, TMessage> Finalize(Func<TState, SagaStatus?> selector)

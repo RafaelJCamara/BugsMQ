@@ -43,6 +43,18 @@ public sealed class SagaEngineBuilder(IServiceCollection services)
         where TDefinition : class, ISagaDefinition<TState>
         where TState : SagaState, new()
     {
+        // Two definitions sharing one TState cannot both work: the engine resolves a saga's definition
+        // as ISagaDefinition<TState>, so the second registration silently wins and the first saga never
+        // runs — no error, its messages simply go nowhere. Caught here at startup instead, because the
+        // symptom otherwise shows up as an inexplicably missing saga at runtime. Give each saga its own
+        // state class, even if the two would be structurally identical.
+        if (services.Any(d => d.ServiceType == typeof(ISagaDefinition<TState>)))
+        {
+            throw new SagaDefinitionException(
+                $"A saga is already registered with state type '{typeof(TState).Name}'; '{typeof(TDefinition).Name}' cannot share it. " +
+                "Each saga definition needs its own TState, since the engine resolves definitions by state type.");
+        }
+
         services.AddSingleton<TDefinition>();
         services.AddSingleton<ISagaDefinition<TState>>(sp => sp.GetRequiredService<TDefinition>());
         services.AddScoped<SagaOrchestrator<TState>>();
