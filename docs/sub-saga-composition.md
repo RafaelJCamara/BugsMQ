@@ -10,9 +10,14 @@ its parent id." It does not. `SagaContext.PublishAsync` always stamps the *publi
 correlation id, and `SagaOrchestrator.HandleCoreAsync` correlates strictly on the inbound correlation
 id — so a child publishing "I'm done" sends it under the child's own id, where the parent never sees
 it. `CorrelateBy` is not a fallback: it is documented as a business key for dashboard search,
-explicitly not used for routing. Option (a) therefore needs an engine change too — a publish overload
-taking a target correlation id — which narrows the gap between (a) and (b) that the original
-recommendation rested on. §7.1 is re-opened on those terms below.
+explicitly not used for routing.
+
+Following that through changed the shape of the §3.4 decision twice over: **(b), not (a), is the option
+needing no new public API** (the orchestrator already holds the transport and can stamp any envelope),
+and the two options turn out to be **complementary rather than alternatives** — only (a) can carry the
+child's domain result, and only (b) can fire when a child fails, because a failed child never reaches
+its own publish step. The original recommendation of "(a) first, (b) later" survives, on entirely
+different reasoning. Worked through in §3.4; summarised in §7.1.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers in §2 were accurate at commit
@@ -118,23 +123,64 @@ title oversold it.
 
 > **Corrected after building Slice 1.** Option (a) does *not* work with no engine change — see the
 > status note at the top of this file. A child cannot address its parent at all today, so (a) needs a
-> publish-with-correlation-id overload before it is even expressible. Both options now cost an engine
-> change; the choice is between which one.
+> way to publish under the parent's correlation id before it is even expressible.
 
-**(a) Child publishes its own domain message.** ~~Works today with no engine change~~ — needs a publish
-overload taking a target correlation id, which the child reads from `Saga.ParentCorrelationId` (that
-field does now exist, and is populated). Typed; the parent matches `When<PaymentSettled>()`. Every
-child must remember to do it. Note the overload is a general-purpose hole in correlation-id
-discipline: once any saga can publish under an arbitrary correlation id, nothing confines that to
-parent notification.
+**(a) Child publishes its own domain message.** ~~Works today with no engine change~~ — needs a new
+method on `ISagaContext` that publishes under `Saga.ParentCorrelationId` (that field does now exist,
+and is populated). Typed; the parent matches `When<PaymentSettled>()`. Every child must remember to do
+it, and a child that forgets leaves the parent hanging until its own timeout.
 
 **(b) Engine auto-publishes `ChildSagaFinished(childCorrelationId, childSagaType, status)`** to the
 parent when a child with a parent reaches a terminal status. Uniform; works for children unaware they
 are children. But it is *one CLR type*, so a parent awaiting two different child types must branch on a
 string field inside `.Then(...)` rather than on message type — against the grain of this DSL.
 
-~~**Recommendation:** ship (a) first; add (b) later as a safety net, not the primary path.~~ That
-recommendation was reasoning from (a) being free. It is not. **Re-decide.**
+#### The cost comparison runs the opposite way to the original framing
+
+**(b) needs no new public API at all.** `SagaOrchestrator` already holds the transport and can stamp
+any envelope it likes, and it already has the child's `ParentCorrelationId` on the state — so (b) is a
+terminal-status hook, a contract type, and an append-only `SagaEntryType`. It is **(a)** that adds
+public surface to `ISagaContext`. The original sketch had this backwards, and so did the first attempt
+at correcting it.
+
+#### …but the decision does not turn on cost, it turns on payload
+
+**`ChildSagaFinished` carries no domain data.** A parent that started a `PaymentSaga` wants to know
+*what was charged*, not merely that it finished. Under (b) alone its only recourse is reading the
+child's state, which it cannot do generically: `ISagaSummaryReader` is saga-type-agnostic and hands
+back untyped `DataJson`. So (b) alone is insufficient for most real waits however cheap it is.
+
+**And a failed child never reaches its "publish my result" step**, by construction — so (a) cannot
+cover failure or timeout, however typed it is.
+
+**They are complementary, not alternatives**, which is what the original either/or framing missed:
+
+| | carries the domain result | fires when the child fails or times out |
+|---|---|---|
+| (a) child publishes | yes | no — the child never gets there |
+| (b) engine publishes | no | yes |
+
+**Recommendation: (a) as the primary path, (b) afterwards as the failure net.** Same conclusion the
+original sketch reached, reached for a sound reason this time — not "(a) is free" (it is not), but
+"only (a) can carry the answer back."
+
+Two things to settle before building (a):
+
+1. **Narrow the API.** Not `PublishAsync(message, correlationId)` — that lets any saga publish under
+   any id and mint orphan instances, dissolving the invariant that a saga's outbound messages carry its
+   own correlation id. Prefer `ctx.NotifyParentAsync(message)`, which reads `ParentCorrelationId`
+   itself and fails loudly on a root saga. Identical engine work; the only foreign id a saga can
+   publish under is one the engine already put on its state.
+2. **The notification fans out.** Published under the parent's correlation id, it reaches *every* saga
+   type tracking that id — in the sample, `OrderSaga` as well as `PostShipmentChoreography`. That is
+   the same fan-out any published message has, but it needs documenting rather than discovering.
+
+**A hazard specific to (b):** `UnhandledEventPolicy.Throw` makes an unhandled message nack and
+redeliver (`src/BugsMQ.Core/Dsl/UnhandledEventPolicy.cs`). A parent that opted into `Throw` and does
+not handle `ChildSagaFinished` at its current state would spin on a message its author never asked
+for. So (b) has to be opt-in per parent, not a global engine behaviour.
+
+**Status: recommended, not decided.** Nobody has signed off on the above.
 
 ### 3.5 Compensation cascade — **OPEN DECISION, the hard one**
 
@@ -149,6 +195,22 @@ compensating command is boring and correct.
 
 If it is ever wanted, it should be explicit opt-in (`.CompensateChildren()`) plus a child-side hook to
 receive the request — that is Slice 3, and it is the one I would push back on.
+
+#### Three further arguments, from having built Slice 1
+
+1. **The parent genuinely does not know its children.** `StartChildAsync` returns `Task`, not the
+   child's id, and there is no compile-time link. A cascade would therefore mean the engine issuing a
+   *database query* mid-compensation to discover which side effects to send — and that query returns
+   children still `Running`, children that already self-compensated on their own failure, and (where
+   two saga types initiate on one child message) children the parent never intended to start.
+2. **Unbounded depth, no cycle detection.** Slice 1 deliberately gives each child a fresh correlation
+   id precisely so a saga can start its own type; a cascade walks that tree with nothing bounding it.
+3. **Slice 1 shipped with child failure not touching the parent** — verified live across all 43
+   parent/child pairs, every parent `Completed` regardless of whether its child completed, bounced, or
+   timed out. A cascade adds implicit coupling in the reverse direction, and with both directions
+   implicit nobody can predict what a single `.Compensate()` sends.
+
+**Status: still recommended, still not decided.**
 
 ---
 
@@ -180,14 +242,30 @@ alone is not queryable.
 parameters rather than defaulted ones, deliberately, so every projection site had to decide what to put
 there instead of silently defaulting to null. That is a source-breaking change to a public record.
 
-### Slice 2 — automatic completion notification
+### Slice 2 — completion notification
+
+Split in two after the §3.4 analysis, because the two halves cover different cases and 2a is the one
+that makes a wait usable at all. Build 2a first, so the sample demonstrates a real wait before the
+engine starts injecting messages on anyone's behalf.
+
+**Slice 2a — the child reports its own result (the primary path)**
+
+- [ ] `ISagaContext.NotifyParentAsync(message)` — publishes under `Saga.ParentCorrelationId`, fails
+      loudly on a root saga. Deliberately *not* a general publish-under-any-id overload; see §3.4
+- [ ] A parent in the sample that actually waits, via the existing join
+      (`.TransitionTo(s => s.ChildDone ? Ready : AwaitingChild)`) plus a timeout on the waiting state
+- [ ] Tests through the real publish/receive path, and the fan-out note from §3.4 documented
+
+**Slice 2b — the engine reports failures the child could not (the safety net)**
 
 - [ ] `ChildSagaFinished` contract
-- [ ] Orchestrator publishes it when a child with a parent goes terminal
+- [ ] Orchestrator publishes it when a child with a parent goes terminal — **opt-in per parent**, since
+      a parent using `UnhandledEventPolicy.Throw` would otherwise spin on an engine-injected message
+      its author never asked for
 - [ ] `SagaEntryType`: `ChildSagaStarted`, `ChildSagaFinished` — **APPEND ONLY.** The enum persists as
       plain integers; inserting a member silently reinterprets every existing row
-      (`src/BugsMQ.Abstractions/Persistence/SagaEntryType.cs:25`)
-- [ ] Dashboard timeline + saga map rendering for the child hop
+- [ ] Dashboard timeline + saga map rendering for the child hop. Note Slice 1 shipped without this:
+      a started child currently logs as an ordinary `MessagePublished`
 
 ### Slice 3 — compensation cascade (push back before starting)
 
@@ -223,7 +301,7 @@ previous pass threaded `SourceService`/`CausationId` onto envelope headers, and 
 `SagaLogEntry` objects with the field already populated passed while the orchestrator never actually
 read the header. Any test that constructs the parent link by hand proves nothing.
 
-Required:
+Required, and **all three were done for Slice 1** — see the README section for the results:
 
 1. Tests that drive the **real** publish → receive → create-instance path and assert
    `ParentSagaType`/`ParentCorrelationId` on the persisted snapshot.
@@ -232,19 +310,31 @@ Required:
 3. Mutation check, per this repo's habit: make the orchestrator ignore the parent headers and confirm
    the linkage tests fail — and *only* those.
 
+**Worth keeping for Slice 2, because the mutation run confirmed the scar is still live.** Under both
+mutations the EF Core provider tests and the dashboard endpoint tests stayed green, because they build
+the parent link by hand. That is correct for their subject — the store and the route — but it means
+they cannot catch a linkage that is never set, which is exactly how the `CausationId` tests passed
+against a header nobody read. Any Slice 2 test for `NotifyParentAsync` has the same trap available to
+it: a test that hand-publishes under the parent's correlation id proves nothing about whether
+`NotifyParentAsync` reads `ParentCorrelationId`.
+
 ---
 
 ## 7. Open questions
 
-1. **§3.4 — re-opened on corrected terms.** Both options need an engine change now, not just (b): a
-   child cannot address its parent at all today. (a) costs a publish-with-correlation-id overload,
-   which is a general-purpose hole in correlation-id discipline; (b) costs one CLR message type that
-   every parent must branch on by string field. The original recommendation ("ship (a) first, it's
-   free") no longer applies as written.
-2. **§3.5** — compensation cascade: confirm "no automatic cascade" is acceptable. Unchanged, and
-   building Slice 1 gave no reason to revisit it — if anything, seeing how easily a fire-and-forget
-   child is started strengthens the argument, since a parent now has no idea how many children exist
-   or what state they reached.
+1. **§3.4 — analysed, awaiting sign-off.** The two options turned out to be complementary rather than
+   alternatives: only (a) can carry the child's domain result, and only (b) can fire when a child fails
+   or times out (since a failed child never reaches its own publish step). Recommendation is therefore
+   **(a) as the primary path, (b) afterwards as the failure net** — the same conclusion the original
+   sketch reached, but for a sound reason rather than for "(a) is free", which it is not. Note the cost
+   comparison also runs the opposite way to the original framing: (b) needs no new public API, (a)
+   does. See §3.4 in full, including the narrowed `NotifyParentAsync` shape and the
+   `UnhandledEventPolicy.Throw` hazard that makes (b) opt-in per parent.
+2. **§3.5 — analysed, awaiting sign-off.** Recommendation unchanged: no automatic cascade. Building
+   Slice 1 added three arguments for it rather than against — the parent does not know its children
+   without a mid-compensation database query, the tree is unbounded in depth with self-recursion
+   deliberately enabled, and Slice 1 shipped with child failure not touching the parent, verified live.
+   See §3.5.
 3. ~~Is Slice 1 alone worth shipping without a sample demonstrating it?~~ Settled by necessity: §6's
    live verification requires a real parent/child pair in the running stack, so the sample wiring could
    not be split off the way the choreographed DSL's was.
