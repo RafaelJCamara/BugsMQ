@@ -1,8 +1,9 @@
 # Design: sub-saga composition
 
-**Status: Slice 1 is built and shipped** — see the README's "Sub-saga composition: parent linkage"
-section, which is the authoritative description of what exists. Slices 2 and 3 remain proposed, and
-this file is now only about those, plus what building Slice 1 taught about them.
+**Status: Slices 1 and 2a are built and shipped** — see the README's "Sub-saga composition: parent
+linkage" and "Sub-saga composition: completion notification" sections, which are the authoritative
+description of what exists. Slice 2b and Slice 3 remain proposed, and this file is now only about
+those, plus what building 1 and 2a taught about them.
 
 **One claim in the original sketch was wrong, and it bears directly on the §3.4 decision.** §3.4(a)
 said a child publishing its own domain message "works today with no engine change, once the child knows
@@ -16,8 +17,13 @@ Following that through changed the shape of the §3.4 decision twice over: **(b)
 needing no new public API** (the orchestrator already holds the transport and can stamp any envelope),
 and the two options turn out to be **complementary rather than alternatives** — only (a) can carry the
 child's domain result, and only (b) can fire when a child fails, because a failed child never reaches
-its own publish step. The original recommendation of "(a) first, (b) later" survives, on entirely
-different reasoning. Worked through in §3.4; summarised in §7.1.
+its own publish step. The original recommendation of "(a) first, (b) later" survived that correction —
+Slice 2a built (a), on that revised reasoning. §3.4 is retained below as a historical record of the
+analysis; §7.1 carries the current status.
+
+**Slice 2a shipped, and surfaced a real hazard this file didn't anticipate**: a child that addresses its
+parent from the very same step that started it can race ahead of the parent's own not-yet-persisted
+transition. See the README section for the live/mutation-tested detail and §5 for the failure mode.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers in §2 were accurate at commit
@@ -180,7 +186,11 @@ redeliver (`src/BugsMQ.Core/Dsl/UnhandledEventPolicy.cs`). A parent that opted i
 not handle `ChildSagaFinished` at its current state would spin on a message its author never asked
 for. So (b) has to be opt-in per parent, not a global engine behaviour.
 
-**Status: recommended, not decided.** Nobody has signed off on the above.
+**Status: (a) built and shipped as Slice 2a — `ctx.NotifyParentAsync`.** Built exactly as specified
+above: narrowed to read `Saga.ParentCorrelationId` itself rather than a general publish-under-any-id
+overload, fails loudly (before any I/O) on a root saga, and does not cover a child's timeout — see §5
+for what that leaves uncovered and the new race it surfaced. (b) — the `ChildSagaFinished` safety net —
+remains proposed as Slice 2b.
 
 ### 3.5 Compensation cascade — **OPEN DECISION, the hard one**
 
@@ -245,16 +255,31 @@ there instead of silently defaulting to null. That is a source-breaking change t
 ### Slice 2 — completion notification
 
 Split in two after the §3.4 analysis, because the two halves cover different cases and 2a is the one
-that makes a wait usable at all. Build 2a first, so the sample demonstrates a real wait before the
+that makes a wait usable at all. Built 2a first, so the sample demonstrates a real wait before the
 engine starts injecting messages on anyone's behalf.
 
-**Slice 2a — the child reports its own result (the primary path)**
+**Slice 2a — the child reports its own result (the primary path) — DONE**
 
-- [ ] `ISagaContext.NotifyParentAsync(message)` — publishes under `Saga.ParentCorrelationId`, fails
+- [x] `ISagaContext.NotifyParentAsync(message)` — publishes under `Saga.ParentCorrelationId`, fails
       loudly on a root saga. Deliberately *not* a general publish-under-any-id overload; see §3.4
-- [ ] A parent in the sample that actually waits, via the existing join
-      (`.TransitionTo(s => s.ChildDone ? Ready : AwaitingChild)`) plus a timeout on the waiting state
-- [ ] Tests through the real publish/receive path, and the fan-out note from §3.4 documented
+- [x] A parent in the sample that actually waits: `InvoiceFollowUpSaga`, via the existing join
+      (`During(state).When<T>().TransitionTo(...)`) plus a timeout on the waiting state. Not
+      `PostShipmentChoreography` — see the README section for why that would have contradicted its own
+      documented "must not hold the leg open" invariant, and why archival (`InvoiceArchivalSaga`)
+      rather than a second `InvoiceDeliverySaga` avoids sending two customer emails per invoice
+- [x] Tests through the real publish/receive path (`NotifyParentAsyncTests`), mutation-verified from
+      both ends the same way Slice 1 was. The fan-out note from §3.4 turned out narrower than written
+      there once built and live-verified: it reaches every saga type that both tracks the parent's
+      correlation id **and has declared a handler for that exact message type** — since subscription is
+      per declared message type, `OrderSaga`/`PostShipmentChoreography` sharing the same correlation id
+      as `InvoiceFollowUpSaga` never even receive `InvoiceArchivalFinished`, confirmed live (empty
+      timeline for that message type on both)
+- [x] **New, not anticipated by this doc**: a child that calls `NotifyParentAsync` from the very same
+      step `StartChildAsync` started it in can race ahead of the parent's own not-yet-persisted
+      transition and be silently dropped as `UnexpectedEvent` — see §5. Pinned by
+      `NotifyParentAsync_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`;
+      not observed live under normal load, since every real child in the sample has a genuine I/O
+      round-trip between the two calls
 
 **Slice 2b — the engine reports failures the child could not (the safety net)**
 
@@ -291,6 +316,23 @@ engine starts injecting messages on anyone's behalf.
 - **Adding a timeout to an existing state does not rescue in-flight instances** — timeouts are scheduled
   on entry to a state. Same trap as the 60 stranded sagas in the "Timeout coverage for every awaiting
   state" README section.
+- **A child that calls `NotifyParentAsync` from the same step `StartChildAsync` started it in can race
+  ahead of the parent's own not-yet-persisted transition.** Found building Slice 2a, not anticipated by
+  this doc. `InMemoryMessageTransport.DispatchAsync` invokes every subscriber synchronously and
+  recursively, so a zero-I/O child's notification is still nested inside the parent's own
+  `StartChildAsync` call when it arrives — before the parent has persisted its own state, or (for a
+  brand-new parent) inserted a row at all. `SagaOrchestrator.HandleCoreAsync` finds no existing
+  instance, the message isn't among the parent's initiating types, so it logs `UnexpectedEvent` and
+  drops it — no exception, so no redelivery either. Pinned by
+  `NotifyParentAsync_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`
+  (`tests/BugsMQ.Core.Tests/NotifyParentAsyncTests.cs`). Real transports decouple a child's dispatch
+  from the publisher's call stack, so this is not expected to reproduce deterministically the way it
+  does in-memory — every real child in this repo has genuine I/O between `StartChildAsync` and
+  `NotifyParentAsync` (a participant round-trip), which is what makes the parent's own persist reliably
+  win the race in practice, confirmed live: zero dropped notifications across 21 real archival children.
+  Not fixed — a fix would mean reordering this engine's "run step actions, then persist" sequence
+  throughout, well beyond Slice 2a's scope. A child that reports back with no intervening work at all
+  remains a real, narrow hazard.
 
 ---
 
@@ -318,18 +360,30 @@ against a header nobody read. Any Slice 2 test for `NotifyParentAsync` has the s
 it: a test that hand-publishes under the parent's correlation id proves nothing about whether
 `NotifyParentAsync` reads `ParentCorrelationId`.
 
+**All three done for Slice 2a too, same discipline** — see the README section for the full results:
+
+1. `NotifyParentAsyncTests` drives the real `StartChildAsync` → transport → orchestrator →
+   `NotifyParentAsync` → transport → orchestrator path; nothing hand-sets `ParentCorrelationId` or the
+   released parent's state.
+2. Live under `docker compose` (chaos overlay on, for all three endings): 21 archival children, 23
+   follow-up parents, zero dangling or half-linked pointers, zero `InvoiceArchivalFinished` noise on
+   `OrderSaga`/`PostShipmentChoreography` despite sharing the correlation id.
+3. Mutated both ends: publishing under the child's own id instead of `parentCorrelationId`, and
+   treating the read of `Saga.ParentCorrelationId` as always absent. Each failed exactly the 3 tests
+   that depend on a real notification reaching its parent, and nothing else.
+
 ---
 
 ## 7. Open questions
 
-1. **§3.4 — analysed, awaiting sign-off.** The two options turned out to be complementary rather than
+1. **§3.4(a) — built as Slice 2a.** The two options turned out to be complementary rather than
    alternatives: only (a) can carry the child's domain result, and only (b) can fire when a child fails
-   or times out (since a failed child never reaches its own publish step). Recommendation is therefore
-   **(a) as the primary path, (b) afterwards as the failure net** — the same conclusion the original
-   sketch reached, but for a sound reason rather than for "(a) is free", which it is not. Note the cost
-   comparison also runs the opposite way to the original framing: (b) needs no new public API, (a)
-   does. See §3.4 in full, including the narrowed `NotifyParentAsync` shape and the
-   `UnhandledEventPolicy.Throw` hazard that makes (b) opt-in per parent.
+   or times out (since a failed child never reaches its own publish step). Built **(a) as the primary
+   path**, exactly as recommended, via the narrowed `ctx.NotifyParentAsync(message)` and the
+   `UnhandledEventPolicy.Throw`-driven decision to keep it opt-in-shaped rather than a blanket engine
+   behaviour. **(b), the failure net, remains open** — Slice 2b (`ChildSagaFinished`) is still proposed,
+   and is what would cover a child that fails via unhandled exception or times out, neither of which (a)
+   can reach (see §5's new race for a third gap (a) leaves, discovered rather than anticipated).
 2. **§3.5 — analysed, awaiting sign-off.** Recommendation unchanged: no automatic cascade. Building
    Slice 1 added three arguments for it rather than against — the parent does not know its children
    without a mid-compensation database query, the tree is unbounded in depth with self-recursion
@@ -338,11 +392,14 @@ it: a test that hand-publishes under the parent's correlation id proves nothing 
 3. ~~Is Slice 1 alone worth shipping without a sample demonstrating it?~~ Settled by necessity: §6's
    live verification requires a real parent/child pair in the running stack, so the sample wiring could
    not be split off the way the choreographed DSL's was.
-4. **Which sample?** Partly answered. `InvoiceDeliverySaga` demonstrates it additively, off
-   `PostShipmentChoreography`. The original question — whether `OrderSaga` itself should be
-   restructured around sub-sagas — is still open and still a product decision about what the sample is
-   *for*, the same one the parallel fan-out work left open.
-5. **New:** should the parent be able to learn its child's correlation id? `StartChildAsync` returns
-   `Task`, not `Task<Guid>`, matching this design. Nothing needs the id yet — the relation is queried
-   parent-to-child via `FindChildrenAsync`, and option §3.4(a) has the child address the parent rather
-   than the reverse. Slice 2 may change that, and it is a one-line signature change if so.
+4. **Which sample?** Further answered, still additively. `InvoiceDeliverySaga` (Slice 1) demonstrates
+   linkage without waiting; `InvoiceFollowUpSaga`/`InvoiceArchivalSaga` (Slice 2a) demonstrate a parent
+   that actually waits, kept as a *separate* pair rather than retrofitted onto
+   `PostShipmentChoreography` — see the README section for why. The original question — whether
+   `OrderSaga` itself should be restructured around sub-sagas — is still open and still a product
+   decision about what the sample is *for*, the same one the parallel fan-out work left open.
+5. **Resolved by not needing it.** Should the parent learn its child's correlation id?
+   `StartChildAsync` still returns `Task`, not `Task<Guid>`. Slice 2a didn't need it: `NotifyParentAsync`
+   has the child address the parent via `Saga.ParentCorrelationId`, not the reverse, and
+   `InvoiceFollowUpSaga` never needs its child's id for anything. Still a one-line signature change if a
+   future slice does need it.
