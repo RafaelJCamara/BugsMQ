@@ -110,7 +110,8 @@ public static class SagaMapBuilder
                 case SagaEntryType.SagaStarted or SagaEntryType.MessageReceived:
                     ProcessInboundEntry(entry);
                     break;
-                case SagaEntryType.MessagePublished or SagaEntryType.MessageSent:
+                case SagaEntryType.MessagePublished or SagaEntryType.MessageSent
+                    or SagaEntryType.ChildSagaStarted or SagaEntryType.ChildSagaFinished:
                     ProcessOutboundEntry(entry);
                     break;
                 default:

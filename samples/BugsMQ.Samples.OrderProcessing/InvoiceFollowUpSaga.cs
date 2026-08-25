@@ -45,6 +45,15 @@ public sealed class InvoiceFollowUpState : SagaState
 /// a real transition, and starting the child from a self-transitioning initial state would schedule
 /// none.
 /// </para>
+///
+/// <para>
+/// <b>Slice 2b: also opts into the engine's ChildSagaFinished safety net.</b>
+/// <see cref="InvoiceArchivalSaga"/>'s own <c>WithTimeout</c> deliberately never calls
+/// <c>NotifyParentAsync</c> (see its doc comment) — declaring a <c>.When&lt;ChildSagaFinished&gt;()</c>
+/// handler here is what makes that engine-published event reach this saga at all (a parent that never
+/// declares a handler for it is never even subscribed), and it rescues this wait in ~15s instead of the
+/// full 30s <see cref="ArchivalWaitTimeout"/> would otherwise take.
+/// </para>
 /// </summary>
 public sealed class InvoiceFollowUpSaga : OrchestratedSagaDefinition<InvoiceFollowUpState>
 {
@@ -56,8 +65,10 @@ public sealed class InvoiceFollowUpSaga : OrchestratedSagaDefinition<InvoiceFoll
     /// <summary>
     /// Longer than InvoiceArchivalSaga's own 15s storage timeout, deliberately: the common case is the
     /// child noticing a stalled archive store and reporting Failed well before this ever has to fire.
-    /// This exists for the case NotifyParentAsync structurally cannot cover — the child's own timeout,
-    /// which never calls it (see InvoiceArchivalSaga's doc comment) — so this is the only rescue then.
+    /// As of Slice 2b, this is no longer the only rescue for the child's own timeout — the engine's
+    /// ChildSagaFinished safety net (see the class doc comment) reaches this saga in ~15s instead. This
+    /// timeout remains as the backstop for whatever ChildSagaFinished itself cannot cover (the child
+    /// process crashing outright, or this parent's own message never arriving at all).
     /// </summary>
     private static readonly TimeSpan ArchivalWaitTimeout = TimeSpan.FromSeconds(30);
 
@@ -79,7 +90,17 @@ public sealed class InvoiceFollowUpSaga : OrchestratedSagaDefinition<InvoiceFoll
             .When<InvoiceArchivalFinished>()
                 .Then((ctx, m) => ctx.Saga.InvoiceArchived = m.Archived)
                 .TransitionTo(Archived)
-                .Finalize(SagaStatus.Completed);
+                .Finalize(SagaStatus.Completed)
+            // The Slice 2b safety net: InvoiceArchivalSaga's own WithTimeout deliberately never calls
+            // NotifyParentAsync (see its doc comment), so this engine-published ChildSagaFinished is the
+            // only thing that can rescue this wait before ArchivalWaitTimeout — 15s into this state
+            // instead of 30. Declaring this handler is what opts InvoiceFollowUpSaga in at all: the
+            // engine only ever delivers ChildSagaFinished to a parent that asked for it somewhere in its
+            // own DSL, per docs/sub-saga-composition.md's Slice 2b design.
+            .When<ChildSagaFinished>()
+                .Then((ctx, _) => ctx.Saga.InvoiceArchived = false)
+                .TransitionTo(Abandoned)
+                .Finalize(SagaStatus.TimedOut);
 
         WithTimeout(AwaitingArchival, ArchivalWaitTimeout,
             t => t.TransitionTo(Abandoned).Finalize(SagaStatus.TimedOut));

@@ -60,7 +60,7 @@ internal sealed class SagaContext<TState>(
 
         var envelope = MessageEnvelope.From(sagaType, Guid.NewGuid(), inboundMessageId, linkage);
 
-        return PublishInternalAsync(message, destination: null, envelope, cancellationToken);
+        return PublishInternalAsync(message, destination: null, envelope, cancellationToken, SagaEntryType.ChildSagaStarted);
     }
 
     public Task NotifyParentAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
@@ -84,7 +84,7 @@ internal sealed class SagaContext<TState>(
 
     Task ISagaContextLogSink.LogAsync(SagaLogEntry entry, CancellationToken cancellationToken) => logAsync(entry, cancellationToken);
 
-    private async Task PublishInternalAsync<TMessage>(TMessage message, string? destination, MessageEnvelope envelope, CancellationToken cancellationToken) where TMessage : notnull
+    private async Task PublishInternalAsync<TMessage>(TMessage message, string? destination, MessageEnvelope envelope, CancellationToken cancellationToken, SagaEntryType? entryTypeOverride = null) where TMessage : notnull
     {
         var effectiveCt = cancellationToken == default ? CancellationToken : cancellationToken;
 
@@ -94,17 +94,15 @@ internal sealed class SagaContext<TState>(
             await transport.SendAsync(destination, message, envelope, effectiveCt);
 
         // Logged only after the transport call succeeds — a publish that throws never happened, so it
-        // must not leave a MessagePublished/MessageSent trace behind (the step-level failure path logs
-        // its own StepFailed entry for that case).
+        // must not leave a trace behind (the step-level failure path logs its own StepFailed entry for
+        // that case).
         // CorrelationId, not envelope.CorrelationId: the entry belongs on the timeline of the saga that
         // published — for StartChildAsync that's the parent's (the child's own timeline opens with its
         // SagaStarted entry under its own id), and for NotifyParentAsync it's symmetrically the child's
-        // own (the parent sees it arrive as an ordinary MessageReceived on its own timeline instead). A
-        // started child or a sent notification is therefore recorded here as an ordinary
-        // MessagePublished, indistinguishable from any other publish; dedicated ChildSagaStarted /
-        // ChildSagaFinished entry types are deliberately left to the completion-notification slice, since
-        // SagaEntryType persists as plain integers and is append-only.
-        var entryType = destination is null ? SagaEntryType.MessagePublished : SagaEntryType.MessageSent;
+        // own (the parent sees it arrive as an ordinary MessageReceived on its own timeline instead).
+        // entryTypeOverride lets StartChildAsync tag its hop ChildSagaStarted instead of the ordinary
+        // MessagePublished/MessageSent every other publish gets — see SagaEntryType's Slice 2b note.
+        var entryType = entryTypeOverride ?? (destination is null ? SagaEntryType.MessagePublished : SagaEntryType.MessageSent);
         await logAsync(SagaLogEntry.Create(CorrelationId, sagaType, entryType,
             messageType: typeof(TMessage).Name, messageId: envelope.MessageId,
             sourceService: sagaType, destinationService: destination, causationId: inboundMessageId), effectiveCt);

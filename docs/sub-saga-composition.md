@@ -1,9 +1,9 @@
 # Design: sub-saga composition
 
-**Status: Slices 1 and 2a are built and shipped** — see the README's "Sub-saga composition: parent
-linkage" and "Sub-saga composition: completion notification" sections, which are the authoritative
-description of what exists. Slice 2b and Slice 3 remain proposed, and this file is now only about
-those, plus what building 1 and 2a taught about them.
+**Status: Slices 1, 2a, and 2b are built and shipped** — see the README's "Sub-saga composition: parent
+linkage", "Sub-saga composition: completion notification", and "Sub-saga composition: engine safety net"
+sections, which are the authoritative description of what exists. Slice 3 remains proposed, and this
+file is now only about that, plus what building 1, 2a, and 2b taught about it.
 
 **One claim in the original sketch was wrong, and it bears directly on the §3.4 decision.** §3.4(a)
 said a child publishing its own domain message "works today with no engine change, once the child knows
@@ -181,16 +181,32 @@ Two things to settle before building (a):
    type tracking that id — in the sample, `OrderSaga` as well as `PostShipmentChoreography`. That is
    the same fan-out any published message has, but it needs documenting rather than discovering.
 
-**A hazard specific to (b):** `UnhandledEventPolicy.Throw` makes an unhandled message nack and
-redeliver (`src/BugsMQ.Core/Dsl/UnhandledEventPolicy.cs`). A parent that opted into `Throw` and does
-not handle `ChildSagaFinished` at its current state would spin on a message its author never asked
-for. So (b) has to be opt-in per parent, not a global engine behaviour.
+**A hazard specific to (b), corrected after building it.** The original claim here was that
+`UnhandledEventPolicy.Throw` makes an unhandled message nack and redeliver. Reading
+`SagaOrchestrator.RunStepAsync` closely while building Slice 2b showed that is not what actually
+happens: the exception `HandleAsync` throws on an unhandled event is caught by `RunStepAsync`'s own
+catch block and routed to `HandleStepFailureAsync` — the same path a genuine step failure takes — which
+marks the saga `Failed` and **acks** the message. There is no redelivery loop; the real hazard is a
+silent, one-shot false `Failed` on a parent that never asked for the message. That doesn't change the
+conclusion — a parent using `Throw` and never expecting `ChildSagaFinished` still should not be
+corrupted by it — so (b) still has to be opt-in per parent, not a global engine behaviour. It changed the
+mechanism: see the Slice 2b status note below for how the opt-in ended up implemented with no new DSL
+call at all.
 
 **Status: (a) built and shipped as Slice 2a — `ctx.NotifyParentAsync`.** Built exactly as specified
 above: narrowed to read `Saga.ParentCorrelationId` itself rather than a general publish-under-any-id
 overload, fails loudly (before any I/O) on a root saga, and does not cover a child's timeout — see §5
-for what that leaves uncovered and the new race it surfaced. (b) — the `ChildSagaFinished` safety net —
-remains proposed as Slice 2b.
+for what that leaves uncovered and the new race it surfaced.
+
+**(b) built and shipped as Slice 2b — the engine-published `ChildSagaFinished` safety net.** The opt-in
+mechanism turned out simpler than either option this file originally considered (a new
+`OnUnhandledEvent`-style DSL call, or a manual per-parent flag): `SagaRuntime<TState>.Subscription` is
+already built from `ISagaDefinition.MessageTypes` — the union of every message type a saga has *any*
+declared handler for. A parent that never declares `.When<ChildSagaFinished>()` (or
+`.On<ChildSagaFinished>()`) anywhere in its own DSL never subscribes to the message type at all, so the
+transport never delivers it and `UnhandledEventPolicy` never enters the picture. Declaring the handler
+*is* the opt-in; no separate switch exists. See the README's "Sub-saga composition: engine safety net"
+section for the full shipped shape, live verification, and mutation results.
 
 ### 3.5 Compensation cascade — **OPEN DECISION, the hard one**
 
@@ -281,16 +297,47 @@ engine starts injecting messages on anyone's behalf.
       not observed live under normal load, since every real child in the sample has a genuine I/O
       round-trip between the two calls
 
-**Slice 2b — the engine reports failures the child could not (the safety net)**
+**Slice 2b — the engine reports failures the child could not (the safety net) — DONE**
 
-- [ ] `ChildSagaFinished` contract
-- [ ] Orchestrator publishes it when a child with a parent goes terminal — **opt-in per parent**, since
-      a parent using `UnhandledEventPolicy.Throw` would otherwise spin on an engine-injected message
-      its author never asked for
-- [ ] `SagaEntryType`: `ChildSagaStarted`, `ChildSagaFinished` — **APPEND ONLY.** The enum persists as
-      plain integers; inserting a member silently reinterprets every existing row
-- [ ] Dashboard timeline + saga map rendering for the child hop. Note Slice 1 shipped without this:
-      a started child currently logs as an ordinary `MessagePublished`
+- [x] `ChildSagaFinished` contract — `BugsMQ.Abstractions.Sagas.ChildSagaFinished(Guid
+      ChildCorrelationId, string ChildSagaType, SagaStatus Status)`
+- [x] Orchestrator publishes it when a child with a parent goes terminal — narrower than the checklist
+      line above literally reads: only from `HandleStepFailureAsync`'s exception path (always terminal)
+      and `HandleTimeoutAsync`'s timeout path when it goes terminal, **never** from the ordinary
+      message-driven success path (`HandleStepSuccessAsync`), even though that path can also finalize a
+      saga — that's `NotifyParentAsync`'s territory, and firing there too would be a redundant,
+      data-free duplicate for any child that already calls it. **Opt-in per parent** turned out to need
+      no new mechanism at all: see the corrected §3.4 hazard note above — declaring a handler for
+      `ChildSagaFinished` anywhere in a parent's own DSL is what subscribes it, via the same
+      `ISagaDefinition.MessageTypes` → `SagaRuntime.Subscription` path every other message type already
+      uses. Not routed through `SagaContext`/`ISagaContext`, unlike `NotifyParentAsync`: `SagaOrchestrator`
+      publishes directly via its own `transport` field, since this is engine-initiated, not
+      saga-code-initiated.
+- [x] `SagaEntryType`: `ChildSagaStarted`, `ChildSagaFinished` — appended after `MessageSent`, per the
+      append-only rule. `ChildSagaStarted` retags `StartChildAsync`'s own publish (previously an ordinary
+      `MessagePublished`, per Slice 1's deferred note); `ChildSagaFinished` tags the engine's own publish.
+- [x] Dashboard timeline + saga map rendering for the child hop: both new entry types were added to
+      `SagaMapBuilder.ProcessEntry`'s outbound-edge-stitching switch arm (alongside `MessagePublished`/
+      `MessageSent`), so they edge-stitch to a resolved destination via the same topology-registry path
+      `NotifyParentAsync`'s publishes already use — no bespoke map logic needed. The Angular timeline/map
+      views render `entryType` as plain text with no per-type icon switch, so the only frontend change
+      needed was adding the two literals to `SagaEntryType` in `saga.model.ts`.
+- [x] **New, not anticipated by this doc**: the same race Slice 2a found has a StepFailed-path analogue.
+      A child that fails via exception in its own initiating step (the one `StartChildAsync` triggered)
+      publishes `ChildSagaFinished` while still nested inside the parent's own `StartChildAsync` call
+      under `InMemoryMessageTransport`'s synchronous/recursive dispatch — before the parent has persisted
+      its own transition. Same outcome as Slice 2a's race: `UnexpectedEvent`, silently dropped, no
+      redelivery. Only the StepFailed path can race this way; the timeout path is dispatched
+      independently by `SagaTimeoutDispatcherHostedService` and cannot nest inside a `StartChildAsync`
+      call. Pinned by
+      `ChildSagaFinishedTests.ChildSagaFinished_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`.
+      Not fixed, same reasoning as Slice 2a's race: a fix means reordering "run step actions, then
+      persist" throughout the engine, beyond this slice's scope.
+- [x] Sample: `InvoiceFollowUpSaga` opts in with a `.When<ChildSagaFinished>()` branch on
+      `AwaitingArchival`, demonstrating the engine safety net rescuing the parent in ~15s (when
+      `InvoiceArchivalSaga`'s own timeout fires) instead of the full 30s `ArchivalWaitTimeout` would
+      otherwise take. `InvoiceArchivalSaga`'s timeout branch itself is unchanged — it still never calls
+      `NotifyParentAsync`, which is exactly the gap this closes.
 
 ### Slice 3 — compensation cascade (push back before starting)
 
@@ -333,6 +380,17 @@ engine starts injecting messages on anyone's behalf.
   Not fixed — a fix would mean reordering this engine's "run step actions, then persist" sequence
   throughout, well beyond Slice 2a's scope. A child that reports back with no intervening work at all
   remains a real, narrow hazard.
+- **The same race has a StepFailed-path analogue, found building Slice 2b.** A child that throws in the
+  very same step `StartChildAsync` started it in publishes the engine's `ChildSagaFinished` while still
+  nested inside the parent's own `StartChildAsync` call, for the identical reason: no persisted parent
+  row exists yet for `SagaOrchestrator.HandleCoreAsync` to find. Same outcome — `UnexpectedEvent`, silent
+  drop, no redelivery — and the same real-transport caveat: nothing in this repo's real sample children
+  throws synchronously from their own initiating step, so this is a lab-conditions hazard, not one
+  observed live. Unlike the `NotifyParentAsync` race, this one is StepFailed-path-only — a timeout can
+  never fire nested inside `StartChildAsync`'s call stack, since `SagaTimeoutDispatcherHostedService`
+  dispatches independently on its own poll loop. Pinned by
+  `ChildSagaFinishedTests.ChildSagaFinished_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`
+  (`tests/BugsMQ.Core.Tests/ChildSagaFinishedTests.cs`). Not fixed, same reasoning as above.
 
 ---
 
@@ -372,18 +430,38 @@ it: a test that hand-publishes under the parent's correlation id proves nothing 
    treating the read of `Saga.ParentCorrelationId` as always absent. Each failed exactly the 3 tests
    that depend on a real notification reaching its parent, and nothing else.
 
+**All three done for Slice 2b too** — see the README's "Sub-saga composition: engine safety net"
+section for the full results:
+
+1. `ChildSagaFinishedTests`/`ChildSagaFinishedOptInTests` drive the real
+   `StartChildAsync`/exception-or-timeout → engine publish → transport → orchestrator path; nothing
+   hand-sets `ParentCorrelationId`, hand-builds a `ChildSagaFinished` message, or stamps a header.
+2. Live under `docker compose -f docker-compose.yml -f docker-compose.chaos.yml up -d` — see the README
+   section for the run's numbers.
+3. Mutated four ways: published under the child's own id instead of the parent's (failed exactly the 4
+   tests that depend on real delivery to the parent); removed the root-saga guard, falling back to the
+   child's own id (failed exactly the one root-saga test); made the ordinary success path also publish
+   `ChildSagaFinished` (failed exactly the scope-boundary test, and confirmed clean across the rest of
+   the solution's test suite, not just this file); dropped `StartChildAsync`'s `ChildSagaStarted`
+   entry-type override back to the old `MessagePublished` (failed exactly the one Slice-1-era test
+   updated for this slice).
+
 ---
 
 ## 7. Open questions
 
-1. **§3.4(a) — built as Slice 2a.** The two options turned out to be complementary rather than
-   alternatives: only (a) can carry the child's domain result, and only (b) can fire when a child fails
-   or times out (since a failed child never reaches its own publish step). Built **(a) as the primary
-   path**, exactly as recommended, via the narrowed `ctx.NotifyParentAsync(message)` and the
-   `UnhandledEventPolicy.Throw`-driven decision to keep it opt-in-shaped rather than a blanket engine
-   behaviour. **(b), the failure net, remains open** — Slice 2b (`ChildSagaFinished`) is still proposed,
-   and is what would cover a child that fails via unhandled exception or times out, neither of which (a)
-   can reach (see §5's new race for a third gap (a) leaves, discovered rather than anticipated).
+1. **§3.4 — both (a) and (b) built, as Slice 2a and Slice 2b.** The two options turned out to be
+   complementary rather than alternatives: only (a) can carry the child's domain result, and only (b) can
+   fire when a child fails or times out (since a failed child never reaches its own publish step). Built
+   **(a) as the primary path** via the narrowed `ctx.NotifyParentAsync(message)`, and **(b) as the
+   failure net** via the engine-published `ChildSagaFinished` — opt-in turned out to fall out of the
+   existing `ISagaDefinition.MessageTypes` → transport-subscription mechanism for free, with no new DSL
+   call, once the `UnhandledEventPolicy.Throw` hazard this file originally flagged was traced to its
+   actual behaviour (a silent one-shot false-`Failed`, not redelivery — see the corrected note in §3.4).
+   Together they cover the three ways (a) alone leaves a parent unanswered: a child that never reaches
+   its own report-back step (unhandled exception, or timeout), and — still open, not something either
+   slice addresses — the race in §5 where a same-step notification can race ahead of the parent's own
+   unpersisted transition (StepFailed has an analogous race now too, also documented in §5).
 2. **§3.5 — analysed, awaiting sign-off.** Recommendation unchanged: no automatic cascade. Building
    Slice 1 added three arguments for it rather than against — the parent does not know its children
    without a mid-compensation database query, the tree is unbounded in depth with self-recursion

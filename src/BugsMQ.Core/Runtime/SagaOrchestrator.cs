@@ -235,12 +235,28 @@ public sealed class SagaOrchestrator<TState>(
         if (!await TryPersistOrLogRaceLossAsync(state, timeout, sideEffectsAlreadyRan: true, cancellationToken))
             return;
 
+        await RecordTimeoutOutcomeAsync(state, outcome, cancellationToken);
+    }
+
+    /// <summary>
+    /// Diagnostics/notification/Slice-2b-safety-net bookkeeping once a timeout's own persist has
+    /// committed — split out of HandleTimeoutAsync to stay under the analyzer's method-length cap.
+    /// </summary>
+    private async Task RecordTimeoutOutcomeAsync(TState state, SagaStepOutcome outcome, CancellationToken cancellationToken)
+    {
         if (outcome.FinalStatus == SagaStatus.Failed)
             BugsMqDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
         else if (outcome.FinalStatus == SagaStatus.Completed)
             BugsMqDiagnostics.SagasCompleted.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
 
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+
+        // A timeout that goes terminal is one of the two structural gaps ctx.NotifyParentAsync cannot
+        // reach on its own — the timeout step itself can technically still call NotifyParentAsync (this
+        // does not suppress that), but nothing requires it to, so the engine reports on the child's
+        // behalf regardless.
+        if (outcome.FinalStatus is { } finalStatus)
+            await PublishChildSagaFinishedAsync(state, finalStatus, causationMessageId: null, cancellationToken);
     }
 
     /// <summary>
@@ -416,6 +432,11 @@ public sealed class SagaOrchestrator<TState>(
         BugsMqDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, SagaType));
 
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+
+        // An unhandled exception is the other structural gap NotifyParentAsync cannot reach: the step
+        // that threw never ran to a point where the child's own code could report back. Always terminal
+        // here (state.Status is unconditionally Failed above), unlike the timeout path.
+        await PublishChildSagaFinishedAsync(state, SagaStatus.Failed, messageId, cancellationToken);
     }
 
     private async Task HandleStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
@@ -483,6 +504,40 @@ public sealed class SagaOrchestrator<TState>(
             .Select(e => e.ToState!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Slice 2b's safety net: publishes ChildSagaFinished to <paramref name="state"/>'s parent (if any)
+    /// on its behalf. Called only from the two paths ctx.NotifyParentAsync structurally cannot reach —
+    /// HandleStepFailureAsync's exception path and HandleTimeoutAsync's terminal-timeout path — never
+    /// from the ordinary message-driven success path, where a child had every opportunity to report its
+    /// actual result itself and firing here too would be a redundant, data-free duplicate of that.
+    /// <para>
+    /// Not routed through SagaContext/ISagaContext, unlike NotifyParentAsync: this is the engine
+    /// publishing on the child's behalf, not the child's own step code, so it uses <c>transport</c>
+    /// directly and logs onto this instance's own timeline itself.
+    /// </para>
+    /// <para>
+    /// No per-parent opt-in check here by design: a parent only ever receives this if it declared a
+    /// handler for <see cref="ChildSagaFinished"/> somewhere in its own DSL, because that declaration is
+    /// what <c>SagaRuntime</c>'s transport subscription is built from
+    /// (<c>ISagaDefinition.MessageTypes</c>) — a parent that never asked for it is never even subscribed,
+    /// so publishing unconditionally here is exactly as safe as NotifyParentAsync's own unconditional
+    /// publish.
+    /// </para>
+    /// </summary>
+    private async Task PublishChildSagaFinishedAsync(TState state, SagaStatus status, string? causationMessageId, CancellationToken cancellationToken)
+    {
+        if (state.ParentCorrelationId is not { } parentCorrelationId)
+            return;
+
+        var message = new ChildSagaFinished(state.CorrelationId, SagaType, status);
+        var envelope = MessageEnvelope.From(SagaType, parentCorrelationId, causationMessageId);
+        await transport.PublishAsync(message, envelope, cancellationToken);
+
+        await LogAsync(SagaLogEntry.Create(state.CorrelationId, SagaType, SagaEntryType.ChildSagaFinished,
+            messageType: nameof(ChildSagaFinished), messageId: envelope.MessageId,
+            sourceService: SagaType, causationId: causationMessageId), cancellationToken);
     }
 
     private async Task LogAsync(SagaLogEntry entry, CancellationToken cancellationToken)

@@ -512,4 +512,27 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         Assert.Equal("?", destination.DisplayName);
         Assert.Equal(SagaMapNodeKind.Unresolved, destination.Kind);
     }
+
+    [Fact]
+    public async Task GetMap_ChildSagaStartedAndFinished_RenderAsEdgesLikeOrdinaryPublishes()
+    {
+        // Slice 2b's two dedicated entry types are still, mechanically, outbound publishes — they must
+        // stitch into edges the same way MessagePublished/MessageSent already do, not fall through to
+        // the generic AddPlainEvent default that unrecognized entry types get.
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
+            toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{}"));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.ChildSagaStarted,
+            messageType: "DeliverInvoice", messageId: "out-1", sourceService: "OrderSaga", causationId: "m0"));
+
+        await RecordTopologyAsync("InvoiceDeliverySaga", "DeliverInvoice", "bugsmq.saga.InvoiceDeliverySaga");
+
+        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{sagaType}/{correlationId}/map", JsonOptions);
+
+        var edge = Assert.Single(map!.Edges, e => string.Equals(e.MessageType, "DeliverInvoice", StringComparison.Ordinal));
+        Assert.Equal("OrderSaga", edge.FromNodeId);
+        Assert.Equal("InvoiceDeliverySaga", edge.ToNodeId);
+        var startedEvent = Assert.Single(map.Events, e => e.EntryType == SagaEntryType.ChildSagaStarted);
+        Assert.Equal(edge.Id, startedEvent.EdgeId);
+    }
 }

@@ -94,8 +94,11 @@ public sealed class NotifyParentAsyncTests : IAsyncDisposable
     [Fact]
     public async Task NotifyParentAsync_IsLoggedOnTheChildsOwnTimeline_AsAnOrdinaryPublish()
     {
-        // Mirrors Slice 1's StartingAChildIsRecordedOnTheParentsTimelineAsAnOrdinaryPublish: a dedicated
-        // entry type for this hop is deliberately deferred to Slice 2b.
+        // Unlike StartChildAsync's fixed-shape hop (retagged ChildSagaStarted in Slice 2b),
+        // NotifyParentAsync publishes a caller-defined domain message — there is no single type to give
+        // a dedicated entry type to, so this stays an ordinary MessagePublished. Only the engine's own
+        // ChildSagaFinished publish (the Slice 2b safety net, a fixed contract type) gets its own entry
+        // type — see ChildSagaFinishedTests.
         var parentId = await StartJobAndDriveTheChildAsync("JOB-2");
 
         var log = _provider.GetRequiredService<ISagaEventLogStore>();

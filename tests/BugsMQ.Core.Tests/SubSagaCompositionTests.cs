@@ -180,19 +180,19 @@ public sealed class SubSagaCompositionTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task StartingAChildIsRecordedOnTheParentsTimelineAsAnOrdinaryPublish()
+    public async Task StartingAChildIsRecordedOnTheParentsTimelineAsChildSagaStarted()
     {
-        // Documents a real Slice-1 gap rather than papering over it: the parent's timeline shows the
-        // child start as a plain MessagePublished, indistinguishable from any other outbound message.
-        // Making it distinguishable means a new SagaEntryType, which persists as a plain integer and is
-        // append-only — deliberately deferred to the completion-notification slice.
+        // Slice 1 shipped this hop as a plain MessagePublished, indistinguishable from any other
+        // outbound message — documented then as a gap deferred to the completion-notification slice,
+        // since SagaEntryType persists as a plain integer and is append-only. Slice 2b closes it.
         var parentId = await StartFulfilmentAsync("ORD-8");
 
         var log = _provider.GetRequiredService<ISagaEventLogStore>();
         var parentTimeline = await log.GetTimelineAsync(nameof(TestFulfilmentSaga), parentId);
 
-        var published = Assert.Single(parentTimeline, e => e.EntryType == SagaEntryType.MessagePublished);
+        var published = Assert.Single(parentTimeline, e => e.EntryType == SagaEntryType.ChildSagaStarted);
         Assert.Equal(nameof(DeliverParcel), published.MessageType);
+        Assert.DoesNotContain(parentTimeline, e => e.EntryType == SagaEntryType.MessagePublished);
         Assert.DoesNotContain(parentTimeline, e => e.EntryType == SagaEntryType.UnexpectedEvent);
     }
 

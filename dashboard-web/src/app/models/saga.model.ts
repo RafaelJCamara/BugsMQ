@@ -28,7 +28,9 @@ export type SagaEntryType =
   | 'SagaCancelled'
   | 'DeliveryExhausted'
   | 'MessagePublished'
-  | 'MessageSent';
+  | 'MessageSent'
+  | 'ChildSagaStarted'
+  | 'ChildSagaFinished';
 
 export interface SagaSummary {
   correlationId: string;

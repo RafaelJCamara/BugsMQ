@@ -28,4 +28,14 @@ public enum SagaEntryType
     MessagePublished,
     /// <summary>A saga sent a message to an explicit destination (ctx.SendAsync).</summary>
     MessageSent,
+
+    /// <summary>A saga started a child via ctx.StartChildAsync. Distinguishes the hop from an ordinary MessagePublished.</summary>
+    ChildSagaStarted,
+    /// <summary>
+    /// The engine (not saga code) published ChildSagaFinished to a child's parent because the child
+    /// reached a terminal status via an unhandled exception or a timeout — the two cases
+    /// ctx.NotifyParentAsync structurally cannot reach. Logged on the child's own timeline, symmetric to
+    /// how NotifyParentAsync's own publish logs as an ordinary MessagePublished there.
+    /// </summary>
+    ChildSagaFinished,
 }
