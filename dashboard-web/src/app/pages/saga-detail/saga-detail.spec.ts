@@ -60,6 +60,7 @@ describe('SagaDetail', () => {
     getTimeline: ReturnType<typeof vi.fn>;
     getMap: ReturnType<typeof vi.fn>;
     retry: ReturnType<typeof vi.fn>;
+    findByCorrelationId: ReturnType<typeof vi.fn>;
   };
   let hubMock: {
     sagaUpdated$: Subject<SagaSummary>;
@@ -68,12 +69,19 @@ describe('SagaDetail', () => {
     unsubscribeFromSaga: ReturnType<typeof vi.fn>;
   };
 
-  function setup(detail: SagaDetailModel = makeDetail(), timeline: SagaLogEntry[] = [], map: SagaMapModel = makeMap()) {
+  function setup(
+    detail: SagaDetailModel = makeDetail(),
+    timeline: SagaLogEntry[] = [],
+    map: SagaMapModel = makeMap(),
+    // What /api/correlations/{id} returns: every instance under this id, this page's own included.
+    related: SagaSummary[] = [makeDetail().summary],
+  ) {
     apiMock = {
       get: vi.fn().mockReturnValue(of(detail)),
       getTimeline: vi.fn().mockReturnValue(of(timeline)),
       getMap: vi.fn().mockReturnValue(of(map)),
       retry: vi.fn(),
+      findByCorrelationId: vi.fn().mockReturnValue(of(related)),
     };
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
@@ -204,6 +212,47 @@ describe('SagaDetail', () => {
     fixture.componentInstance.setTab('data');
 
     expect(fixture.componentInstance.tab()).toBe('data');
+  });
+
+  function sibling(overrides: Partial<SagaSummary> = {}): SagaSummary {
+    return {
+      ...makeDetail().summary,
+      sagaType: 'PostShipmentChoreography',
+      kind: 'Choreographed',
+      currentState: 'Invoiced',
+      status: 'Completed',
+      ...overrides,
+    };
+  }
+
+  it('lists other saga types tracking the same correlation id, excluding itself', () => {
+    const fixture = setup(makeDetail(), [], makeMap(), [makeDetail().summary, sibling()]);
+
+    const related = fixture.componentInstance.related();
+
+    expect(apiMock.findByCorrelationId).toHaveBeenCalledWith('saga-1');
+    expect(related).toHaveLength(1);
+    expect(related[0].sagaType).toBe('PostShipmentChoreography');
+
+    const link = fixture.nativeElement.querySelector('.related-link');
+    expect(link.getAttribute('href')).toBe('/sagas/PostShipmentChoreography/saga-1');
+    expect(link.textContent).toContain('PostShipmentChoreography');
+  });
+
+  it('renders nothing when this saga is the only one under the correlation id', () => {
+    const fixture = setup(makeDetail(), [], makeMap(), [makeDetail().summary]);
+
+    expect(fixture.componentInstance.related()).toEqual([]);
+    expect(fixture.nativeElement.querySelector('.related')).toBeNull();
+  });
+
+  it('keeps the page usable when the correlation lookup fails', () => {
+    const fixture = setup();
+    apiMock.findByCorrelationId.mockReturnValue(throwError(() => new Error('boom')));
+    fixture.componentInstance.loadRelated();
+
+    expect(fixture.componentInstance.related()).toEqual([]);
+    expect(fixture.componentInstance.error()).toBeNull();
   });
 
   it('applies a live saga update when the correlation id matches', () => {

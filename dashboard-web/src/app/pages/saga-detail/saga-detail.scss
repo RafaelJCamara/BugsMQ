@@ -66,6 +66,51 @@
   font-size: 0.85rem;
 }
 
+.related {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.related-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.related-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.related-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 0.82rem;
+  color: inherit;
+}
+
+.related-link:hover {
+  border-color: var(--accent);
+}
+
+.related-type {
+  font-weight: 600;
+}
+
+.related-state {
+  font-size: 0.78rem;
+}
+
 .retry-row {
   margin-top: 1rem;
   display: flex;

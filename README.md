@@ -500,6 +500,14 @@ list rather than a single summary precisely because the answer can now be more t
 at its own top-level path rather than `/api/sagas/by-correlation/{id}`, which would have sat in the same
 route slot as `{sagaType}` and relied on literal-beats-parameter precedence to disambiguate.
 
+> **Now surfaced in the dashboard** — the saga detail page resolves its correlation id through this
+> endpoint, drops its own instance, and renders the rest as an "Also tracking this correlation id" strip
+> linking to each sibling. Nothing renders in the ordinary one-saga case. Deliberately a snapshot rather
+> than live: the detail page joins only its own instance's hub group, so a sibling's status change isn't
+> pushed to it; the strip is refreshed whenever this saga itself updates, the same compromise the map tab
+> already makes. Added in the pass that shipped the sample choreography, which is what first made a
+> second saga per correlation id something you could actually click through to.
+
 **Migration.** `20260825045219_ScopeSagaIdentityToSagaTypeAndCorrelationId` swaps the primary key and
 re-leads the two `SagaEventLog` indexes with `SagaType`. No data migration is needed: `SagaType` was
 already non-null on every row, and correlation ids were globally unique under the old key, so no

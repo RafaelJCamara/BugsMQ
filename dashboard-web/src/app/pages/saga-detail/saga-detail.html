@@ -28,6 +28,22 @@
       <dd>{{ d.summary.updatedAtUtc | date: 'medium' }}</dd>
     </dl>
 
+    @if (related().length > 0) {
+      <div class="related">
+        <span class="related-label">Also tracking this correlation id</span>
+        <div class="related-links">
+          @for (sibling of related(); track sibling.sagaType) {
+            <a class="related-link" [routerLink]="['/sagas', sibling.sagaType, sibling.correlationId]">
+              <span class="related-type">{{ sibling.sagaType }}</span>
+              <app-kind-badge [kind]="sibling.kind" />
+              <app-status-badge [status]="sibling.status" />
+              <span class="muted related-state">{{ sibling.currentState }}</span>
+            </a>
+          }
+        </div>
+      </div>
+    }
+
     @if (d.summary.status === 'Failed' || d.summary.status === 'TimedOut') {
       <div class="retry-row">
         <button type="button" [disabled]="retrying()" (click)="retry()">
