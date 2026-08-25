@@ -1,6 +1,4 @@
-using BugsMQ.Abstractions.Persistence;
 using BugsMQ.Abstractions.Sagas;
-using BugsMQ.Core.Runtime;
 
 namespace BugsMQ.Core.Dsl;
 
@@ -25,37 +23,6 @@ internal sealed class SagaDefinitionModel<TState> where TState : SagaState, new(
         byMessageType[step.MessageType] = step;
     }
 
-    public async Task RunCompensationAsync(ISagaContext<TState> context, IEnumerable<string> statesMostRecentFirst, CancellationToken cancellationToken)
-    {
-        var statesToCompensate = statesMostRecentFirst.Where(Compensations.ContainsKey).ToList();
-        if (statesToCompensate.Count == 0)
-            return;
-
-        var log = (ISagaContextLogSink)context;
-        var sagaType = context.Saga.SagaType;
-
-        await log.LogAsync(SagaLogEntry.Create(context.CorrelationId, sagaType, SagaEntryType.CompensationStarted), cancellationToken);
-
-        foreach (var stateName in statesToCompensate)
-            await RunOneCompensationAsync(log, context, sagaType, stateName, cancellationToken);
-    }
-
-    /// <summary>
-    /// Runs one state's compensation delegate, logging its outcome. Failures are caught (not
-    /// propagated) so one failing compensation doesn't abandon the rest — e.g. a failed refund
-    /// shouldn't stop the inventory release that follows it — the failure is still fully visible in the
-    /// timeline via CompensationStepFailed.
-    /// </summary>
-    private async Task RunOneCompensationAsync(ISagaContextLogSink log, ISagaContext<TState> context, string sagaType, string stateName, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await Compensations[stateName](context, cancellationToken);
-            await log.LogAsync(SagaLogEntry.Create(context.CorrelationId, sagaType, SagaEntryType.CompensationStepSucceeded, fromState: stateName), cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await log.LogAsync(SagaLogEntry.Create(context.CorrelationId, sagaType, SagaEntryType.CompensationStepFailed, fromState: stateName, errorMessage: ex.Message), cancellationToken);
-        }
-    }
+    public Task RunCompensationAsync(ISagaContext<TState> context, IEnumerable<string> statesMostRecentFirst, CancellationToken cancellationToken) =>
+        CompensationRunner.RunAsync(Compensations, context, statesMostRecentFirst, cancellationToken);
 }

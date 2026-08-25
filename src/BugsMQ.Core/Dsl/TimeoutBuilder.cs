@@ -2,16 +2,16 @@ using BugsMQ.Abstractions.Sagas;
 
 namespace BugsMQ.Core.Dsl;
 
-/// <summary>Configures what happens when a state's timeout fires — mirrors the step-configuration subset of <see cref="EventBuilder{TState,TMessage}"/>.</summary>
+/// <summary>Configures what happens when a state's timeout fires — mirrors the step-configuration subset of <see cref="EventBuilder{TState,TMessage}"/>. Shared by both the orchestrated and choreographed DSLs.</summary>
 public sealed class TimeoutBuilder<TState> where TState : SagaState, new()
 {
-    private readonly SagaDefinitionModel<TState> _model;
+    private readonly Func<ISagaContext<TState>, IEnumerable<string>, CancellationToken, Task> _runCompensationAsync;
 
     internal readonly StepDefinition<TState> Step = new(typeof(TimeoutSignal));
 
-    internal TimeoutBuilder(SagaDefinitionModel<TState> model)
+    internal TimeoutBuilder(Func<ISagaContext<TState>, IEnumerable<string>, CancellationToken, Task> runCompensationAsync)
     {
-        _model = model;
+        _runCompensationAsync = runCompensationAsync;
     }
 
     public TimeoutBuilder<TState> Then(Action<ISagaContext<TState>> action)
@@ -46,7 +46,7 @@ public sealed class TimeoutBuilder<TState> where TState : SagaState, new()
     /// <summary>Runs compensation for every visited state with a registered Compensate(state, ...) action, most-recent first — see EventBuilder.Compensate().</summary>
     public TimeoutBuilder<TState> Compensate()
     {
-        Step.Actions.Add((ctx, _) => _model.RunCompensationAsync(ctx, ctx.VisitedStates.Reverse(), ctx.CancellationToken));
+        Step.Actions.Add((ctx, _) => _runCompensationAsync(ctx, ctx.VisitedStates.Reverse(), ctx.CancellationToken));
         return this;
     }
 }

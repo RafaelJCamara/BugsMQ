@@ -1,4 +1,3 @@
-using BugsMQ.Abstractions.Diagnostics;
 using BugsMQ.Abstractions.Sagas;
 
 namespace BugsMQ.Core.Dsl;
@@ -64,7 +63,7 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
 
     protected void WithTimeout(State<TState> state, TimeSpan after, Action<TimeoutBuilder<TState>> configure)
     {
-        var builder = new TimeoutBuilder<TState>(_model);
+        var builder = new TimeoutBuilder<TState>(_model.RunCompensationAsync);
         configure(builder);
         _model.Timeouts[state.Name] = (after, builder.Step);
     }
@@ -112,26 +111,6 @@ public abstract class OrchestratedSagaDefinition<TState> : ISagaDefinition<TStat
         return new SagaStepOutcome(true, forState, toState, timeout.Step.FinalStatus);
     }
 
-    private static async Task ExecuteStepAsync(StepDefinition<TState> step, ISagaContext<TState> context, object message, CancellationToken cancellationToken)
-    {
-        var attempt = 0;
-
-        while (true)
-        {
-            attempt++;
-
-            try
-            {
-                foreach (var action in step.Actions)
-                    await action(context, message);
-
-                return;
-            }
-            catch when (attempt < step.RetryPolicy.MaxAttempts)
-            {
-                BugsMqDiagnostics.StepRetries.Add(1, new KeyValuePair<string, object?>(BugsMqDiagnostics.TagSagaType, context.Saga.SagaType));
-                await Task.Delay(step.RetryPolicy.DelayForAttempt(attempt), cancellationToken);
-            }
-        }
-    }
+    private static Task ExecuteStepAsync(StepDefinition<TState> step, ISagaContext<TState> context, object message, CancellationToken cancellationToken) =>
+        StepExecutor.RunAsync(step, context, message, cancellationToken);
 }
