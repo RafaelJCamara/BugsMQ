@@ -2,8 +2,9 @@
 
 **Status: Slices 1, 2a, and 2b are built and shipped** — see the README's "Sub-saga composition: parent
 linkage", "Sub-saga composition: completion notification", and "Sub-saga composition: engine safety net"
-sections, which are the authoritative description of what exists. Slice 3 remains proposed, and this
-file is now only about that, plus what building 1, 2a, and 2b taught about it.
+sections, which are the authoritative description of what exists. **Slice 3 is closed, deliberately not
+built** — see §3.5's status note and §4 for the reasoning and sign-off. This file is now a historical
+record of that analysis; there is no further open work behind it.
 
 **One claim in the original sketch was wrong, and it bears directly on the §3.4 decision.** §3.4(a)
 said a child publishing its own domain message "works today with no engine change, once the child knows
@@ -208,7 +209,7 @@ transport never delivers it and `UnhandledEventPolicy` never enters the picture.
 *is* the opt-in; no separate switch exists. See the README's "Sub-saga composition: engine safety net"
 section for the full shipped shape, live verification, and mutation results.
 
-### 3.5 Compensation cascade — **OPEN DECISION, the hard one**
+### 3.5 Compensation cascade — **CLOSED, not built**
 
 Does a parent's `.Compensate()` cascade into completed children?
 
@@ -235,8 +236,20 @@ receive the request — that is Slice 3, and it is the one I would push back on.
    parent/child pairs, every parent `Completed` regardless of whether its child completed, bounced, or
    timed out. A cascade adds implicit coupling in the reverse direction, and with both directions
    implicit nobody can predict what a single `.Compensate()` sends.
+4. **Confirmed directly in code while closing this out, not just inferred from the design.**
+   `CompensationRunner.RunAsync` (`src/BugsMQ.Core/Dsl/CompensationRunner.cs:16`) and every delegate it
+   invokes only ever receive `ISagaContext<TState>` (`src/BugsMQ.Abstractions/Sagas/ISagaContext.cs:7`),
+   which has no children-lookup method. Only `ISagaSummaryReader.FindChildrenAsync` has one, and that is
+   a read-model query compensation code has no route to today. Argument 1 above is not a hypothetical
+   engine change to imagine — it is the actual shape of the type `.Compensate()` delegates run against.
 
-**Status: still recommended, still not decided.**
+**Status: closed 2026-08-25 — recommendation confirmed, not built.** Reviewed against the current code
+(argument 4) rather than re-approved from the sketch alone. No `.CompensateChildren()`, no child-side
+compensation hook. A parent that needs a child compensated publishes its own compensating command
+explicitly, the same way it would address any other collaborator. Documented as shipped (non-)behaviour
+in the README's "Sub-saga composition: parent linkage" section. If a concrete use case surfaces later
+that changes this calculus, treat it as a fresh design question — the arguments above assume no such
+case exists yet.
 
 ---
 
@@ -339,11 +352,20 @@ engine starts injecting messages on anyone's behalf.
       otherwise take. `InvoiceArchivalSaga`'s timeout branch itself is unchanged — it still never calls
       `NotifyParentAsync`, which is exactly the gap this closes.
 
-### Slice 3 — compensation cascade (push back before starting)
+### Slice 3 — compensation cascade — **CLOSED, not built**
 
-- [ ] `.CompensateChildren()` on the parent's failure step
-- [ ] Child-side hook to receive a compensation request
-- [ ] Ordering and double-compensation semantics decided and documented **first**
+Considered, not built. §3.5's recommendation — no automatic cascade — was checked against the shipped
+Slice 1/2a/2b code before closing (see §3.5's argument 4) and confirmed rather than re-approved from the
+original sketch alone. Nothing here shipped:
+
+- [x] ~~`.CompensateChildren()` on the parent's failure step~~ — not building
+- [x] ~~Child-side hook to receive a compensation request~~ — not building
+- [x] ~~Ordering and double-compensation semantics~~ — moot; there is nothing to order or deduplicate
+
+A parent that needs a child compensated publishes its own compensating command explicitly. See the
+README's "Sub-saga composition: parent linkage" section for where this is documented as shipped
+(non-)behaviour, and §3.5 above for the full reasoning. If a concrete use case ever changes the
+calculus, that is a new design question, not a resumption of this checklist.
 
 ---
 
@@ -462,11 +484,12 @@ section for the full results:
    its own report-back step (unhandled exception, or timeout), and — still open, not something either
    slice addresses — the race in §5 where a same-step notification can race ahead of the parent's own
    unpersisted transition (StepFailed has an analogous race now too, also documented in §5).
-2. **§3.5 — analysed, awaiting sign-off.** Recommendation unchanged: no automatic cascade. Building
-   Slice 1 added three arguments for it rather than against — the parent does not know its children
-   without a mid-compensation database query, the tree is unbounded in depth with self-recursion
-   deliberately enabled, and Slice 1 shipped with child failure not touching the parent, verified live.
-   See §3.5.
+2. **§3.5 — closed 2026-08-25.** Recommendation confirmed: no automatic cascade, and Slice 3 will not be
+   built. Building Slice 1 added three arguments for it rather than against — the parent does not know
+   its children without a mid-compensation database query, the tree is unbounded in depth with
+   self-recursion deliberately enabled, and Slice 1 shipped with child failure not touching the parent,
+   verified live — and closing this out added a fourth, confirmed directly in code: compensation
+   delegates run against `ISagaContext<TState>`, which has no children-lookup method at all. See §3.5.
 3. ~~Is Slice 1 alone worth shipping without a sample demonstrating it?~~ Settled by necessity: §6's
    live verification requires a real parent/child pair in the running stack, so the sample wiring could
    not be split off the way the choreographed DSL's was.

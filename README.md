@@ -812,11 +812,21 @@ working today with no engine change, actually needs one: a publish overload that
 correlation id. That changes the trade-off against an engine-published `ChildSagaFinished`, and the
 decision is still open in the doc rather than quietly settled here.
 
-**Also not done, and still open:** no compensation cascade from parent into children, and no dedicated
-timeline entry for the hop — a started child is logged on the parent's timeline as an ordinary
-`MessagePublished`, indistinguishable from any other outbound message. Making it distinguishable means
-a new `SagaEntryType`, which persists as a plain integer and can only be appended to, so it belongs
-with the completion-notification slice rather than being smuggled in here.
+**Compensation does not cascade into children — a closed decision, not a gap.** A parent's
+`.Compensate()` only ever runs the parent's own registered compensation delegates; it never walks into
+`FindChildrenAsync` or touches a child automatically. Considered and closed as "analysed, deliberately
+not built" in [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) §3.5 (Slice 3): the parent
+has no compile-time link to its children (`StartChildAsync` returns `Task`, not a child id), the child
+tree is unbounded in depth since a child gets a fresh correlation id specifically so a saga can start
+its own type, and — checked directly against this code before closing — compensation delegates run
+against `ISagaContext<TState>`, which has no children-lookup method at all; only
+`ISagaSummaryReader.FindChildrenAsync` does, and that is a read-model query compensation logic has no
+route to. A parent that needs a child compensated publishes its own compensating command explicitly,
+the same way it would address any other collaborator.
+
+(A started child *is* distinguishable on the parent's own timeline, via the dedicated `ChildSagaStarted`
+entry type — see "Sub-saga composition: engine safety net" below for that and its `ChildSagaFinished`
+counterpart.)
 
 **Failure modes, documented rather than discovered.** `StartChildAsync` is a publish, so if no saga
 initiates on that message type, no child is created and nobody is told — the parent transitions and
