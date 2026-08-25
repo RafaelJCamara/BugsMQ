@@ -29,6 +29,7 @@ dashboard-web/                    Angular 21 SPA for the dashboard (list/detail,
 samples/
   BugsMQ.Samples.OrderProcessing(.Contracts)   End-to-end reference saga + participants
 tests/                            One test project per major src/ project
+docs/                             Design sketches for work not yet built (see "Proposed work" below)
 docker-compose.yml                Postgres + RabbitMQ + dashboard-api + the OrderProcessing sample
 ```
 
@@ -54,6 +55,14 @@ addressed in this pass): additional transport adapters (MassTransit/Wolverine) a
 composition. Parallel/fan-out saga steps, also on that original list, are covered as of "Parallel
 fan-out and join" below. The SignalR hub and polling service, listed here as an untested gap through
 several passes, are covered as of "SignalR hub and polling service tests".
+
+**Proposed work.** Every section of this README describes something that exists. Designs for work that
+does *not* exist yet live under `docs/` instead, so the two are never confused:
+
+- [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) — one saga starting another as a step
+  and awaiting its result. Sketch only; nothing built. Notes which machinery already exists (the join
+  primitive covers the parent's wait), and flags two open decisions — how a child reports completion,
+  and whether a parent's compensation cascades into its children.
 
 Chaos-engineering transport middleware — listed as out of scope in the original v1 roadmap note,
 with the `MessageMiddleware`/`MiddlewarePipelineTransport` seam left in place unused specifically so
