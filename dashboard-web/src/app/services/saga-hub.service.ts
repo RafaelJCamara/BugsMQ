@@ -10,7 +10,7 @@ export class SagaHubService implements OnDestroy {
   private startPromise: Promise<void> | null = null;
 
   readonly sagaUpdated$ = new Subject<SagaSummary>();
-  readonly timelineEntryAdded$ = new Subject<{ correlationId: string; entry: SagaLogEntry }>();
+  readonly timelineEntryAdded$ = new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>();
 
   private async ensureStarted(): Promise<void> {
     if (!this.connection) {
@@ -20,8 +20,8 @@ export class SagaHubService implements OnDestroy {
         .build();
 
       this.connection.on('SagaUpdated', (summary: SagaSummary) => this.sagaUpdated$.next(summary));
-      this.connection.on('TimelineEntryAdded', (correlationId: string, entry: SagaLogEntry) =>
-        this.timelineEntryAdded$.next({ correlationId, entry }),
+      this.connection.on('TimelineEntryAdded', (sagaType: string, correlationId: string, entry: SagaLogEntry) =>
+        this.timelineEntryAdded$.next({ sagaType, correlationId, entry }),
       );
     }
 
@@ -40,14 +40,16 @@ export class SagaHubService implements OnDestroy {
     await this.connection!.invoke('SubscribeToList');
   }
 
-  async subscribeToSaga(correlationId: string): Promise<void> {
+  // Hub groups are keyed by (sagaType, correlationId) server-side, so both are sent: two saga types
+  // may track the same correlation id and a detail view must only receive its own instance's entries.
+  async subscribeToSaga(sagaType: string, correlationId: string): Promise<void> {
     await this.ensureStarted();
-    await this.connection!.invoke('SubscribeToSaga', correlationId);
+    await this.connection!.invoke('SubscribeToSaga', sagaType, correlationId);
   }
 
-  async unsubscribeFromSaga(correlationId: string): Promise<void> {
+  async unsubscribeFromSaga(sagaType: string, correlationId: string): Promise<void> {
     if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.connection.invoke('UnsubscribeFromSaga', correlationId);
+      await this.connection.invoke('UnsubscribeFromSaga', sagaType, correlationId);
     }
   }
 

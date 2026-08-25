@@ -57,7 +57,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await _transport.PublishAsync(new ChoreoPaymentCharged("ORD-1"), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.Equal(_saga.Charged.Name, state.CurrentState);
@@ -67,7 +67,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         Assert.True(state.PaymentReady);
 
         var summaryReader = _provider.GetRequiredService<ISagaSummaryReader>();
-        var summary = await summaryReader.GetAsync(correlationId);
+        var summary = await summaryReader.GetAsync(_saga.SagaType, correlationId);
         Assert.NotNull(summary);
         Assert.Equal(SagaKind.Choreographed, summary.Kind);
     }
@@ -85,7 +85,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await _transport.PublishAsync(new ChoreoInventoryReserved("ORD-2"), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.True(state.PaymentReady);
@@ -105,7 +105,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await _transport.PublishAsync(new ChoreoInventoryReserved("ORD-3"), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.Equal(_saga.Reserved.Name, state.CurrentState);
@@ -121,11 +121,11 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await _transport.PublishAsync(new ChoreoPaymentDeclined("ORD-4"), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.Null(state);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.UnexpectedEvent);
     }
 
@@ -138,7 +138,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await _transport.PublishAsync(new ChoreoPaymentDeclined("ORD-5"), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.Failed.Name, state.CurrentState);
         Assert.Equal(SagaStatus.Failed, state.Status);
@@ -146,7 +146,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         Assert.Contains(_transport.GetPublished(), p => p.Message is ChoreoReleaseInventory);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
     }
@@ -166,7 +166,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         await orchestrator.HandleTimeoutAsync(timeout, CancellationToken.None);
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.Failed.Name, state.CurrentState);
         Assert.Equal(SagaStatus.TimedOut, state.Status);
@@ -183,7 +183,7 @@ public sealed class ChoreographedSagaTests : IAsyncDisposable
         Assert.Equal(2, _saga.FlakyAttempts);
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<ChoreoShippingState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.Reserved.Name, state.CurrentState);
         Assert.Equal(SagaStatus.Running, state.Status);

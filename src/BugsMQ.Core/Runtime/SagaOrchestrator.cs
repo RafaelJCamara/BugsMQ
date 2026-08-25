@@ -101,7 +101,7 @@ public sealed class SagaOrchestrator<TState>(
             await LogAsync(SagaLogEntry.Create(received.CorrelationId, SagaType, SagaEntryType.DeliveryExhausted,
                 messageType: received.MessageTypeName, messageId: received.MessageId, errorMessage: ex.Message), cancellationToken);
 
-            var state = await snapshotStore.FindAsync(received.CorrelationId, cancellationToken);
+            var state = await snapshotStore.FindAsync(SagaType, received.CorrelationId, cancellationToken);
             if (state is not null && state.Status is not (SagaStatus.Completed or SagaStatus.Failed or SagaStatus.TimedOut))
             {
                 var expectedVersion = state.Version;
@@ -138,17 +138,17 @@ public sealed class SagaOrchestrator<TState>(
     /// <summary>Manual, dashboard/API-triggered redrive of a Failed saga: replays the exact message that last failed.</summary>
     public async Task RetryAsync(Guid correlationId, CancellationToken cancellationToken)
     {
-        var existing = await snapshotStore.FindAsync(correlationId, cancellationToken)
-                       ?? throw new SagaNotFoundException(correlationId);
+        var existing = await snapshotStore.FindAsync(SagaType, correlationId, cancellationToken)
+                       ?? throw new SagaNotFoundException(SagaType, correlationId);
 
         // Note: this in-process path only redrives a recorded technical failure (StepFailed) — unlike
         // BugsMQ.Dashboard.Api's /retry endpoint, it doesn't yet have the reset-and-replay-from-start
         // fallback for sagas that reached Failed via a normal business transition, so it deliberately
         // stays narrower (Failed only, not TimedOut) to match what it can actually redrive.
         if (existing.Status != SagaStatus.Failed)
-            throw new SagaRetryNotAllowedException(correlationId, existing.Status.ToString());
+            throw new SagaRetryNotAllowedException(SagaType, correlationId, existing.Status.ToString());
 
-        var timeline = await eventLog.GetTimelineAsync(correlationId, cancellationToken);
+        var timeline = await eventLog.GetTimelineAsync(SagaType, correlationId, cancellationToken);
         var lastFailure = timeline.LastOrDefault(e => e.EntryType == SagaEntryType.StepFailed);
 
         if (lastFailure is not { MessageType: not null, PayloadJson: not null })
@@ -172,7 +172,7 @@ public sealed class SagaOrchestrator<TState>(
     /// <summary>Invoked by the timeout dispatcher for a due, previously-scheduled state timeout.</summary>
     public async Task HandleTimeoutAsync(SagaTimeout timeout, CancellationToken cancellationToken)
     {
-        var state = await snapshotStore.FindAsync(timeout.CorrelationId, cancellationToken);
+        var state = await snapshotStore.FindAsync(SagaType, timeout.CorrelationId, cancellationToken);
 
         // The saga may have already moved past this state (its pending timeout is cancelled on
         // transition, but a race with an in-flight timer tick is possible) or been deleted — either
@@ -207,7 +207,7 @@ public sealed class SagaOrchestrator<TState>(
         if (!string.Equals(outcome.ToState, outcome.FromState, StringComparison.Ordinal) && definition.GetTimeout(outcome.ToState) is { } delay)
         {
             var dueAt = timeProvider.GetUtcNow() + delay;
-            await timeoutStore.ScheduleAsync(timeout.CorrelationId, SagaType, outcome.ToState, dueAt, cancellationToken);
+            await timeoutStore.ScheduleAsync(SagaType, timeout.CorrelationId, outcome.ToState, dueAt, cancellationToken);
             await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutScheduled, toState: outcome.ToState), cancellationToken);
         }
 
@@ -275,7 +275,7 @@ public sealed class SagaOrchestrator<TState>(
                       ?? throw new InvalidOperationException($"Failed to deserialize {received.MessageTypeName}.");
 
         var correlationId = received.CorrelationId;
-        var existing = await snapshotStore.FindAsync(correlationId, cancellationToken);
+        var existing = await snapshotStore.FindAsync(SagaType, correlationId, cancellationToken);
         var isNew = existing is null;
 
         if (existing is null)
@@ -308,7 +308,7 @@ public sealed class SagaOrchestrator<TState>(
                 payloadJson: System.Text.Encoding.UTF8.GetString(received.Body.Span),
                 sourceService: GetSourceService(received.Headers), causationId: GetCausationId(received.Headers)), cancellationToken);
         }
-        else if (await eventLog.IsDuplicateAsync(correlationId, received.MessageId, cancellationToken))
+        else if (await eventLog.IsDuplicateAsync(SagaType, correlationId, received.MessageId, cancellationToken))
         {
             logger.LogDebug("Skipping duplicate message {MessageId} for saga {CorrelationId}", received.MessageId, correlationId);
             return;
@@ -399,12 +399,12 @@ public sealed class SagaOrchestrator<TState>(
 
         if (!string.Equals(outcome.ToState, outcome.FromState, StringComparison.Ordinal))
         {
-            await timeoutStore.CancelAsync(correlationId, outcome.FromState, cancellationToken);
+            await timeoutStore.CancelAsync(SagaType, correlationId, outcome.FromState, cancellationToken);
 
             if (definition.GetTimeout(outcome.ToState) is { } delay)
             {
                 var dueAt = timeProvider.GetUtcNow() + delay;
-                await timeoutStore.ScheduleAsync(correlationId, SagaType, outcome.ToState, dueAt, cancellationToken);
+                await timeoutStore.ScheduleAsync(SagaType, correlationId, outcome.ToState, dueAt, cancellationToken);
                 await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.TimeoutScheduled, toState: outcome.ToState), cancellationToken);
             }
         }
@@ -441,7 +441,7 @@ public sealed class SagaOrchestrator<TState>(
 
     private async Task<IReadOnlyList<string>> GetVisitedStatesAsync(Guid correlationId, CancellationToken cancellationToken)
     {
-        var timeline = await eventLog.GetTimelineAsync(correlationId, cancellationToken);
+        var timeline = await eventLog.GetTimelineAsync(SagaType, correlationId, cancellationToken);
 
         return timeline
             .Where(e => e.ToState is not null)
@@ -453,7 +453,7 @@ public sealed class SagaOrchestrator<TState>(
     private async Task LogAsync(SagaLogEntry entry, CancellationToken cancellationToken)
     {
         await eventLog.AppendAsync(entry, cancellationToken);
-        await notifier.TimelineEntryAddedAsync(entry.CorrelationId, entry, cancellationToken);
+        await notifier.TimelineEntryAddedAsync(entry.SagaType, entry.CorrelationId, entry, cancellationToken);
     }
 
     private static SagaSummary ToSummary(TState state) =>

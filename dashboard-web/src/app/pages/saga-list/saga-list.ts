@@ -133,7 +133,11 @@ export class SagaList implements OnInit, OnDestroy {
 
   private upsert(summary: SagaSummary): void {
     const current = this.sagas();
-    const index = current.findIndex((s) => s.correlationId === summary.correlationId);
+    // Matched on both halves of the identity: a correlation id alone can be tracked by more than
+    // one saga type, and matching on it alone would let one saga's update overwrite the other's row.
+    const index = current.findIndex(
+      (s) => s.correlationId === summary.correlationId && s.sagaType === summary.sagaType,
+    );
 
     if (index >= 0) {
       const next = current.slice();

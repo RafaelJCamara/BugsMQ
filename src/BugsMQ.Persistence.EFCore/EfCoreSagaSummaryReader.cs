@@ -47,19 +47,26 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
             _ => query.OrderByDescending(x => x.UpdatedAtUtc),
         };
 
-    public Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public Task<SagaSummary?> GetAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
         return db.SagaInstances.AsNoTracking()
-            .Where(x => x.CorrelationId == correlationId)
+            .Where(x => x.SagaType == sagaType && x.CorrelationId == correlationId)
             .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    public Task<string?> GetDataJsonAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
+    public Task<string?> GetDataJsonAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
         db.SagaInstances.AsNoTracking()
-            .Where(x => x.CorrelationId == correlationId)
+            .Where(x => x.SagaType == sagaType && x.CorrelationId == correlationId)
             .Select(x => x.DataJson)
             .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<SagaSummary>> FindByCorrelationIdAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
+        await db.SagaInstances.AsNoTracking()
+            .Where(x => x.CorrelationId == correlationId)
+            .OrderBy(x => x.SagaType)
+            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
+            .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<SagaTypeInfo>> GetSagaTypesAsync(CancellationToken cancellationToken = default)
     {
@@ -76,10 +83,10 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
         return rows.Select(r => new SagaTypeInfo(r.SagaType, r.Kind)).ToList();
     }
 
-    public async Task ResetStateAsync(Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default)
+    public async Task ResetStateAsync(string sagaType, Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default)
     {
-        var entity = await db.SagaInstances.FirstOrDefaultAsync(x => x.CorrelationId == correlationId, cancellationToken)
-                     ?? throw new SagaNotFoundException(correlationId);
+        var entity = await db.SagaInstances.FirstOrDefaultAsync(x => x.SagaType == sagaType && x.CorrelationId == correlationId, cancellationToken)
+                     ?? throw new SagaNotFoundException(sagaType, correlationId);
 
         // DataJson embeds its own CurrentState/Status (it's the full serialized TState) — patch by
         // property name rather than deserializing into a concrete TState (unknown here), same fix as

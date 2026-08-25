@@ -67,18 +67,18 @@ describe('SagaApiService', () => {
       dataJson: null,
     };
 
-    service.get('abc-123').subscribe((result) => expect(result).toEqual(detail));
+    service.get('OrderSaga', 'abc-123').subscribe((result) => expect(result).toEqual(detail));
 
-    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123`);
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/OrderSaga/abc-123`);
     expect(req.request.method).toBe('GET');
     req.flush(detail);
   });
 
   it('getTimeline() requests the timeline endpoint', () => {
     const entries: SagaLogEntry[] = [];
-    service.getTimeline('abc-123').subscribe((result) => expect(result).toBe(entries));
+    service.getTimeline('OrderSaga', 'abc-123').subscribe((result) => expect(result).toBe(entries));
 
-    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123/timeline`);
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/OrderSaga/abc-123/timeline`);
     expect(req.request.method).toBe('GET');
     req.flush(entries);
   });
@@ -101,19 +101,35 @@ describe('SagaApiService', () => {
       failureEventIndex: null,
     };
 
-    service.getMap('abc-123').subscribe((result) => expect(result).toBe(map));
+    service.getMap('OrderSaga', 'abc-123').subscribe((result) => expect(result).toBe(map));
 
-    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123/map`);
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/OrderSaga/abc-123/map`);
     expect(req.request.method).toBe('GET');
     req.flush(map);
   });
 
   it('retry() posts to the retry endpoint', () => {
-    service.retry('abc-123').subscribe();
+    service.retry('OrderSaga', 'abc-123').subscribe();
 
-    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/abc-123/retry`);
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/OrderSaga/abc-123/retry`);
     expect(req.request.method).toBe('POST');
     req.flush(null);
+  });
+
+  it('get() percent-encodes the saga type segment', () => {
+    service.get('Order/Saga', 'abc-123').subscribe();
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/Order%2FSaga/abc-123`);
+    expect(req.request.method).toBe('GET');
+    req.flush(null);
+  });
+
+  it('findByCorrelationId() requests the correlations endpoint', () => {
+    service.findByCorrelationId('abc-123').subscribe();
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/correlations/abc-123`);
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
   });
 
   it('getSagaTypes() requests the saga-types endpoint', () => {

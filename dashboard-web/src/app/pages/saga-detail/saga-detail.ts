@@ -19,6 +19,7 @@ type Tab = 'timeline' | 'data' | 'map';
 })
 export class SagaDetail implements OnInit, OnDestroy {
   correlationId = '';
+  sagaType = '';
 
   readonly detail = signal<SagaDetailModel | null>(null);
   readonly timeline = signal<SagaLogEntry[]>([]);
@@ -38,21 +39,24 @@ export class SagaDetail implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.sagaType = this.route.snapshot.paramMap.get('sagaType') ?? '';
     this.correlationId = this.route.snapshot.paramMap.get('id') ?? '';
     this.load();
 
-    void this.hub.subscribeToSaga(this.correlationId);
+    void this.hub.subscribeToSaga(this.sagaType, this.correlationId);
     this.subs.push(
       this.hub.sagaUpdated$.subscribe((summary) => {
-        if (summary.correlationId === this.correlationId) {
+        // Both halves must match: the list group pushes updates for every saga, and another saga
+        // type may be tracking this same correlation id.
+        if (summary.correlationId === this.correlationId && summary.sagaType === this.sagaType) {
           this.detail.update((current) => (current ? { ...current, summary } : current));
           // The map isn't pushed incrementally like the timeline (SagaChangePollingService only ever
           // emits SagaUpdated, never TimelineEntryAdded, across processes) — re-fetch it whole instead.
           this.loadMap();
         }
       }),
-      this.hub.timelineEntryAdded$.subscribe(({ correlationId, entry }) => {
-        if (correlationId === this.correlationId) {
+      this.hub.timelineEntryAdded$.subscribe(({ sagaType, correlationId, entry }) => {
+        if (correlationId === this.correlationId && sagaType === this.sagaType) {
           this.timeline.update((entries) => [...entries, entry]);
         }
       }),
@@ -60,7 +64,7 @@ export class SagaDetail implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    void this.hub.unsubscribeFromSaga(this.correlationId);
+    void this.hub.unsubscribeFromSaga(this.sagaType, this.correlationId);
     this.subs.forEach((s) => s.unsubscribe());
   }
 
@@ -68,7 +72,7 @@ export class SagaDetail implements OnInit, OnDestroy {
     this.loading.set(true);
     this.error.set(null);
 
-    this.api.get(this.correlationId).subscribe({
+    this.api.get(this.sagaType, this.correlationId).subscribe({
       next: (detail) => {
         this.detail.set(detail);
         this.loading.set(false);
@@ -79,12 +83,12 @@ export class SagaDetail implements OnInit, OnDestroy {
       },
     });
 
-    this.api.getTimeline(this.correlationId).subscribe((entries) => this.timeline.set(entries));
+    this.api.getTimeline(this.sagaType, this.correlationId).subscribe((entries) => this.timeline.set(entries));
     this.loadMap();
   }
 
   loadMap(): void {
-    this.api.getMap(this.correlationId).subscribe((map) => this.map.set(map));
+    this.api.getMap(this.sagaType, this.correlationId).subscribe((map) => this.map.set(map));
   }
 
   setTab(tab: Tab): void {
@@ -105,7 +109,7 @@ export class SagaDetail implements OnInit, OnDestroy {
     this.retrying.set(true);
     this.retryMessage.set(null);
 
-    this.api.retry(this.correlationId).subscribe({
+    this.api.retry(this.sagaType, this.correlationId).subscribe({
       next: () => {
         this.retrying.set(false);
         this.retryMessage.set('Retry accepted — redriving the failed step.');

@@ -45,7 +45,7 @@ internal sealed class SagaChangePollingService(
                 foreach (var summary in changed)
                 {
                     await hub.Clients.Group(SagaHub.ListGroup).SagaUpdated(summary);
-                    await hub.Clients.Group(SagaHub.GroupForSaga(summary.CorrelationId)).SagaUpdated(summary);
+                    await hub.Clients.Group(SagaHub.GroupForSaga(summary.SagaType, summary.CorrelationId)).SagaUpdated(summary);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

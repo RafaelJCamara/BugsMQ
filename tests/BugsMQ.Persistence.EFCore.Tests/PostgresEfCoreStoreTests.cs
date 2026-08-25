@@ -76,7 +76,7 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         await using (var db2 = NewContext())
         {
             var store = new EfCoreSagaSnapshotStore<TestState>(db2);
-            state = (await store.FindAsync(correlationId))!;
+            state = (await store.FindAsync("OrderSaga", correlationId))!;
             state.CurrentState = "Completed";
             state.Status = SagaStatus.Completed;
             await store.UpdateAsync(state, expectedVersion: 0);
@@ -84,7 +84,7 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
 
         await using var db3 = NewContext();
         var reader = new EfCoreSagaSummaryReader(db3);
-        var summary = await reader.GetAsync(correlationId);
+        var summary = await reader.GetAsync("OrderSaga", correlationId);
 
         Assert.NotNull(summary);
         Assert.Equal("Completed", summary.CurrentState);
@@ -134,8 +134,8 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         await using (var db = NewContext())
         {
             var store = new EfCoreSagaTimeoutStore(db);
-            await store.ScheduleAsync(late, "OrderSaga", "AwaitingPayment", now.AddSeconds(-1), CancellationToken.None);
-            await store.ScheduleAsync(early, "OrderSaga", "AwaitingInventory", now.AddSeconds(-5), CancellationToken.None);
+            await store.ScheduleAsync("OrderSaga", late, "AwaitingPayment", now.AddSeconds(-1), CancellationToken.None);
+            await store.ScheduleAsync("OrderSaga", early, "AwaitingInventory", now.AddSeconds(-5), CancellationToken.None);
         }
 
         await using var db2 = NewContext();
@@ -155,7 +155,7 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         {
             var store = new EfCoreSagaTimeoutStore(db);
             for (var i = 0; i < 20; i++)
-                await store.ScheduleAsync(Guid.NewGuid(), "OrderSaga", "AwaitingPayment", now.AddSeconds(-1), CancellationToken.None);
+                await store.ScheduleAsync("OrderSaga", Guid.NewGuid(), "AwaitingPayment", now.AddSeconds(-1), CancellationToken.None);
         }
 
         // Two dispatcher instances (separate DbContexts/connections) racing on the same 20 due rows —

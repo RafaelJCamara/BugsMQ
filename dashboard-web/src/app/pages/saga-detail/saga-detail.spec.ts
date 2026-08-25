@@ -63,7 +63,7 @@ describe('SagaDetail', () => {
   };
   let hubMock: {
     sagaUpdated$: Subject<SagaSummary>;
-    timelineEntryAdded$: Subject<{ correlationId: string; entry: SagaLogEntry }>;
+    timelineEntryAdded$: Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>;
     subscribeToSaga: ReturnType<typeof vi.fn>;
     unsubscribeFromSaga: ReturnType<typeof vi.fn>;
   };
@@ -77,7 +77,7 @@ describe('SagaDetail', () => {
     };
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
-      timelineEntryAdded$: new Subject<{ correlationId: string; entry: SagaLogEntry }>(),
+      timelineEntryAdded$: new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>(),
       subscribeToSaga: vi.fn().mockResolvedValue(undefined),
       unsubscribeFromSaga: vi.fn().mockResolvedValue(undefined),
     };
@@ -90,7 +90,11 @@ describe('SagaDetail', () => {
         { provide: SagaHubService, useValue: hubMock },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { paramMap: { get: () => 'saga-1' } } },
+          useValue: {
+            snapshot: {
+              paramMap: { get: (key: string) => (key === 'sagaType' ? 'OrderSaga' : 'saga-1') },
+            },
+          },
         },
       ],
     });
@@ -105,9 +109,9 @@ describe('SagaDetail', () => {
     const entries = [makeEntry()];
     const fixture = setup(detail, entries);
 
-    expect(apiMock.get).toHaveBeenCalledWith('saga-1');
-    expect(apiMock.getTimeline).toHaveBeenCalledWith('saga-1');
-    expect(hubMock.subscribeToSaga).toHaveBeenCalledWith('saga-1');
+    expect(apiMock.get).toHaveBeenCalledWith('OrderSaga', 'saga-1');
+    expect(apiMock.getTimeline).toHaveBeenCalledWith('OrderSaga', 'saga-1');
+    expect(hubMock.subscribeToSaga).toHaveBeenCalledWith('OrderSaga', 'saga-1');
     expect(fixture.componentInstance.detail()).toEqual(detail);
     expect(fixture.componentInstance.timeline()).toEqual(entries);
     expect(fixture.componentInstance.loading()).toBe(false);
@@ -126,7 +130,7 @@ describe('SagaDetail', () => {
   it('unsubscribes from the hub on destroy', () => {
     const fixture = setup();
     fixture.destroy();
-    expect(hubMock.unsubscribeFromSaga).toHaveBeenCalledWith('saga-1');
+    expect(hubMock.unsubscribeFromSaga).toHaveBeenCalledWith('OrderSaga', 'saga-1');
   });
 
   it.each<SagaStatus>(['Failed', 'TimedOut'])('shows the retry button when status is %s', (status) => {
@@ -150,7 +154,7 @@ describe('SagaDetail', () => {
 
     fixture.componentInstance.retry();
 
-    expect(apiMock.retry).toHaveBeenCalledWith('saga-1');
+    expect(apiMock.retry).toHaveBeenCalledWith('OrderSaga', 'saga-1');
     expect(fixture.componentInstance.retrying()).toBe(false);
     expect(fixture.componentInstance.retryMessage()).toContain('Retry accepted');
   });
@@ -220,11 +224,36 @@ describe('SagaDetail', () => {
     expect(fixture.componentInstance.detail()!.summary.status).toBe('Failed');
   });
 
+  // The case the composite (sagaType, correlationId) identity exists for: another saga type
+  // tracking this same correlation id must not bleed into this instance's view. Matching on
+  // correlation id alone — what the old code did — would let both of these through.
+  it('ignores a live saga update for the same correlation id under a different saga type', () => {
+    const fixture = setup(makeDetail({ status: 'Failed' }));
+    const other: SagaSummary = {
+      ...fixture.componentInstance.detail()!.summary,
+      sagaType: 'ShippingChoreography',
+      status: 'Completed',
+    };
+
+    hubMock.sagaUpdated$.next(other);
+
+    expect(fixture.componentInstance.detail()!.summary.status).toBe('Failed');
+  });
+
+  it('ignores a live timeline entry for the same correlation id under a different saga type', () => {
+    const fixture = setup();
+    const entry = makeEntry({ sequenceNumber: 2, sagaType: 'ShippingChoreography' });
+
+    hubMock.timelineEntryAdded$.next({ sagaType: 'ShippingChoreography', correlationId: 'saga-1', entry });
+
+    expect(fixture.componentInstance.timeline()).toEqual([]);
+  });
+
   it('appends a live timeline entry when the correlation id matches', () => {
     const fixture = setup();
     const entry = makeEntry({ sequenceNumber: 2, entryType: 'StepSucceeded' });
 
-    hubMock.timelineEntryAdded$.next({ correlationId: 'saga-1', entry });
+    hubMock.timelineEntryAdded$.next({ sagaType: 'OrderSaga', correlationId: 'saga-1', entry });
 
     expect(fixture.componentInstance.timeline()).toContainEqual(entry);
   });
@@ -233,7 +262,7 @@ describe('SagaDetail', () => {
     const fixture = setup();
     const entry = makeEntry({ sequenceNumber: 2 });
 
-    hubMock.timelineEntryAdded$.next({ correlationId: 'other-id', entry });
+    hubMock.timelineEntryAdded$.next({ sagaType: 'OrderSaga', correlationId: 'other-id', entry });
 
     expect(fixture.componentInstance.timeline()).toEqual([]);
   });
@@ -242,7 +271,7 @@ describe('SagaDetail', () => {
     const map = makeMap();
     const fixture = setup(makeDetail(), [], map);
 
-    expect(apiMock.getMap).toHaveBeenCalledWith('saga-1');
+    expect(apiMock.getMap).toHaveBeenCalledWith('OrderSaga', 'saga-1');
     expect(fixture.componentInstance.map()).toEqual(map);
   });
 

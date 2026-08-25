@@ -98,13 +98,13 @@ public sealed class SagaTestHarness<TDefinition, TState> : IAsyncDisposable
     public Task<TState?> FindStateAsync(CancellationToken cancellationToken = default)
     {
         var store = _provider.GetRequiredService<ISagaSnapshotStore<TState>>();
-        return store.FindAsync(CorrelationId, cancellationToken);
+        return store.FindAsync(Saga.SagaType, CorrelationId, cancellationToken);
     }
 
     public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(CancellationToken cancellationToken = default)
     {
         var log = _provider.GetRequiredService<ISagaEventLogStore>();
-        return log.GetTimelineAsync(CorrelationId, cancellationToken);
+        return log.GetTimelineAsync(Saga.SagaType, CorrelationId, cancellationToken);
     }
 
     /// <summary>All messages published so far across every correlation id in this harness (publish and send).</summary>

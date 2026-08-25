@@ -32,10 +32,10 @@ public sealed class EfCoreSagaEventLogStore(BugsMqDbContext db) : ISagaEventLogS
         return entity.Id;
     }
 
-    public async Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
         var entities = await db.SagaEventLog.AsNoTracking()
-            .Where(x => x.CorrelationId == correlationId)
+            .Where(x => x.SagaType == sagaType && x.CorrelationId == correlationId)
             .OrderBy(x => x.Id)
             .ToListAsync(cancellationToken);
 
@@ -45,8 +45,10 @@ public sealed class EfCoreSagaEventLogStore(BugsMqDbContext db) : ISagaEventLogS
     // Narrowed to inbound entry types: outbound entries (MessagePublished/MessageSent) now also carry a
     // MessageId, and this check must keep recognizing only a genuine redelivery of an inbound message —
     // see HandleInfrastructureFailureAsync, which deliberately relies on this with a reused MessageId.
-    public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
-        db.SagaEventLog.AsNoTracking().AnyAsync(x => x.CorrelationId == correlationId && x.MessageId == messageId &&
+    // Scoped by SagaType as well: the same broadcast message legitimately reaches several saga types,
+    // and each must process its own copy rather than the second one being discarded as a duplicate.
+    public Task<bool> IsDuplicateAsync(string sagaType, Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
+        db.SagaEventLog.AsNoTracking().AnyAsync(x => x.SagaType == sagaType && x.CorrelationId == correlationId && x.MessageId == messageId &&
             (x.EntryType == SagaEntryType.SagaStarted || x.EntryType == SagaEntryType.MessageReceived), cancellationToken);
 
     private static SagaLogEntry ToLogEntry(SagaEventLogEntity e) =>

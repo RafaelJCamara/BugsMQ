@@ -67,8 +67,8 @@
       </tr>
     </thead>
     <tbody>
-      @for (saga of sagas(); track saga.correlationId) {
-        <tr [routerLink]="['/sagas', saga.correlationId]" class="saga-row">
+      @for (saga of sagas(); track saga.sagaType + ':' + saga.correlationId) {
+        <tr [routerLink]="['/sagas', saga.sagaType, saga.correlationId]" class="saga-row">
           <td class="mono">{{ saga.correlationId | slice: 0 : 8 }}…</td>
           <td>{{ saga.sagaType }}</td>
           <td><app-kind-badge [kind]="saga.kind" /></td>

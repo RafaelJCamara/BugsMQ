@@ -51,7 +51,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new PaymentCharged(), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.Equal(_saga.Completed.Name, state.CurrentState);
@@ -64,7 +64,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Contains(published, m => m is ChargePayment cp && cp.Amount == 42m);
 
         var summaryReader = _provider.GetRequiredService<ISagaSummaryReader>();
-        var summary = await summaryReader.GetAsync(correlationId);
+        var summary = await summaryReader.GetAsync(_saga.SagaType, correlationId);
         Assert.NotNull(summary);
         Assert.Equal(SagaStatus.Completed, summary.Status);
     }
@@ -79,7 +79,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new PaymentFailed(), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.Equal(_saga.Failed.Name, state.CurrentState);
@@ -89,7 +89,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Contains(published, m => m is ReleaseInventory);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.SagaStarted);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.SagaCompleted); // logged for any terminal Finalize, including Failed
     }
@@ -102,11 +102,11 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.Null(state);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.UnexpectedEvent);
     }
 
@@ -119,7 +119,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new FlakyStep(), MessageEnvelope.New(correlationId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var afterFailure = await snapshotStore.FindAsync(correlationId);
+        var afterFailure = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(afterFailure);
         Assert.Equal(SagaStatus.Failed, afterFailure.Status);
         Assert.Equal(_saga.AwaitingInventory.Name, afterFailure.CurrentState); // failure keeps the saga parked in the state it failed in
@@ -127,7 +127,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         var retryDispatcher = _provider.GetRequiredService<ISagaRetryDispatcher>();
         await retryDispatcher.RetryAsync(_saga.SagaType, correlationId);
 
-        var afterRetry = await snapshotStore.FindAsync(correlationId);
+        var afterRetry = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(afterRetry);
         Assert.Equal(SagaStatus.Running, afterRetry.Status);
         Assert.Equal(_saga.AwaitingPayment.Name, afterRetry.CurrentState);
@@ -151,7 +151,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await orchestrator.HandleTimeoutAsync(timeout, CancellationToken.None);
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.Failed.Name, state.CurrentState);
         Assert.Equal(SagaStatus.TimedOut, state.Status);
@@ -161,7 +161,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Contains(_transport.GetPublished(), p => p.Message is ReleaseInventory);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStepSucceeded);
     }
@@ -179,7 +179,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Equal(3, _saga.FlakyWithPolicyAttempts);
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.AwaitingPayment.Name, state.CurrentState);
         Assert.Equal(SagaStatus.Running, state.Status);
@@ -196,13 +196,13 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Equal(2, _saga.AlwaysFailsWithPolicyAttempts); // MaxAttempts: 2, and it never succeeds
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(SagaStatus.Failed, state.Status);
         Assert.Equal(_saga.AwaitingInventory.Name, state.CurrentState); // parked where it failed, no transition ran
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.StepFailed && string.Equals(e.MessageType, nameof(AlwaysFailsWithPolicy), StringComparison.Ordinal));
     }
 
@@ -217,7 +217,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new InventoryReserved(), duplicateEnvelope); // same correlation + same message id: a genuine redelivery
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.AwaitingPayment.Name, state.CurrentState); // advanced exactly once, not twice
 
@@ -234,7 +234,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new OrderSubmitted("ORD-8", 30m), inboundEnvelope);
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
 
         var published = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished &&
             string.Equals(e.MessageType, nameof(ReserveInventory), StringComparison.Ordinal));
@@ -251,7 +251,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.From("InventoryService", correlationId));
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
 
         var received = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessageReceived &&
             string.Equals(e.MessageType, nameof(InventoryReserved), StringComparison.Ordinal));
@@ -270,12 +270,12 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new OrderSubmitted("ORD-13", 22m), MessageEnvelope.New(correlationId));
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         var outboundMessageId = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished).MessageId!;
 
         await _transport.PublishAsync(new InventoryReserved(), MessageEnvelope.From("InventoryService", correlationId, causationId: outboundMessageId));
 
-        var timelineAfterReply = await eventLog.GetTimelineAsync(correlationId);
+        var timelineAfterReply = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         var received = Assert.Single(timelineAfterReply, e => e.EntryType == SagaEntryType.MessageReceived &&
             string.Equals(e.MessageType, nameof(InventoryReserved), StringComparison.Ordinal));
         Assert.Equal(outboundMessageId, received.CausationId);
@@ -290,7 +290,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new PaymentFailed(), MessageEnvelope.New(correlationId));
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
 
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.CompensationStarted);
 
@@ -307,7 +307,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new PaymentFailed(), MessageEnvelope.New(correlationId));
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
 
         var failed = Assert.Single(timeline, e => e.EntryType == SagaEntryType.CompensationStepFailed);
         Assert.Equal(_saga.AwaitingPayment.Name, failed.FromState);
@@ -329,18 +329,18 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         await _transport.PublishAsync(new OrderSubmitted("ORD-12", 18m), MessageEnvelope.New(correlationId));
 
         var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
         var outboundMessageId = Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessagePublished).MessageId!;
 
         // A coincidental collision between an inbound MessageId and an earlier *outbound* entry's
         // MessageId must not be mistaken for a redelivery — IsDuplicateAsync only recognizes inbound
         // entry types (SagaStarted/MessageReceived).
-        Assert.False(await eventLog.IsDuplicateAsync(correlationId, outboundMessageId));
+        Assert.False(await eventLog.IsDuplicateAsync(_saga.SagaType, correlationId, outboundMessageId));
 
         await _transport.PublishAsync(new InventoryReserved(), new MessageEnvelope(correlationId, outboundMessageId));
 
         var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
         Assert.NotNull(state);
         Assert.Equal(_saga.AwaitingPayment.Name, state.CurrentState); // processed, not skipped as a dup
     }

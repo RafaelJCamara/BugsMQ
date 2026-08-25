@@ -11,7 +11,8 @@ public interface ISagaChangeNotifier
 {
     Task SagaUpdatedAsync(SagaSummary summary, CancellationToken cancellationToken = default);
 
-    Task TimelineEntryAddedAsync(Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default);
+    /// <summary>The (sagaType, correlationId) pair names the instance whose timeline grew — subscribers group per instance, not per correlation id.</summary>
+    Task TimelineEntryAddedAsync(string sagaType, Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default);
 }
 
 public sealed class NullSagaChangeNotifier : ISagaChangeNotifier
@@ -20,5 +21,5 @@ public sealed class NullSagaChangeNotifier : ISagaChangeNotifier
 
     public Task SagaUpdatedAsync(SagaSummary summary, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-    public Task TimelineEntryAddedAsync(Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task TimelineEntryAddedAsync(string sagaType, Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

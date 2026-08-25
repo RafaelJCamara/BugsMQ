@@ -35,7 +35,13 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         return _factory.DisposeAsync();
     }
 
-    private async Task<Guid> SeedSagaAsync(string sagaType, string currentState, SagaStatus status, SagaKind kind = SagaKind.Orchestrated, DateTimeOffset? updatedAtUtc = null)
+    /// <summary>
+    /// A saga instance is identified by (SagaType, CorrelationId), so seeding has to hand both back —
+    /// the correlation id alone can't address the per-instance routes.
+    /// </summary>
+    private sealed record SeededSaga(string SagaType, Guid CorrelationId);
+
+    private async Task<SeededSaga> SeedSagaAsync(string sagaType, string currentState, SagaStatus status, SagaKind kind = SagaKind.Orchestrated, DateTimeOffset? updatedAtUtc = null)
     {
         var correlationId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
@@ -52,7 +58,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
             UpdatedAtUtc = updatedAtUtc ?? now,
         });
 
-        return correlationId;
+        return new SeededSaga(sagaType, correlationId);
     }
 
     private Task AppendLogAsync(SagaLogEntry entry) =>
@@ -113,10 +119,10 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var newer = await SeedSagaAsync(sagaType, "Running", SagaStatus.Running, updatedAtUtc: DateTimeOffset.UtcNow);
 
         var ascending = await _client.GetFromJsonAsync<PagedResult<SagaSummary>>($"/api/sagas?sagaType={sagaType}&sortBy=UpdatedAt&sortDescending=false", JsonOptions);
-        Assert.Equal([older, newer], ascending!.Items.Select(s => s.CorrelationId));
+        Assert.Equal([older.CorrelationId, newer.CorrelationId], ascending!.Items.Select(s => s.CorrelationId));
 
         var descending = await _client.GetFromJsonAsync<PagedResult<SagaSummary>>($"/api/sagas?sagaType={sagaType}&sortBy=UpdatedAt&sortDescending=true", JsonOptions);
-        Assert.Equal([newer, older], descending!.Items.Select(s => s.CorrelationId));
+        Assert.Equal([newer.CorrelationId, older.CorrelationId], descending!.Items.Select(s => s.CorrelationId));
     }
 
     [Fact]
@@ -130,7 +136,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         // Domain progression (Running, Completed, Failed, ...) — alphabetical would put Completed first.
         var result = await _client.GetFromJsonAsync<PagedResult<SagaSummary>>($"/api/sagas?sagaType={sagaType}&sortBy=Status", JsonOptions);
 
-        Assert.Equal([running, completed, failed], result!.Items.Select(s => s.CorrelationId));
+        Assert.Equal([running.CorrelationId, completed.CorrelationId, failed.CorrelationId], result!.Items.Select(s => s.CorrelationId));
     }
 
     [Fact]
@@ -141,7 +147,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         var sagaType = $"SortSaga-{Guid.NewGuid():N}";
         var ids = new List<Guid>();
         for (var i = 0; i < 5; i++)
-            ids.Add(await SeedSagaAsync(sagaType, "Running", SagaStatus.Running, updatedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-i)));
+            ids.Add((await SeedSagaAsync(sagaType, "Running", SagaStatus.Running, updatedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-i))).CorrelationId);
         // ids[0] is newest (seeded first), ids[4] is oldest (seeded last) — insertion order is the
         // reverse of ascending-by-UpdatedAt order, so a pass here can't be explained by insertion order.
 
@@ -155,9 +161,9 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task GetSaga_Existing_ReturnsSummaryAndDataJson()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "Submitted", SagaStatus.Running);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Submitted", SagaStatus.Running);
 
-        var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{correlationId}", JsonOptions);
+        var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{sagaType}/{correlationId}", JsonOptions);
 
         Assert.NotNull(detail);
         Assert.Equal(correlationId, detail.Summary.CorrelationId);
@@ -168,18 +174,65 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task GetSaga_Missing_Returns404()
     {
-        var response = await _client.GetAsync($"/api/sagas/{Guid.NewGuid()}");
+        var response = await _client.GetAsync($"/api/sagas/OrderSaga/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task FindByCorrelationId_ReturnsEverySagaTypeTrackingThatId()
+    {
+        var correlationId = Guid.NewGuid();
+        var store = _factory.Services.GetRequiredService<ISagaSnapshotStore<DashboardTestState>>();
+        var now = DateTimeOffset.UtcNow;
+
+        // The same business correlation id tracked by two different saga types — the case that makes
+        // a bare correlation id ambiguous, and the reason this endpoint returns a list.
+        foreach (var (sagaType, kind) in new[] { ("OrderSaga", SagaKind.Orchestrated), ("ShippingChoreography", SagaKind.Choreographed) })
+        {
+            await store.InsertAsync(new DashboardTestState
+            {
+                CorrelationId = correlationId,
+                SagaType = sagaType,
+                Kind = kind,
+                CurrentState = "Running",
+                Status = SagaStatus.Running,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            });
+        }
+
+        var response = await _client.GetAsync($"/api/correlations/{correlationId}");
+        response.EnsureSuccessStatusCode();
+
+        var matches = await response.Content.ReadFromJsonAsync<List<SagaSummary>>(JsonOptions);
+
+        Assert.NotNull(matches);
+        Assert.Equal(2, matches.Count);
+        Assert.All(matches, m => Assert.Equal(correlationId, m.CorrelationId));
+        Assert.Contains(matches, m => string.Equals(m.SagaType, "OrderSaga", StringComparison.Ordinal) && m.Kind == SagaKind.Orchestrated);
+        Assert.Contains(matches, m => string.Equals(m.SagaType, "ShippingChoreography", StringComparison.Ordinal) && m.Kind == SagaKind.Choreographed);
+    }
+
+    [Fact]
+    public async Task FindByCorrelationId_UnknownId_ReturnsEmptyList()
+    {
+        var response = await _client.GetAsync($"/api/correlations/{Guid.NewGuid()}");
+        response.EnsureSuccessStatusCode();
+
+        var matches = await response.Content.ReadFromJsonAsync<List<SagaSummary>>(JsonOptions);
+
+        Assert.NotNull(matches);
+        Assert.Empty(matches);
     }
 
     [Fact]
     public async Task GetTimeline_ReturnsEntriesInOrder()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "AwaitingPayment", SagaStatus.Running);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "AwaitingPayment", SagaStatus.Running);
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted, toState: "Submitted"));
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.StepSucceeded, fromState: "Submitted", toState: "AwaitingInventory"));
 
-        var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{correlationId}/timeline", JsonOptions);
+        var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{sagaType}/{correlationId}/timeline", JsonOptions);
 
         Assert.NotNull(timeline);
         Assert.Equal(2, timeline.Count);
@@ -205,16 +258,16 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task Retry_MissingSaga_Returns404()
     {
-        var response = await _client.PostAsync($"/api/sagas/{Guid.NewGuid()}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/OrderSaga/{Guid.NewGuid()}/retry", null);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
     public async Task Retry_SagaNotFailedOrTimedOut_Returns409()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "AwaitingPayment", SagaStatus.Running);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "AwaitingPayment", SagaStatus.Running);
 
-        var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/{sagaType}/{correlationId}/retry", null);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -222,9 +275,9 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task Retry_WithNoTimelineHistory_Returns422()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
 
-        var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/{sagaType}/{correlationId}/retry", null);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
     }
@@ -232,14 +285,14 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task Retry_TechnicalFailure_RedrivesTheExactFailedMessageWithAFreshId()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "AwaitingInventory", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "AwaitingInventory", SagaStatus.Failed);
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{\"OrderId\":\"X\"}"));
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.StepFailed,
             fromState: "AwaitingInventory", messageType: "ReserveInventory", messageId: "m1",
             payloadJson: "{\"OrderId\":\"X\"}", errorMessage: "boom"));
 
-        var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/{sagaType}/{correlationId}/retry", null);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         Assert.Contains(_factory.Transport.GetPublished(), p =>
@@ -247,7 +300,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
             p.Envelope.CorrelationId == correlationId &&
             !string.Equals(p.Envelope.MessageId, "m1", StringComparison.Ordinal)); // fresh id, not a re-delivery of the original
 
-        var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{correlationId}/timeline", JsonOptions);
+        var timeline = await _client.GetFromJsonAsync<List<SagaLogEntry>>($"/api/sagas/{sagaType}/{correlationId}/timeline", JsonOptions);
         Assert.Contains(timeline!, e => e.EntryType == SagaEntryType.ManualRetryRequested);
     }
 
@@ -256,16 +309,16 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     {
         // No StepFailed entry at all — this saga reached Failed via a normal, successful business
         // transition (e.g. "payment declined"), exactly the case that originally 422'd before the fix.
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{\"OrderId\":\"X\"}"));
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.StepSucceeded,
             fromState: "AwaitingInventory", toState: "Failed", messageType: "InventoryReservationFailed", messageId: "m1"));
 
-        var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/{sagaType}/{correlationId}/retry", null);
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
 
-        var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{correlationId}", JsonOptions);
+        var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{sagaType}/{correlationId}", JsonOptions);
         Assert.Equal("Submitted", detail!.Summary.CurrentState);
         Assert.Equal(SagaStatus.Running, detail.Summary.Status);
 
@@ -278,11 +331,11 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task Retry_TimedOutSaga_IsAllowed()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.TimedOut);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.TimedOut);
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{\"OrderId\":\"X\"}"));
 
-        var response = await _client.PostAsync($"/api/sagas/{correlationId}/retry", null);
+        var response = await _client.PostAsync($"/api/sagas/{sagaType}/{correlationId}/retry", null);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
     }
@@ -290,7 +343,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task GetMap_UnknownSaga_Returns404()
     {
-        var response = await _client.GetAsync($"/api/sagas/{Guid.NewGuid()}/map");
+        var response = await _client.GetAsync($"/api/sagas/OrderSaga/{Guid.NewGuid()}/map");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -299,7 +352,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.GetAsync($"/api/sagas/{Guid.NewGuid()}/map");
+        var response = await client.GetAsync($"/api/sagas/OrderSaga/{Guid.NewGuid()}/map");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -307,7 +360,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task GetMap_BuildsStitchedAndUnansweredEdgesWithFailureIndex()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
 
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{}", sourceService: "OrderSubmitter"));
@@ -321,7 +374,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
 
         await RecordTopologyAsync("PaymentService", "ChargePayment", "bugsmq.participant.payment");
 
-        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{correlationId}/map", JsonOptions);
+        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{sagaType}/{correlationId}/map", JsonOptions);
 
         Assert.NotNull(map);
         Assert.Contains(map.Nodes, n => string.Equals(n.Id, "OrderSaga", StringComparison.Ordinal) && n.Kind == SagaMapNodeKind.Orchestrator);
@@ -350,7 +403,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         // "Declined payment" shape: the saga reaches Failed via a normal, successful step transition
         // (PaymentFailed -> Compensate -> Finalize(Failed)) — there's no StepFailed entry at all, so
         // the failing hop must be found a different way (the last inbound message before SagaCompleted).
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
 
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{}", sourceService: "OrderSubmitter"));
@@ -364,7 +417,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.CompensationStepSucceeded, fromState: "AwaitingInventory"));
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaCompleted, toState: "Failed"));
 
-        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{correlationId}/map", JsonOptions);
+        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{sagaType}/{correlationId}/map", JsonOptions);
 
         var failedEdge = Assert.Single(map!.Edges, e => string.Equals(e.MessageType, "PaymentFailed", StringComparison.Ordinal));
         Assert.True(failedEdge.Failed);
@@ -378,13 +431,13 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     [Fact]
     public async Task GetMap_UnstitchedDestinationWithNoTopologyEntry_RendersAsUnresolvedPlaceholder()
     {
-        var correlationId = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
             toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{}"));
         await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.MessagePublished,
             messageType: "ReserveInventory", messageId: "out-1", sourceService: "OrderSaga", causationId: "m0"));
 
-        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{correlationId}/map", JsonOptions);
+        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{sagaType}/{correlationId}/map", JsonOptions);
 
         var edge = Assert.Single(map!.Edges);
         Assert.True(edge.Unanswered);

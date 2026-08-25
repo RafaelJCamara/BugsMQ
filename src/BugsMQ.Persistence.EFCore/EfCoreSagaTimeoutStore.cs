@@ -5,7 +5,7 @@ namespace BugsMQ.Persistence.EFCore;
 
 public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutStore
 {
-    public Task ScheduleAsync(Guid correlationId, string sagaType, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
+    public Task ScheduleAsync(string sagaType, Guid correlationId, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
     {
         db.SagaTimeouts.Add(new SagaTimeoutEntity
         {
@@ -19,10 +19,12 @@ public sealed class EfCoreSagaTimeoutStore(BugsMqDbContext db) : ISagaTimeoutSto
         return db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task CancelAsync(Guid correlationId, string forState, CancellationToken cancellationToken = default)
+    public async Task CancelAsync(string sagaType, Guid correlationId, string forState, CancellationToken cancellationToken = default)
     {
+        // SagaType is part of the filter, not incidental: state names are only unique within a saga
+        // type, so without it one saga would cancel another's timeout for a same-named state.
         var pending = await db.SagaTimeouts
-            .Where(x => x.CorrelationId == correlationId && x.ForState == forState && x.Status == SagaTimeoutStatus.Pending)
+            .Where(x => x.SagaType == sagaType && x.CorrelationId == correlationId && x.ForState == forState && x.Status == SagaTimeoutStatus.Pending)
             .ToListAsync(cancellationToken);
 
         foreach (var timeout in pending)

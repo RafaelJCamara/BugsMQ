@@ -37,9 +37,9 @@ public sealed class SagaOrchestratorTimeoutRaceTests
 
         public Func<Task>? OnNextUpdate { get; set; }
 
-        public async Task<TState?> FindAsync(Guid correlationId, CancellationToken cancellationToken = default)
+        public async Task<TState?> FindAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
         {
-            var state = await inner.FindAsync(correlationId, cancellationToken);
+            var state = await inner.FindAsync(sagaType, correlationId, cancellationToken);
 
             var trigger = OnNextFind;
             if (trigger is not null)
@@ -120,8 +120,9 @@ public sealed class SagaOrchestratorTimeoutRaceTests
         var orchestrator = provider.GetRequiredService<SagaOrchestrator<TestOrderSagaState>>();
         await orchestrator.HandleTimeoutAsync(timeout, CancellationToken.None);
 
+        var sagaType = provider.GetRequiredService<TestOrderSaga>().SagaType;
         var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(sagaType, correlationId);
 
         // The reply won the race: the saga legitimately completed...
         Assert.NotNull(state);
@@ -135,7 +136,7 @@ public sealed class SagaOrchestratorTimeoutRaceTests
         Assert.DoesNotContain(transport.GetPublished(), p => p.Message is ReleaseInventory);
 
         var eventLog = provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(sagaType, correlationId);
         Assert.DoesNotContain(timeline, e => e.EntryType is SagaEntryType.CompensationStarted
             or SagaEntryType.CompensationStepSucceeded or SagaEntryType.CompensationStepFailed);
 
@@ -182,8 +183,9 @@ public sealed class SagaOrchestratorTimeoutRaceTests
         // SagaConcurrencyException from the final persist propagated straight out of this call.
         await orchestrator.HandleTimeoutAsync(timeout, CancellationToken.None);
 
+        var sagaType = provider.GetRequiredService<TestOrderSaga>().SagaType;
         var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(sagaType, correlationId);
 
         // The reply still won overall — its persist landed after the claim's, so it's what's stored.
         Assert.NotNull(state);

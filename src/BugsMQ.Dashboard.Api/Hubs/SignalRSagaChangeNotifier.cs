@@ -10,9 +10,9 @@ public sealed class SignalRSagaChangeNotifier(IHubContext<SagaHub, ISagaHubClien
     public async Task SagaUpdatedAsync(SagaSummary summary, CancellationToken cancellationToken = default)
     {
         await hub.Clients.Group(SagaHub.ListGroup).SagaUpdated(summary);
-        await hub.Clients.Group(SagaHub.GroupForSaga(summary.CorrelationId)).SagaUpdated(summary);
+        await hub.Clients.Group(SagaHub.GroupForSaga(summary.SagaType, summary.CorrelationId)).SagaUpdated(summary);
     }
 
-    public Task TimelineEntryAddedAsync(Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default) =>
-        hub.Clients.Group(SagaHub.GroupForSaga(correlationId)).TimelineEntryAdded(correlationId, entry);
+    public Task TimelineEntryAddedAsync(string sagaType, Guid correlationId, SagaLogEntry entry, CancellationToken cancellationToken = default) =>
+        hub.Clients.Group(SagaHub.GroupForSaga(sagaType, correlationId)).TimelineEntryAdded(sagaType, correlationId, entry);
 }

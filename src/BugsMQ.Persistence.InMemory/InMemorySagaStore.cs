@@ -17,8 +17,10 @@ namespace BugsMQ.Persistence.InMemory;
 /// </summary>
 public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, ISagaTimeoutStore, ISagaAdminStore, IServiceTopologyStore
 {
-    private readonly ConcurrentDictionary<Guid, StoredSnapshot> _snapshots = new();
-    private readonly ConcurrentDictionary<Guid, ImmutableList<SagaLogEntry>> _timelines = new();
+    // Keyed by (SagaType, CorrelationId), mirroring the EF provider's composite primary key: a
+    // correlation id alone does not identify an instance once two saga types may track the same one.
+    private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), StoredSnapshot> _snapshots = new();
+    private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), ImmutableList<SagaLogEntry>> _timelines = new();
     private readonly ConcurrentDictionary<long, SagaTimeout> _timeouts = new();
     private readonly ConcurrentDictionary<(string ServiceName, string MessageType), ServiceTopologyEntry> _topology = new();
     private long _sequence;
@@ -31,31 +33,33 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     private static TState Deserialize<TState>(string json) where TState : SagaState =>
         JsonSerializer.Deserialize<TState>(json) ?? throw new InvalidOperationException("Failed to deserialize saga snapshot.");
 
-    internal TState? Find<TState>(Guid correlationId) where TState : SagaState =>
-        _snapshots.TryGetValue(correlationId, out var stored) ? Deserialize<TState>(stored.Json) : null;
+    internal TState? Find<TState>(string sagaType, Guid correlationId) where TState : SagaState =>
+        _snapshots.TryGetValue((sagaType, correlationId), out var stored) ? Deserialize<TState>(stored.Json) : null;
 
     internal void Insert<TState>(TState state) where TState : SagaState
     {
         var stored = ToStored(state);
-        if (!_snapshots.TryAdd(state.CorrelationId, stored))
-            throw new SagaAlreadyExistsException(state.CorrelationId);
+        if (!_snapshots.TryAdd((state.SagaType, state.CorrelationId), stored))
+            throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
     }
 
     internal void Update<TState>(TState state, int expectedVersion) where TState : SagaState
     {
+        var key = (state.SagaType, state.CorrelationId);
+
         while (true)
         {
-            if (!_snapshots.TryGetValue(state.CorrelationId, out var current))
-                throw new SagaNotFoundException(state.CorrelationId);
+            if (!_snapshots.TryGetValue(key, out var current))
+                throw new SagaNotFoundException(state.SagaType, state.CorrelationId);
 
             if (current.Version != expectedVersion)
-                throw new SagaConcurrencyException(state.CorrelationId, expectedVersion);
+                throw new SagaConcurrencyException(state.SagaType, state.CorrelationId, expectedVersion);
 
             state.Version = expectedVersion + 1;
             state.UpdatedAtUtc = DateTimeOffset.UtcNow;
             var updated = ToStored(state);
 
-            if (_snapshots.TryUpdate(state.CorrelationId, updated, current))
+            if (_snapshots.TryUpdate(key, updated, current))
                 return;
 
             // another writer beat us to it between the read and the compare-and-swap; loop and re-check version
@@ -67,7 +71,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
 
     public Task<PagedResult<SagaSummary>> ListAsync(SagaListFilter filter, CancellationToken cancellationToken = default)
     {
-        var query = _snapshots.Select(kvp => new SagaSummary(kvp.Key, kvp.Value.SagaType, kvp.Value.Kind, kvp.Value.CurrentState, kvp.Value.Status, kvp.Value.CreatedAtUtc, kvp.Value.UpdatedAtUtc, kvp.Value.Version));
+        var query = _snapshots.Select(kvp => new SagaSummary(kvp.Key.CorrelationId, kvp.Value.SagaType, kvp.Value.Kind, kvp.Value.CurrentState, kvp.Value.Status, kvp.Value.CreatedAtUtc, kvp.Value.UpdatedAtUtc, kvp.Value.Version));
 
         if (filter.Status is { } status)
             query = query.Where(s => s.Status == status);
@@ -100,12 +104,23 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
             _ => query.OrderByDescending(s => s.UpdatedAtUtc),
         };
 
-    public Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public Task<SagaSummary?> GetAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
-        if (!_snapshots.TryGetValue(correlationId, out var s))
+        if (!_snapshots.TryGetValue((sagaType, correlationId), out var s))
             return Task.FromResult<SagaSummary?>(null);
 
         return Task.FromResult<SagaSummary?>(new SagaSummary(correlationId, s.SagaType, s.Kind, s.CurrentState, s.Status, s.CreatedAtUtc, s.UpdatedAtUtc, s.Version));
+    }
+
+    public Task<IReadOnlyList<SagaSummary>> FindByCorrelationIdAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<SagaSummary> matches = _snapshots
+            .Where(kvp => kvp.Key.CorrelationId == correlationId)
+            .OrderBy(kvp => kvp.Key.SagaType, StringComparer.Ordinal)
+            .Select(kvp => new SagaSummary(correlationId, kvp.Value.SagaType, kvp.Value.Kind, kvp.Value.CurrentState, kvp.Value.Status, kvp.Value.CreatedAtUtc, kvp.Value.UpdatedAtUtc, kvp.Value.Version))
+            .ToList();
+
+        return Task.FromResult(matches);
     }
 
     public Task<IReadOnlyList<SagaTypeInfo>> GetSagaTypesAsync(CancellationToken cancellationToken = default)
@@ -119,15 +134,17 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         return Task.FromResult(types);
     }
 
-    public Task<string?> GetDataJsonAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(_snapshots.TryGetValue(correlationId, out var s) ? s.Json : null);
+    public Task<string?> GetDataJsonAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_snapshots.TryGetValue((sagaType, correlationId), out var s) ? s.Json : null);
 
-    public Task ResetStateAsync(Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default)
+    public Task ResetStateAsync(string sagaType, Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default)
     {
+        var key = (sagaType, correlationId);
+
         while (true)
         {
-            if (!_snapshots.TryGetValue(correlationId, out var current))
-                throw new SagaNotFoundException(correlationId);
+            if (!_snapshots.TryGetValue(key, out var current))
+                throw new SagaNotFoundException(sagaType, correlationId);
 
             // Patch the embedded JSON's CurrentState/Status by property name rather than deserializing
             // into a concrete TState (unknown here) — keeps this store genuinely saga-type-agnostic.
@@ -144,7 +161,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
             };
 
-            if (_snapshots.TryUpdate(correlationId, updated, current))
+            if (_snapshots.TryUpdate(key, updated, current))
                 return Task.CompletedTask;
         }
     }
@@ -155,43 +172,50 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         var stamped = entry with { SequenceNumber = sequenceNumber };
 
         _timelines.AddOrUpdate(
-            entry.CorrelationId,
+            (entry.SagaType, entry.CorrelationId),
             _ => ImmutableList.Create(stamped),
             (_, list) => list.Add(stamped));
 
         return Task.FromResult(sequenceNumber);
     }
 
-    public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
-        IReadOnlyList<SagaLogEntry> result = _timelines.TryGetValue(correlationId, out var list) ? list : [];
+        IReadOnlyList<SagaLogEntry> result = _timelines.TryGetValue((sagaType, correlationId), out var list) ? list : [];
         return Task.FromResult(result);
     }
 
     // Narrowed to inbound entry types — see EfCoreSagaEventLogStore.IsDuplicateAsync for why: outbound
     // entries now also carry a MessageId, and HandleInfrastructureFailureAsync's redelivery path
     // deliberately relies on this check recognizing only a reused *inbound* MessageId.
-    public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default)
+    public Task<bool> IsDuplicateAsync(string sagaType, Guid correlationId, string messageId, CancellationToken cancellationToken = default)
     {
-        var isDuplicate = _timelines.TryGetValue(correlationId, out var list) &&
+        var isDuplicate = _timelines.TryGetValue((sagaType, correlationId), out var list) &&
                            list.Any(e => string.Equals(e.MessageId, messageId, StringComparison.Ordinal) &&
                                          (e.EntryType == SagaEntryType.SagaStarted || e.EntryType == SagaEntryType.MessageReceived));
         return Task.FromResult(isDuplicate);
     }
 
-    public Task ScheduleAsync(Guid correlationId, string sagaType, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
+    public Task ScheduleAsync(string sagaType, Guid correlationId, string forState, DateTimeOffset dueAtUtc, CancellationToken cancellationToken = default)
     {
         var id = Interlocked.Increment(ref _timeoutId);
         _timeouts[id] = new SagaTimeout(id, correlationId, sagaType, forState, dueAtUtc, SagaTimeoutStatus.Pending);
         return Task.CompletedTask;
     }
 
-    public Task CancelAsync(Guid correlationId, string forState, CancellationToken cancellationToken = default)
+    public Task CancelAsync(string sagaType, Guid correlationId, string forState, CancellationToken cancellationToken = default)
     {
         foreach (var (id, timeout) in _timeouts)
         {
-            if (timeout.CorrelationId == correlationId && string.Equals(timeout.ForState, forState, StringComparison.Ordinal) && timeout.Status == SagaTimeoutStatus.Pending)
+            // SagaType included: state names are only unique within a saga type, so without it one
+            // saga would cancel another's pending timeout for a same-named state.
+            if (string.Equals(timeout.SagaType, sagaType, StringComparison.Ordinal) &&
+                timeout.CorrelationId == correlationId &&
+                string.Equals(timeout.ForState, forState, StringComparison.Ordinal) &&
+                timeout.Status == SagaTimeoutStatus.Pending)
+            {
                 _timeouts[id] = timeout with { Status = SagaTimeoutStatus.Cancelled };
+            }
         }
 
         return Task.CompletedTask;

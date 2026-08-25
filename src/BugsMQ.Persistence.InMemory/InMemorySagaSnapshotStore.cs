@@ -7,8 +7,8 @@ namespace BugsMQ.Persistence.InMemory;
 public sealed class InMemorySagaSnapshotStore<TState>(InMemorySagaStore store) : ISagaSnapshotStore<TState>
     where TState : SagaState
 {
-    public Task<TState?> FindAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(store.Find<TState>(correlationId));
+    public Task<TState?> FindAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(store.Find<TState>(sagaType, correlationId));
 
     public Task InsertAsync(TState state, CancellationToken cancellationToken = default)
     {

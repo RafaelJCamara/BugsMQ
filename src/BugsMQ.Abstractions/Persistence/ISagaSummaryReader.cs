@@ -12,10 +12,19 @@ public interface ISagaSummaryReader
 {
     Task<PagedResult<SagaSummary>> ListAsync(SagaListFilter filter, CancellationToken cancellationToken = default);
 
-    Task<SagaSummary?> GetAsync(Guid correlationId, CancellationToken cancellationToken = default);
+    Task<SagaSummary?> GetAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default);
 
     /// <summary>Raw serialized business state (the TState JSON), for the dashboard's saga detail "Data" tab — generic access without knowing the concrete TState type.</summary>
-    Task<string?> GetDataJsonAsync(Guid correlationId, CancellationToken cancellationToken = default);
+    Task<string?> GetDataJsonAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every saga instance sharing <paramref name="correlationId"/>, across all saga types. Powers the
+    /// dashboard's "this correlation id is also tracked by N other sagas" cross-links, and is what a
+    /// caller holding only a correlation id (e.g. an old bookmarked URL) uses to resolve it to a
+    /// concrete instance. Ordinarily returns exactly one; more than one means several saga types are
+    /// tracking the same business transaction.
+    /// </summary>
+    Task<IReadOnlyList<SagaSummary>> FindByCorrelationIdAsync(Guid correlationId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Distinct saga types that have ever run, derived from persisted data rather than requiring the

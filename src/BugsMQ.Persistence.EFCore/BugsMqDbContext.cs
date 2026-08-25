@@ -22,13 +22,19 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
         modelBuilder.Entity<SagaInstanceEntity>(b =>
         {
             b.ToTable("SagaInstances");
-            b.HasKey(x => x.CorrelationId);
+            // Composite, not CorrelationId alone: two saga types may track the same business
+            // correlation id (an orchestrated saga and a choreographed one observing the same flow).
+            // SagaType leads the key so the SagaType-prefixed lookups below use it directly.
+            b.HasKey(x => new { x.SagaType, x.CorrelationId });
             b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
             b.Property(x => x.CurrentState).HasMaxLength(200).IsRequired();
             b.Property(x => x.DataJson).IsRequired();
             b.Property(x => x.Version).IsConcurrencyToken();
             b.HasIndex(x => new { x.SagaType, x.Status });
             b.HasIndex(x => new { x.Status, x.UpdatedAtUtc });
+            // Resolving a bare correlation id to the saga instance(s) tracking it — the composite key
+            // can't serve this, since its leading column is SagaType.
+            b.HasIndex(x => x.CorrelationId);
         });
 
         modelBuilder.Entity<SagaEventLogEntity>(b =>
@@ -43,11 +49,13 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
             b.Property(x => x.SourceService).HasMaxLength(200);
             b.Property(x => x.DestinationService).HasMaxLength(200);
             b.Property(x => x.CausationId).HasMaxLength(200);
-            b.HasIndex(x => new { x.CorrelationId, x.Id });
+            // SagaType-leading, matching the scoped timeline read: two saga types tracking the same
+            // correlation id each own an independent timeline, so neither of these may span both.
+            b.HasIndex(x => new { x.SagaType, x.CorrelationId, x.Id });
             // Not unique: a single inbound message legitimately produces multiple entries
             // (MessageReceived, then StepSucceeded/StepFailed) sharing one MessageId — this index is
             // purely to speed up IsDuplicateAsync's existence check, not a uniqueness constraint.
-            b.HasIndex(x => new { x.CorrelationId, x.MessageId });
+            b.HasIndex(x => new { x.SagaType, x.CorrelationId, x.MessageId });
         });
 
         modelBuilder.Entity<SagaTimeoutEntity>(b =>

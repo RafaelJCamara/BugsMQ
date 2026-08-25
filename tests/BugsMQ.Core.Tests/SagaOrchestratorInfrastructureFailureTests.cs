@@ -35,11 +35,11 @@ public sealed class SagaOrchestratorInfrastructureFailureTests
             return inner.AppendAsync(entry, cancellationToken);
         }
 
-        public Task<bool> IsDuplicateAsync(Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
-            inner.IsDuplicateAsync(correlationId, messageId, cancellationToken);
+        public Task<bool> IsDuplicateAsync(string sagaType, Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
+            inner.IsDuplicateAsync(sagaType, correlationId, messageId, cancellationToken);
 
-        public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(Guid correlationId, CancellationToken cancellationToken = default) =>
-            inner.GetTimelineAsync(correlationId, cancellationToken);
+        public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
+            inner.GetTimelineAsync(sagaType, correlationId, cancellationToken);
     }
 
     private static async Task<ServiceProvider> BuildProviderAsync(int failuresBeforeSuccess, int maxDeliveryAttempts)
@@ -77,8 +77,9 @@ public sealed class SagaOrchestratorInfrastructureFailureTests
         // sequence has already completed.
         await transport.PublishAsync(new OrderSubmitted("ORD-INFRA-1", 15m), MessageEnvelope.New(correlationId));
 
+        var sagaType = provider.GetRequiredService<TestOrderSaga>().SagaType;
         var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        var state = await snapshotStore.FindAsync(correlationId);
+        var state = await snapshotStore.FindAsync(sagaType, correlationId);
 
         Assert.NotNull(state);
         Assert.Equal(SagaStatus.Running, state.Status);
@@ -101,11 +102,12 @@ public sealed class SagaOrchestratorInfrastructureFailureTests
 
         // The saga never got past its first (always-failing) log append on any of the 3 attempts, so no
         // snapshot was ever created — the only durable trace is the DeliveryExhausted entry itself.
+        var sagaType = provider.GetRequiredService<TestOrderSaga>().SagaType;
         var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
-        Assert.Null(await snapshotStore.FindAsync(correlationId));
+        Assert.Null(await snapshotStore.FindAsync(sagaType, correlationId));
 
         var eventLog = provider.GetRequiredService<ISagaEventLogStore>();
-        var timeline = await eventLog.GetTimelineAsync(correlationId);
+        var timeline = await eventLog.GetTimelineAsync(sagaType, correlationId);
         var exhausted = Assert.Single(timeline, e => e.EntryType == SagaEntryType.DeliveryExhausted);
         Assert.Equal(nameof(OrderSubmitted), exhausted.MessageType);
 

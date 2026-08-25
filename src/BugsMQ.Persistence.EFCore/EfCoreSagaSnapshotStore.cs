@@ -8,9 +8,11 @@ namespace BugsMQ.Persistence.EFCore;
 public sealed class EfCoreSagaSnapshotStore<TState>(BugsMqDbContext db) : ISagaSnapshotStore<TState>
     where TState : SagaState
 {
-    public async Task<TState?> FindAsync(Guid correlationId, CancellationToken cancellationToken = default)
+    public async Task<TState?> FindAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default)
     {
-        var entity = await db.SagaInstances.AsNoTracking().FirstOrDefaultAsync(x => x.CorrelationId == correlationId, cancellationToken);
+        var entity = await db.SagaInstances.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.SagaType == sagaType && x.CorrelationId == correlationId, cancellationToken);
+
         return entity is null ? null : JsonSerializer.Deserialize<TState>(entity.DataJson);
     }
 
@@ -25,24 +27,26 @@ public sealed class EfCoreSagaSnapshotStore<TState>(BugsMqDbContext db) : ISagaS
         }
         catch (DbUpdateException)
         {
-            throw new SagaAlreadyExistsException(state.CorrelationId);
+            throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
         }
     }
 
     public async Task UpdateAsync(TState state, int expectedVersion, CancellationToken cancellationToken = default)
     {
-        var entity = await db.SagaInstances.FirstOrDefaultAsync(x => x.CorrelationId == state.CorrelationId, cancellationToken)
-                     ?? throw new SagaNotFoundException(state.CorrelationId);
+        var entity = await db.SagaInstances.FirstOrDefaultAsync(x => x.SagaType == state.SagaType && x.CorrelationId == state.CorrelationId, cancellationToken)
+                     ?? throw new SagaNotFoundException(state.SagaType, state.CorrelationId);
 
         if (entity.Version != expectedVersion)
-            throw new SagaConcurrencyException(state.CorrelationId, expectedVersion);
+            throw new SagaConcurrencyException(state.SagaType, state.CorrelationId, expectedVersion);
 
         // Bump state.Version BEFORE serializing DataJson from it — otherwise the JSON blob embeds
         // the stale version even though the entity's own Version column is correct, and FindAsync
         // (which deserializes from DataJson) would silently return the old version.
         state.Version = expectedVersion + 1;
         var updated = ToEntity(state);
-        entity.SagaType = updated.SagaType;
+        // SagaType is deliberately not reassigned: it's half the primary key now, and the row was
+        // located by it above, so it is already equal by construction — writing to a key property
+        // would only be a no-op that reads as if the type were mutable per update.
         entity.Kind = updated.Kind;
         entity.CurrentState = updated.CurrentState;
         entity.Status = updated.Status;
@@ -57,7 +61,7 @@ public sealed class EfCoreSagaSnapshotStore<TState>(BugsMqDbContext db) : ISagaS
         catch (DbUpdateConcurrencyException)
         {
             state.Version = expectedVersion;
-            throw new SagaConcurrencyException(state.CorrelationId, expectedVersion);
+            throw new SagaConcurrencyException(state.SagaType, state.CorrelationId, expectedVersion);
         }
     }
 

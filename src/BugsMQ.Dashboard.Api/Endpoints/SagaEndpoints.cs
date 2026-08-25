@@ -31,55 +31,68 @@ public static class SagaEndpoints
         })
         .WithName("ListSagas");
 
-        group.MapGet("/{correlationId:guid}", async (Guid correlationId, ISagaSummaryReader reader, CancellationToken ct) =>
+        // Every per-instance route is {sagaType}/{correlationId}: a correlation id alone no longer
+        // identifies a saga instance, since two saga types may track the same one. Callers holding
+        // only a correlation id resolve it first via /api/correlations/{correlationId} below.
+        group.MapGet("/{sagaType}/{correlationId:guid}", async (string sagaType, Guid correlationId, ISagaSummaryReader reader, CancellationToken ct) =>
         {
-            var summary = await reader.GetAsync(correlationId, ct);
+            var summary = await reader.GetAsync(sagaType, correlationId, ct);
             if (summary is null)
                 return Results.NotFound();
 
-            var dataJson = await reader.GetDataJsonAsync(correlationId, ct);
+            var dataJson = await reader.GetDataJsonAsync(sagaType, correlationId, ct);
             return Results.Ok(new SagaDetail(summary, dataJson));
         })
         .WithName("GetSaga");
 
-        group.MapGet("/{correlationId:guid}/timeline", async (Guid correlationId, ISagaEventLogStore log, CancellationToken ct) =>
-            Results.Ok(await log.GetTimelineAsync(correlationId, ct)))
+        group.MapGet("/{sagaType}/{correlationId:guid}/timeline", async (string sagaType, Guid correlationId, ISagaEventLogStore log, CancellationToken ct) =>
+            Results.Ok(await log.GetTimelineAsync(sagaType, correlationId, ct)))
         .WithName("GetSagaTimeline");
 
-        group.MapGet("/{correlationId:guid}/map", GetSagaMapAsync)
+        group.MapGet("/{sagaType}/{correlationId:guid}/map", GetSagaMapAsync)
         .WithName("GetSagaMap");
 
-        group.MapPost("/{correlationId:guid}/retry", RetrySagaAsync)
+        group.MapPost("/{sagaType}/{correlationId:guid}/retry", RetrySagaAsync)
         .WithName("RetrySaga");
 
         app.MapGet("/api/saga-types", async (ISagaSummaryReader reader, CancellationToken ct) => Results.Ok(await reader.GetSagaTypesAsync(ct)))
             .WithTags("Sagas")
             .WithName("ListSagaTypes")
             .RequireAuthorization();
+
+        // Deliberately a separate top-level path rather than /api/sagas/by-correlation/{id}, which
+        // would sit in the same slot as {sagaType} and rely on literal-beats-parameter precedence to
+        // disambiguate. Returns every saga instance tracking this correlation id — normally one, more
+        // than one when several saga types observe the same business transaction.
+        app.MapGet("/api/correlations/{correlationId:guid}", async (Guid correlationId, ISagaSummaryReader reader, CancellationToken ct) =>
+            Results.Ok(await reader.FindByCorrelationIdAsync(correlationId, ct)))
+            .WithTags("Sagas")
+            .WithName("FindSagasByCorrelationId")
+            .RequireAuthorization();
     }
 
-    private static async Task<IResult> GetSagaMapAsync(Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, IServiceTopologyStore topologyStore, CancellationToken ct)
+    private static async Task<IResult> GetSagaMapAsync(string sagaType, Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, IServiceTopologyStore topologyStore, CancellationToken ct)
     {
-        var summary = await reader.GetAsync(correlationId, ct);
+        var summary = await reader.GetAsync(sagaType, correlationId, ct);
         if (summary is null)
             return Results.NotFound();
 
-        var timeline = await log.GetTimelineAsync(correlationId, ct);
+        var timeline = await log.GetTimelineAsync(sagaType, correlationId, ct);
         var topology = await topologyStore.GetAllAsync(ct);
 
         return Results.Ok(SagaMapBuilder.Build(summary, timeline, topology));
     }
 
-    private static async Task<IResult> RetrySagaAsync(Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, ISagaAdminStore admin, IMessageTransport transport, CancellationToken ct)
+    private static async Task<IResult> RetrySagaAsync(string sagaType, Guid correlationId, ISagaSummaryReader reader, ISagaEventLogStore log, ISagaAdminStore admin, IMessageTransport transport, CancellationToken ct)
     {
-        var summary = await reader.GetAsync(correlationId, ct);
+        var summary = await reader.GetAsync(sagaType, correlationId, ct);
         if (summary is null)
             return Results.NotFound();
 
         if (summary.Status is not (SagaStatus.Failed or SagaStatus.TimedOut))
-            return Results.Conflict(new { error = $"Saga '{correlationId}' cannot be retried while its status is '{summary.Status}'; only 'Failed' or 'TimedOut' sagas can be retried." });
+            return Results.Conflict(new { error = $"Saga '{sagaType}' instance '{correlationId}' cannot be retried while its status is '{summary.Status}'; only 'Failed' or 'TimedOut' sagas can be retried." });
 
-        var timeline = await log.GetTimelineAsync(correlationId, ct);
+        var timeline = await log.GetTimelineAsync(sagaType, correlationId, ct);
 
         // Two distinct redrive shapes:
         //  1. A technical failure (an action threw) — StepFailed carries the exact message that
@@ -96,7 +109,7 @@ public static class SagaEndpoints
         {
             var start = timeline.FirstOrDefault(e => e.EntryType == SagaEntryType.SagaStarted);
             if (start is not { MessageType: not null, PayloadJson: not null, ToState: not null })
-                return Results.UnprocessableEntity(new { error = $"Saga '{correlationId}' has no recorded failure or start to retry from." });
+                return Results.UnprocessableEntity(new { error = $"Saga '{sagaType}' instance '{correlationId}' has no recorded failure or start to retry from." });
 
             redrive = start;
             resetToState = start.ToState;
@@ -106,13 +119,17 @@ public static class SagaEndpoints
             fromState: summary.CurrentState, toState: resetToState, messageType: redrive.MessageType, messageId: redrive.MessageId), ct);
 
         if (!string.Equals(resetToState, summary.CurrentState, StringComparison.Ordinal))
-            await admin.ResetStateAsync(correlationId, resetToState, SagaStatus.Running, ct);
+            await admin.ResetStateAsync(sagaType, correlationId, resetToState, SagaStatus.Running, ct);
 
         // Redrive by re-publishing the message with a fresh message id (so the dedupe check
         // doesn't discard it) and the same correlation id. This deliberately does not require the
         // dashboard to know the saga's TState/definition — whichever process actually runs that
         // saga's engine picks it up through its normal subscription, exactly like any other
         // delivery, and the orchestrator resumes Running on successful reprocessing.
+        //
+        // Note this republish is still correlation-id-addressed, so every saga type subscribed to
+        // this message type sees it, not only `sagaType` — each one's own dedupe/initiation rules
+        // then decide what to do with it. That is the same fan-out a first-time delivery has.
         var body = Encoding.UTF8.GetBytes(redrive.PayloadJson!);
 
         try
@@ -122,7 +139,7 @@ public static class SagaEndpoints
         catch (MessageTransportPublishException ex)
         {
             return Results.Problem(statusCode: StatusCodes.Status502BadGateway,
-                detail: $"Saga '{correlationId}' could not be retried: {ex.Message}");
+                detail: $"Saga '{sagaType}' instance '{correlationId}' could not be retried: {ex.Message}");
         }
 
         return Results.Accepted();

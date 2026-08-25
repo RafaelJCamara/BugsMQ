@@ -12,5 +12,5 @@ namespace BugsMQ.Abstractions.Persistence;
 /// </summary>
 public interface ISagaAdminStore
 {
-    Task ResetStateAsync(Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default);
+    Task ResetStateAsync(string sagaType, Guid correlationId, string currentState, SagaStatus status, CancellationToken cancellationToken = default);
 }
