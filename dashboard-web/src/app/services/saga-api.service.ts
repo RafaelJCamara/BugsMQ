@@ -48,6 +48,11 @@ export class SagaApiService {
     return this.http.get<SagaMap>(`${this.instanceUrl(sagaType, correlationId)}/map`);
   }
 
+  /** The sagas this one started as sub-sagas. Each has its own correlation id, so this is not the same question as findByCorrelationId. */
+  getChildren(sagaType: string, correlationId: string): Observable<SagaSummary[]> {
+    return this.http.get<SagaSummary[]>(`${this.instanceUrl(sagaType, correlationId)}/children`);
+  }
+
   retry(sagaType: string, correlationId: string): Observable<void> {
     return this.http.post<void>(`${this.instanceUrl(sagaType, correlationId)}/retry`, {});
   }

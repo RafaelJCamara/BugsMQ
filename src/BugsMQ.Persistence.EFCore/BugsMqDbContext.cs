@@ -19,23 +19,7 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<SagaInstanceEntity>(b =>
-        {
-            b.ToTable("SagaInstances");
-            // Composite, not CorrelationId alone: two saga types may track the same business
-            // correlation id (an orchestrated saga and a choreographed one observing the same flow).
-            // SagaType leads the key so the SagaType-prefixed lookups below use it directly.
-            b.HasKey(x => new { x.SagaType, x.CorrelationId });
-            b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
-            b.Property(x => x.CurrentState).HasMaxLength(200).IsRequired();
-            b.Property(x => x.DataJson).IsRequired();
-            b.Property(x => x.Version).IsConcurrencyToken();
-            b.HasIndex(x => new { x.SagaType, x.Status });
-            b.HasIndex(x => new { x.Status, x.UpdatedAtUtc });
-            // Resolving a bare correlation id to the saga instance(s) tracking it — the composite key
-            // can't serve this, since its leading column is SagaType.
-            b.HasIndex(x => x.CorrelationId);
-        });
+        ConfigureSagaInstances(modelBuilder);
 
         modelBuilder.Entity<SagaEventLogEntity>(b =>
         {
@@ -75,6 +59,33 @@ public sealed class BugsMqDbContext(DbContextOptions<BugsMqDbContext> options) :
             b.Property(x => x.MessageType).HasMaxLength(400).IsRequired();
             b.Property(x => x.QueueName).HasMaxLength(400).IsRequired();
             b.HasIndex(x => x.MessageType);
+        });
+    }
+
+    /// <summary>Split out of <see cref="OnModelCreating"/> only for length — it is the one entity carrying enough keys and indexes to be worth reading on its own.</summary>
+    private static void ConfigureSagaInstances(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SagaInstanceEntity>(b =>
+        {
+            b.ToTable("SagaInstances");
+            // Composite, not CorrelationId alone: two saga types may track the same business
+            // correlation id (an orchestrated saga and a choreographed one observing the same flow).
+            // SagaType leads the key so the SagaType-prefixed lookups below use it directly.
+            b.HasKey(x => new { x.SagaType, x.CorrelationId });
+            b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
+            b.Property(x => x.CurrentState).HasMaxLength(200).IsRequired();
+            b.Property(x => x.DataJson).IsRequired();
+            b.Property(x => x.Version).IsConcurrencyToken();
+            b.HasIndex(x => new { x.SagaType, x.Status });
+            b.HasIndex(x => new { x.Status, x.UpdatedAtUtc });
+            // Resolving a bare correlation id to the saga instance(s) tracking it — the composite key
+            // can't serve this, since its leading column is SagaType.
+            b.HasIndex(x => x.CorrelationId);
+            b.Property(x => x.ParentSagaType).HasMaxLength(200);
+            // Ordered to match FindChildrenAsync's predicate, which always supplies both halves of the
+            // parent pointer. Root sagas leave both null, so on a workload without sub-sagas this index
+            // stays effectively empty rather than duplicating the table.
+            b.HasIndex(x => new { x.ParentSagaType, x.ParentCorrelationId });
         });
     }
 }

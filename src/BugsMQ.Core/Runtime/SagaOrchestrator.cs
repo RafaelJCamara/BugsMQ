@@ -135,6 +135,20 @@ public sealed class SagaOrchestrator<TState>(
     private static string? GetCausationId(IReadOnlyDictionary<string, string> headers) =>
         headers.TryGetValue(MessageEnvelope.CausationIdHeader, out var value) ? value : null;
 
+    /// <summary>The saga type that started this one via <c>StartChildAsync</c>, if this message is a child's initiating message — see MessageEnvelope.ParentSagaTypeHeader.</summary>
+    private static string? GetParentSagaType(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(MessageEnvelope.ParentSagaTypeHeader, out var value) && !string.IsNullOrEmpty(value) ? value : null;
+
+    /// <summary>
+    /// The parent instance's correlation id, if the publisher stamped a parseable one. An unparseable
+    /// value is treated as absent rather than fatal: the linkage is dashboard/traceability metadata, and
+    /// a malformed header from some future publisher must not stop a child saga from running at all.
+    /// </summary>
+    private static Guid? GetParentCorrelationId(IReadOnlyDictionary<string, string> headers) =>
+        headers.TryGetValue(MessageEnvelope.ParentCorrelationIdHeader, out var value) && Guid.TryParse(value, out var parsed)
+            ? parsed
+            : null;
+
     /// <summary>Manual, dashboard/API-triggered redrive of a Failed saga: replays the exact message that last failed.</summary>
     public async Task RetryAsync(Guid correlationId, CancellationToken cancellationToken)
     {
@@ -287,17 +301,7 @@ public sealed class SagaOrchestrator<TState>(
                 return;
             }
 
-            var now = timeProvider.GetUtcNow();
-            existing = new TState
-            {
-                CorrelationId = correlationId,
-                SagaType = SagaType,
-                Kind = definition.Kind,
-                CurrentState = definition.InitialStateName,
-                Status = SagaStatus.Running,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now,
-            };
+            existing = NewInstance(correlationId, received.Headers);
 
             // PayloadJson is recorded here (not just on StepFailed) so a saga that later reaches a
             // terminal Failed state through a normal business transition — no exception, so no
@@ -315,6 +319,37 @@ public sealed class SagaOrchestrator<TState>(
         }
 
         await RunStepAsync(existing, message, received.MessageTypeName, received.MessageId, received.Headers, isNew, cancellationToken);
+    }
+
+    /// <summary>
+    /// The blank snapshot for a saga this message is opening. This is the only place a parent link is
+    /// ever read off the wire: an instance's parent is fixed at creation, so a later message carrying
+    /// those headers — a redelivery, or a second saga type observing the same child message — takes the
+    /// existing-instance path in <see cref="HandleCoreAsync"/> and cannot re-parent anything.
+    /// </summary>
+    private TState NewInstance(Guid correlationId, IReadOnlyDictionary<string, string> headers)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        // Both halves or neither. A half-stamped link (one header present, the other missing or
+        // unparseable) would read as a child in the dashboard while being unreachable from the parent,
+        // since FindChildrenAsync matches on the pair — better to record an honest root saga.
+        var parentSagaType = GetParentSagaType(headers);
+        var parentCorrelationId = GetParentCorrelationId(headers);
+        var hasParent = parentSagaType is not null && parentCorrelationId is not null;
+
+        return new TState
+        {
+            CorrelationId = correlationId,
+            SagaType = SagaType,
+            Kind = definition.Kind,
+            CurrentState = definition.InitialStateName,
+            Status = SagaStatus.Running,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            ParentSagaType = hasParent ? parentSagaType : null,
+            ParentCorrelationId = hasParent ? parentCorrelationId : null,
+        };
     }
 
     private async Task RunStepAsync(TState state, object message, string messageTypeName, string messageId,
@@ -457,5 +492,6 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     private static SagaSummary ToSummary(TState state) =>
-        new(state.CorrelationId, state.SagaType, state.Kind, state.CurrentState, state.Status, state.CreatedAtUtc, state.UpdatedAtUtc, state.Version);
+        new(state.CorrelationId, state.SagaType, state.Kind, state.CurrentState, state.Status, state.CreatedAtUtc, state.UpdatedAtUtc, state.Version,
+            state.ParentSagaType, state.ParentCorrelationId);
 }

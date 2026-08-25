@@ -44,6 +44,38 @@
       </div>
     }
 
+    <!-- Sub-saga composition, both directions. Distinct from the strip above: those share this
+         correlation id, whereas a parent or child is a separate instance under its own id. The
+         "started by" link carries no badges because the pointer on this saga's own summary is just a
+         (type, id) pair — showing the parent's state would mean a second fetch for one line. -->
+    @if (d.summary.parentSagaType && d.summary.parentCorrelationId) {
+      <div class="related">
+        <span class="related-label">Started by</span>
+        <div class="related-links">
+          <a class="related-link" [routerLink]="['/sagas', d.summary.parentSagaType, d.summary.parentCorrelationId]">
+            <span class="related-type">{{ d.summary.parentSagaType }}</span>
+            <span class="muted mono related-state">{{ d.summary.parentCorrelationId }}</span>
+          </a>
+        </div>
+      </div>
+    }
+
+    @if (children().length > 0) {
+      <div class="related">
+        <span class="related-label">Started {{ children().length }} sub-saga{{ children().length === 1 ? '' : 's' }}</span>
+        <div class="related-links">
+          @for (child of children(); track child.sagaType + child.correlationId) {
+            <a class="related-link" [routerLink]="['/sagas', child.sagaType, child.correlationId]">
+              <span class="related-type">{{ child.sagaType }}</span>
+              <app-kind-badge [kind]="child.kind" />
+              <app-status-badge [status]="child.status" />
+              <span class="muted related-state">{{ child.currentState }}</span>
+            </a>
+          }
+        </div>
+      </div>
+    }
+
     @if (d.summary.status === 'Failed' || d.summary.status === 'TimedOut') {
       <div class="retry-row">
         <button type="button" [disabled]="retrying()" (click)="retry()">

@@ -52,9 +52,28 @@ public static class SagaEndpoints
         group.MapGet("/{sagaType}/{correlationId:guid}/map", GetSagaMapAsync)
         .WithName("GetSagaMap");
 
+        // The sagas this one started via StartChildAsync. Deliberately not 404-ing on an unknown
+        // parent: a saga with no children and a saga that does not exist both legitimately have an
+        // empty child list, and the caller already has GET /{sagaType}/{correlationId} to tell them
+        // apart. Children have their own correlation ids, so this is a different question from
+        // /api/correlations/{id}, which finds saga types sharing one id.
+        group.MapGet("/{sagaType}/{correlationId:guid}/children", async (string sagaType, Guid correlationId, ISagaSummaryReader reader, CancellationToken ct) =>
+            Results.Ok(await reader.FindChildrenAsync(sagaType, correlationId, ct)))
+        .WithName("GetSagaChildren");
+
         group.MapPost("/{sagaType}/{correlationId:guid}/retry", RetrySagaAsync)
         .WithName("RetrySaga");
 
+        MapCrossInstanceEndpoints(app);
+    }
+
+    /// <summary>
+    /// The two lookups that are not scoped to one saga instance, so they sit outside the
+    /// <c>/api/sagas</c> group rather than under it. Split out of <see cref="MapSagaEndpoints"/> only
+    /// for length.
+    /// </summary>
+    private static void MapCrossInstanceEndpoints(IEndpointRouteBuilder app)
+    {
         app.MapGet("/api/saga-types", async (ISagaSummaryReader reader, CancellationToken ct) => Results.Ok(await reader.GetSagaTypesAsync(ct)))
             .WithTags("Sagas")
             .WithName("ListSagaTypes")
@@ -63,7 +82,8 @@ public static class SagaEndpoints
         // Deliberately a separate top-level path rather than /api/sagas/by-correlation/{id}, which
         // would sit in the same slot as {sagaType} and rely on literal-beats-parameter precedence to
         // disambiguate. Returns every saga instance tracking this correlation id — normally one, more
-        // than one when several saga types observe the same business transaction.
+        // than one when several saga types observe the same business transaction. Note this is not the
+        // sub-saga relation: a child has its own correlation id and is found via /children instead.
         app.MapGet("/api/correlations/{correlationId:guid}", async (Guid correlationId, ISagaSummaryReader reader, CancellationToken ct) =>
             Results.Ok(await reader.FindByCorrelationIdAsync(correlationId, ct)))
             .WithTags("Sagas")

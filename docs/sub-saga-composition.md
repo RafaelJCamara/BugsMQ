@@ -1,14 +1,22 @@
 # Design: sub-saga composition
 
-**Status:** proposed, nothing built. **Author's recommendation:** build Slice 1, then re-evaluate.
+**Status: Slice 1 is built and shipped** — see the README's "Sub-saga composition: parent linkage"
+section, which is the authoritative description of what exists. Slices 2 and 3 remain proposed, and
+this file is now only about those, plus what building Slice 1 taught about them.
 
-This is a design sketch, not a record of shipped work — which is why it lives here rather than in
-`README.md`, where every section describes something that exists. If this gets built, the outcome
-belongs in the README in that same voice and this file should be deleted or reduced to a pointer.
+**One claim in the original sketch was wrong, and it bears directly on the §3.4 decision.** §3.4(a)
+said a child publishing its own domain message "works today with no engine change, once the child knows
+its parent id." It does not. `SagaContext.PublishAsync` always stamps the *publishing* saga's
+correlation id, and `SagaOrchestrator.HandleCoreAsync` correlates strictly on the inbound correlation
+id — so a child publishing "I'm done" sends it under the child's own id, where the parent never sees
+it. `CorrelateBy` is not a fallback: it is documented as a business key for dashboard search,
+explicitly not used for routing. Option (a) therefore needs an engine change too — a publish overload
+taking a target correlation id — which narrows the gap between (a) and (b) that the original
+recommendation rested on. §7.1 is re-opened on those terms below.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
-`file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit
-`f00dee3`; re-grep if they have drifted.
+`file:line` so it can be re-checked rather than trusted. Line numbers in §2 were accurate at commit
+`f00dee3` and have since drifted — re-grep rather than trusting them.
 
 ---
 
@@ -99,20 +107,34 @@ During(AwaitingChildren)
 ```
 
 Self-transition semantics are already right: one timeout covers the whole wait, and an arriving child
-does not silently extend it (`SagaOrchestrator.cs:400` — a self-transition neither cancels nor
-reschedules).
+does not silently extend it (a self-transition neither cancels nor reschedules).
+
+**Still true, but only for the parent's half.** The parent can park and be released by a message. What
+has no machinery is *the child getting a message to the parent in the first place* — see the
+correction in §3.4. So "no new engine work" describes the waiting, not the notifying, and the section
+title oversold it.
 
 ### 3.4 Notifying the parent — **OPEN DECISION**
 
-**(a) Child publishes its own domain message.** Works today with no engine change, once the child knows
-its parent id. Typed; the parent matches `When<PaymentSettled>()`. Every child must remember to do it.
+> **Corrected after building Slice 1.** Option (a) does *not* work with no engine change — see the
+> status note at the top of this file. A child cannot address its parent at all today, so (a) needs a
+> publish-with-correlation-id overload before it is even expressible. Both options now cost an engine
+> change; the choice is between which one.
+
+**(a) Child publishes its own domain message.** ~~Works today with no engine change~~ — needs a publish
+overload taking a target correlation id, which the child reads from `Saga.ParentCorrelationId` (that
+field does now exist, and is populated). Typed; the parent matches `When<PaymentSettled>()`. Every
+child must remember to do it. Note the overload is a general-purpose hole in correlation-id
+discipline: once any saga can publish under an arbitrary correlation id, nothing confines that to
+parent notification.
 
 **(b) Engine auto-publishes `ChildSagaFinished(childCorrelationId, childSagaType, status)`** to the
 parent when a child with a parent reaches a terminal status. Uniform; works for children unaware they
 are children. But it is *one CLR type*, so a parent awaiting two different child types must branch on a
 string field inside `.Then(...)` rather than on message type — against the grain of this DSL.
 
-**Recommendation:** ship (a) first; add (b) later as a safety net, not the primary path.
+~~**Recommendation:** ship (a) first; add (b) later as a safety net, not the primary path.~~ That
+recommendation was reasoning from (a) being free. It is not. **Re-decide.**
 
 ### 3.5 Compensation cascade — **OPEN DECISION, the hard one**
 
@@ -132,22 +154,31 @@ receive the request — that is Slice 3, and it is the one I would push back on.
 
 ## 4. Slices
 
-### Slice 1 — parent linkage (recommended; low risk, useful alone)
+### Slice 1 — parent linkage — **DONE**
 
-- [ ] `SagaState`: add `ParentSagaType` / `ParentCorrelationId` (`src/BugsMQ.Abstractions/Sagas/SagaState.cs`)
-- [ ] `MessageEnvelope`: add the two header name constants (`src/BugsMQ.Abstractions/Transport/MessageEnvelope.cs`)
-- [ ] `ISagaContext.StartChildAsync` + implementation in `SagaContext` (`src/BugsMQ.Core/Runtime/SagaContext.cs`)
-- [ ] `SagaOrchestrator`: read the headers and stamp the new instance, mirroring `GetSourceService`/`GetCausationId`
-- [ ] `SagaInstanceEntity` + `BugsMqDbContext`: nullable columns, index on `(ParentSagaType, ParentCorrelationId)`
-- [ ] `dotnet ef migrations add AddSagaParentLinkage --project src/BugsMQ.Persistence.EFCore.Postgres --startup-project src/BugsMQ.Dashboard.Api`
-- [ ] `ISagaSummaryReader.FindChildrenAsync(parentSagaType, parentCorrelationId)` + both providers
-- [ ] `GET /api/sagas/{sagaType}/{correlationId}/children`
-- [ ] Dashboard: extend the related-sagas strip into "started by" / "started"
-- [ ] Tests: linkage stamped through the **real** publish/receive path; children query; DSL surface
+- [x] `SagaState`: add `ParentSagaType` / `ParentCorrelationId`
+- [x] `MessageEnvelope`: the two header name constants
+- [x] `ISagaContext.StartChildAsync` + implementation in `SagaContext`
+- [x] `SagaOrchestrator`: read the headers and stamp the new instance (in `NewInstance`, extracted from
+      `HandleCoreAsync` to stay under the 60-line analyzer cap)
+- [x] `SagaInstanceEntity` + `BugsMqDbContext`: nullable columns, index on the pair
+- [x] Migration `20260825121440_AddSagaParentLinkage` — purely additive, upgrades an existing volume in place
+- [x] `ISagaSummaryReader.FindChildrenAsync` + both providers
+- [x] `GET /api/sagas/{sagaType}/{correlationId}/children`
+- [x] Dashboard: "started by" / "started" strips alongside the existing correlation-id one
+- [x] Tests: `SubSagaCompositionTests` (real publish/receive path), children query in both providers,
+      endpoint tests, Angular tests. Mutation-verified from both ends of the wire.
+- [x] Sample: `PostShipmentChoreography` starts an `InvoiceDeliverySaga`. Answers §7.3/§7.4 narrowly —
+      a demonstration was needed for the §6 live verification to be possible at all, and it was added
+      without touching `OrderSaga`, leaving the "should `OrderSaga` itself be restructured" question open.
 
 **Columns, not just `DataJson`:** `ISagaSummaryReader` is saga-type-agnostic and queries columns, so a
 tree view needs real columns. The `DataJson` blob picks the new fields up for free (additive), but that
 alone is not queryable.
+
+**One thing worth knowing before Slice 2:** `SagaSummary` gained the two fields as *required* positional
+parameters rather than defaulted ones, deliberately, so every projection site had to decide what to put
+there instead of silently defaulting to null. That is a source-breaking change to a public record.
 
 ### Slice 2 — automatic completion notification
 
@@ -169,11 +200,13 @@ alone is not queryable.
 ## 5. Failure modes — document, don't discover
 
 - **Child never starts** (nothing's `CanInitiate` matched). Parent hangs until its timeout.
-  Unpreventable at publish time; must be documented.
+  Unpreventable at publish time; must be documented. **Now pinned by a test**
+  (`AChildMessageNobodyInitiatesOn_StartsNothingAndTellsNobody`) and described in the README, so it is
+  documented behaviour rather than a surprise.
 - **Two saga types initiate on the child message** → two children, parent counts one. Wants a guard or
   a loud note. Compare the `AddSaga` duplicate-`TState` guard added in `f00dee3`
   (`src/BugsMQ.Core/ServiceCollectionExtensions.cs`), which turned a similar silent misbehaviour into a
-  startup error.
+  startup error. **Still unguarded** after Slice 1 — noted in the README, not solved.
 - **Parent times out while the child still runs** → orphaned child, still holding whatever it reserved.
 - **Parent retried from the dashboard** → children are *not* re-run; the reset replays the parent's
   own message only.
@@ -201,13 +234,25 @@ Required:
 
 ---
 
-## 7. Open questions for the next session
+## 7. Open questions
 
-1. **§3.4** — auto `ChildSagaFinished`, or child publishes its own domain message? (recommendation: the
-   latter first)
-2. **§3.5** — compensation cascade: confirm "no automatic cascade" is acceptable.
-3. Is Slice 1 alone worth shipping without a sample demonstrating it? The choreographed DSL shipped one
-   pass ahead of its sample wiring (`0c5fe38` → `a87f40e`) and that split worked well.
-4. Which sample would demonstrate this? `OrderSaga` is the reference for the *linear* shape and several
-   README sections describe its exact compensation ordering — restructuring it is a product decision
-   about what the sample is for, the same question left open for the parallel fan-out work.
+1. **§3.4 — re-opened on corrected terms.** Both options need an engine change now, not just (b): a
+   child cannot address its parent at all today. (a) costs a publish-with-correlation-id overload,
+   which is a general-purpose hole in correlation-id discipline; (b) costs one CLR message type that
+   every parent must branch on by string field. The original recommendation ("ship (a) first, it's
+   free") no longer applies as written.
+2. **§3.5** — compensation cascade: confirm "no automatic cascade" is acceptable. Unchanged, and
+   building Slice 1 gave no reason to revisit it — if anything, seeing how easily a fire-and-forget
+   child is started strengthens the argument, since a parent now has no idea how many children exist
+   or what state they reached.
+3. ~~Is Slice 1 alone worth shipping without a sample demonstrating it?~~ Settled by necessity: §6's
+   live verification requires a real parent/child pair in the running stack, so the sample wiring could
+   not be split off the way the choreographed DSL's was.
+4. **Which sample?** Partly answered. `InvoiceDeliverySaga` demonstrates it additively, off
+   `PostShipmentChoreography`. The original question — whether `OrderSaga` itself should be
+   restructured around sub-sagas — is still open and still a product decision about what the sample is
+   *for*, the same one the parallel fan-out work left open.
+5. **New:** should the parent be able to learn its child's correlation id? `StartChildAsync` returns
+   `Task`, not `Task<Guid>`, matching this design. Nothing needs the id yet — the relation is queried
+   parent-to-child via `FindChildrenAsync`, and option §3.4(a) has the child address the parent rather
+   than the reverse. Slice 2 may change that, and it is a one-line signature change if so.

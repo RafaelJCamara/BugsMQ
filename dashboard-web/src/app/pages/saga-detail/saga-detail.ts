@@ -26,6 +26,8 @@ export class SagaDetail implements OnInit, OnDestroy {
   readonly map = signal<SagaMapModel | null>(null);
   /** Other saga types tracking this same correlation id — empty for the usual one-saga case. */
   readonly related = signal<SagaSummary[]>([]);
+  /** Sagas this one started via StartChildAsync — empty unless it composes sub-sagas. */
+  readonly children = signal<SagaSummary[]>([]);
   readonly loading = signal(true);
   readonly error = signal<string | null>(null);
   readonly tab = signal<Tab>('map');
@@ -56,6 +58,7 @@ export class SagaDetail implements OnInit, OnDestroy {
           // emits SagaUpdated, never TimelineEntryAdded, across processes) — re-fetch it whole instead.
           this.loadMap();
           this.loadRelated();
+          this.loadChildren();
         }
       }),
       this.hub.timelineEntryAdded$.subscribe(({ sagaType, correlationId, entry }) => {
@@ -89,6 +92,24 @@ export class SagaDetail implements OnInit, OnDestroy {
     this.api.getTimeline(this.sagaType, this.correlationId).subscribe((entries) => this.timeline.set(entries));
     this.loadMap();
     this.loadRelated();
+    this.loadChildren();
+  }
+
+  /**
+   * The sagas this one started as sub-sagas. A separate call from loadRelated because it answers a
+   * different question: a child has its own correlation id, so it can never turn up in
+   * /api/correlations/{id}. The "started by" direction needs no call at all — the parent pointer is
+   * already on this saga's own summary.
+   *
+   * Same snapshot-not-live compromise as the related strip: a child's status changes are pushed to
+   * its own hub group, not this page's, so this refreshes when the parent itself updates. Failures
+   * are swallowed rather than blanking a detail page that is otherwise fine.
+   */
+  loadChildren(): void {
+    this.api.getChildren(this.sagaType, this.correlationId).subscribe({
+      next: (found) => this.children.set(found),
+      error: () => this.children.set([]),
+    });
   }
 
   /**

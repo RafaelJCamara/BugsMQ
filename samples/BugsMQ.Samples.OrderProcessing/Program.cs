@@ -34,9 +34,16 @@ builder.Services.AddBugsMqOpenTelemetry();
 // — which is only expressible because a saga instance is keyed by (SagaType, CorrelationId). Both
 // receive their own copy of OrderShipped: the RabbitMQ transport binds one queue per subscription to
 // a topic exchange, so a published message reaches every subscriber of that type rather than one.
+//
+// InvoiceDeliverySaga is the odd one out: it does NOT share that correlation id. It is a sub-saga
+// PostShipmentChoreography starts with ctx.StartChildAsync, so it gets a fresh id of its own plus a
+// stored pointer back to the instance that started it. Registering it here is all the wiring there
+// is — the parent publishes DeliverInvoice and this saga's CanInitiate matches it; neither type
+// references the other.
 builder.Services.AddBugsMqEngine(o => o
     .AddSaga<OrderSaga, OrderSagaState>()
-    .AddSaga<PostShipmentChoreography, PostShipmentState>());
+    .AddSaga<PostShipmentChoreography, PostShipmentState>()
+    .AddSaga<InvoiceDeliverySaga, InvoiceDeliveryState>());
 
 builder.Services.AddHostedService<InventoryParticipant>();
 builder.Services.AddHostedService<PaymentParticipant>();

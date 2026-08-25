@@ -2,6 +2,15 @@ using BugsMQ.Abstractions.Sagas;
 
 namespace BugsMQ.Abstractions.Persistence;
 
+/// <summary>
+/// Saga-type-agnostic projection of one instance, for the dashboard's list/detail views.
+/// <para>
+/// <see cref="ParentSagaType"/>/<see cref="ParentCorrelationId"/> are deliberately positional and
+/// non-optional rather than defaulted: every projection site has to decide what to put there. The
+/// same fields also ride along inside the snapshot's serialized state for free, but that blob is not
+/// queryable, so a "which sagas did this one start?" lookup needs them projected here.
+/// </para>
+/// </summary>
 public sealed record SagaSummary(
     Guid CorrelationId,
     string SagaType,
@@ -10,7 +19,9 @@ public sealed record SagaSummary(
     SagaStatus Status,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    int Version);
+    int Version,
+    string? ParentSagaType,
+    Guid? ParentCorrelationId);
 
 public sealed class SagaListFilter
 {

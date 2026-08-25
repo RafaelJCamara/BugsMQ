@@ -39,6 +39,9 @@ export interface SagaSummary {
   createdAtUtc: string;
   updatedAtUtc: string;
   version: number;
+  /** The saga that started this one via StartChildAsync; null for a root saga. */
+  parentSagaType: string | null;
+  parentCorrelationId: string | null;
 }
 
 export interface SagaDetail {

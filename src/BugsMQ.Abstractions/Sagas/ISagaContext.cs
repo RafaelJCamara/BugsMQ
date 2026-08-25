@@ -24,4 +24,24 @@ public interface ISagaContext<out TState> where TState : SagaState
     Task PublishAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull;
 
     Task SendAsync<TMessage>(string destination, TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull;
+
+    /// <summary>
+    /// Starts another saga as a step of this one: publishes <paramref name="message"/> under a
+    /// <b>fresh</b> correlation id, stamped with this instance's identity so whichever saga initiates on
+    /// it records this one as its parent.
+    /// <para>
+    /// The parent needs neither the child's state type nor its definition — this is a publish, and
+    /// whichever saga's <c>CanInitiate</c> matches becomes the child, exactly like the dashboard's retry
+    /// redrive. Two consequences worth knowing before using it: if no saga initiates on that message
+    /// type, no child is ever created and nobody is told; if two do, two children start and the parent
+    /// has no way to tell.
+    /// </para>
+    /// <para>
+    /// This does not wait. The parent moves on as soon as the publish returns, so waiting for a child is
+    /// the ordinary join — park in a state and let the child's own message release it:
+    /// <c>.TransitionTo(s =&gt; s.ChildDone ? Ready : AwaitingChild)</c>. The child learns which instance
+    /// to address from its own <c>Saga.ParentCorrelationId</c>.
+    /// </para>
+    /// </summary>
+    Task StartChildAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull;
 }

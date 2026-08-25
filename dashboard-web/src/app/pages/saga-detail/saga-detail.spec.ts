@@ -18,6 +18,8 @@ function makeDetail(overrides: Partial<SagaSummary> = {}): SagaDetailModel {
       createdAtUtc: '2026-01-01T00:00:00Z',
       updatedAtUtc: '2026-01-01T00:00:01Z',
       version: 2,
+      parentSagaType: null,
+      parentCorrelationId: null,
       ...overrides,
     },
     dataJson: null,
@@ -61,6 +63,7 @@ describe('SagaDetail', () => {
     getMap: ReturnType<typeof vi.fn>;
     retry: ReturnType<typeof vi.fn>;
     findByCorrelationId: ReturnType<typeof vi.fn>;
+    getChildren: ReturnType<typeof vi.fn>;
   };
   let hubMock: {
     sagaUpdated$: Subject<SagaSummary>;
@@ -75,6 +78,8 @@ describe('SagaDetail', () => {
     map: SagaMapModel = makeMap(),
     // What /api/correlations/{id} returns: every instance under this id, this page's own included.
     related: SagaSummary[] = [makeDetail().summary],
+    // What /children returns: the sagas this one started, each under its own correlation id.
+    children: SagaSummary[] = [],
   ) {
     apiMock = {
       get: vi.fn().mockReturnValue(of(detail)),
@@ -82,6 +87,7 @@ describe('SagaDetail', () => {
       getMap: vi.fn().mockReturnValue(of(map)),
       retry: vi.fn(),
       findByCorrelationId: vi.fn().mockReturnValue(of(related)),
+      getChildren: vi.fn().mockReturnValue(of(children)),
     };
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
@@ -253,6 +259,61 @@ describe('SagaDetail', () => {
 
     expect(fixture.componentInstance.related()).toEqual([]);
     expect(fixture.componentInstance.error()).toBeNull();
+  });
+
+  // Sub-saga composition. A child is a separate instance under its own correlation id, so neither
+  // direction can come from /api/correlations/{id}: "started" needs its own endpoint, and "started
+  // by" comes off this saga's own summary.
+  it('links to the sagas this one started', () => {
+    const child: SagaSummary = {
+      ...makeDetail().summary,
+      correlationId: 'child-1',
+      sagaType: 'InvoiceDeliverySaga',
+      currentState: 'AwaitingDelivery',
+      status: 'Running',
+      parentSagaType: 'OrderSaga',
+      parentCorrelationId: 'saga-1',
+    };
+    const fixture = setup(makeDetail(), [], makeMap(), [makeDetail().summary], [child]);
+
+    expect(apiMock.getChildren).toHaveBeenCalledWith('OrderSaga', 'saga-1');
+    expect(fixture.componentInstance.children()).toEqual([child]);
+
+    const link = fixture.nativeElement.querySelector('.related-link');
+    expect(link.getAttribute('href')).toBe('/sagas/InvoiceDeliverySaga/child-1');
+  });
+
+  it('links back to the saga that started this one', () => {
+    const fixture = setup(makeDetail({ parentSagaType: 'PostShipmentChoreography', parentCorrelationId: 'parent-9' }));
+
+    const link = fixture.nativeElement.querySelector('.related-link');
+    expect(link.getAttribute('href')).toBe('/sagas/PostShipmentChoreography/parent-9');
+    expect(link.textContent).toContain('PostShipmentChoreography');
+  });
+
+  it('shows neither relation for a root saga that started nothing', () => {
+    const fixture = setup();
+
+    expect(fixture.componentInstance.children()).toEqual([]);
+    expect(fixture.nativeElement.querySelector('.related')).toBeNull();
+  });
+
+  it('keeps the page usable when the children lookup fails', () => {
+    const fixture = setup();
+    apiMock.getChildren.mockReturnValue(throwError(() => new Error('boom')));
+    fixture.componentInstance.loadChildren();
+
+    expect(fixture.componentInstance.children()).toEqual([]);
+    expect(fixture.componentInstance.error()).toBeNull();
+  });
+
+  it('re-fetches children when a live saga update arrives', () => {
+    const fixture = setup();
+    expect(apiMock.getChildren).toHaveBeenCalledTimes(1);
+
+    hubMock.sagaUpdated$.next(fixture.componentInstance.detail()!.summary);
+
+    expect(apiMock.getChildren).toHaveBeenCalledTimes(2);
   });
 
   it('applies a live saga update when the correlation id matches', () => {

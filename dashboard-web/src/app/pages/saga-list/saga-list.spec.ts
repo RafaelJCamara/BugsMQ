@@ -17,6 +17,8 @@ function makeSummary(overrides: Partial<SagaSummary> = {}): SagaSummary {
     createdAtUtc: '2026-01-01T00:00:00Z',
     updatedAtUtc: '2026-01-01T00:00:00Z',
     version: 1,
+    parentSagaType: null,
+    parentCorrelationId: null,
     ...overrides,
   };
 }

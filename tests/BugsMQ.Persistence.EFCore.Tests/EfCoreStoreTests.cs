@@ -520,4 +520,90 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         Assert.Equal("ReserveInventory", entry.MessageType);
         Assert.Equal("bugsmq.participant.inventory.v2", entry.QueueName); // refreshed, not duplicated
     }
+
+    // Unlike SubSagaCompositionTests, these do set the parent pointer by hand — correctly so, because
+    // the subject here is the store, not the orchestrator: whether a link that exists on a TState is
+    // written to real columns and can be queried back. Whether the link ever gets set in the first
+    // place is what the header-driven tests over there are for.
+    [Fact]
+    public async Task ParentLinkage_IsWrittenToQueryableColumns_NotJustTheDataJsonBlob()
+    {
+        var parentId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+            {
+                CorrelationId = childId,
+                SagaType = "InvoiceDeliverySaga",
+                CurrentState = "Requested",
+                ParentSagaType = "PostShipmentChoreography",
+                ParentCorrelationId = parentId,
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db2 = NewContext();
+
+        // Read straight off the entity: DataJson would answer this too, but only after deserializing
+        // into a concrete TState the saga-type-agnostic reader does not have.
+        var row = await db2.SagaInstances.AsNoTracking().SingleAsync(x => x.CorrelationId == childId);
+        Assert.Equal("PostShipmentChoreography", row.ParentSagaType);
+        Assert.Equal(parentId, row.ParentCorrelationId);
+
+        var found = await new EfCoreSagaSnapshotStore<TestState>(db2).FindAsync("InvoiceDeliverySaga", childId);
+        Assert.NotNull(found);
+        Assert.Equal(parentId, found.ParentCorrelationId);
+    }
+
+    [Fact]
+    public async Task FindChildrenAsync_ReturnsOnlyTheSagasStartedByThatExactParent()
+    {
+        var parentId = Guid.NewGuid();
+        var otherParentId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaSnapshotStore<TestState>(db);
+            await store.InsertAsync(NewChild("ChildSaga", parentId, "ParentSaga"));
+            await store.InsertAsync(NewChild("OtherChildSaga", parentId, "ParentSaga"));
+            await store.InsertAsync(NewChild("ChildSaga", otherParentId, "ParentSaga"));      // same type, different parent instance
+            await store.InsertAsync(NewChild("ChildSaga", parentId, "DifferentParentSaga"));  // same id, different parent type
+            await store.InsertAsync(NewChild("RootSaga", parentCorrelationId: null, parentSagaType: null));
+        }
+
+        await using var db2 = NewContext();
+        var children = await new EfCoreSagaSummaryReader(db2).FindChildrenAsync("ParentSaga", parentId);
+
+        Assert.Equal(2, children.Count);
+        Assert.All(children, c => Assert.Equal(parentId, c.ParentCorrelationId));
+        Assert.All(children, c => Assert.Equal("ParentSaga", c.ParentSagaType));
+        Assert.Contains(children, c => string.Equals(c.SagaType, "OtherChildSaga", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FindChildrenAsync_IsEmptyForASagaThatStartedNothing()
+    {
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(NewChild("RootSaga", parentCorrelationId: null, parentSagaType: null));
+        }
+
+        await using var db2 = NewContext();
+        Assert.Empty(await new EfCoreSagaSummaryReader(db2).FindChildrenAsync("RootSaga", Guid.NewGuid()));
+    }
+
+    private static TestState NewChild(string sagaType, Guid? parentCorrelationId, string? parentSagaType) => new()
+    {
+        CorrelationId = Guid.NewGuid(),
+        SagaType = sagaType,
+        CurrentState = "Started",
+        Status = SagaStatus.Running,
+        ParentSagaType = parentSagaType,
+        ParentCorrelationId = parentCorrelationId,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+        UpdatedAtUtc = DateTimeOffset.UtcNow,
+    };
 }

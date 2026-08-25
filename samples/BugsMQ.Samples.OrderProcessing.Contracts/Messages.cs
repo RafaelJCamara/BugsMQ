@@ -28,3 +28,14 @@ public sealed record ShipmentFailed(Guid CorrelationId, string OrderId, string R
 public sealed record CustomerNotified(Guid CorrelationId, string OrderId, string Channel);
 public sealed record LoyaltyPointsAwarded(Guid CorrelationId, string OrderId, int Points);
 public sealed record InvoiceIssued(Guid CorrelationId, string OrderId, string InvoiceNumber);
+
+// --- Invoice delivery (a sub-saga) --------------------------------------------------------------
+// DeliverInvoice carries no correlation id, for the same reason OrderSubmitted doesn't: it opens a
+// saga rather than continuing one, so the engine mints the id. Here the minting is done by
+// PostShipmentChoreography's StartChildAsync, which also stamps the parent link onto the envelope —
+// so this message starts a genuinely separate instance under its own id, not another observer of the
+// order's. Everything below it stays inside that child's correlation id.
+public sealed record DeliverInvoice(string OrderId, string InvoiceNumber);
+public sealed record SendInvoiceEmail(Guid CorrelationId, string OrderId, string InvoiceNumber);
+public sealed record InvoiceEmailSent(Guid CorrelationId, string OrderId);
+public sealed record InvoiceEmailBounced(Guid CorrelationId, string OrderId, string Reason);

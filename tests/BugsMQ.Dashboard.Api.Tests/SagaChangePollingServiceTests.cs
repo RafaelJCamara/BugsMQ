@@ -57,7 +57,8 @@ public sealed class SagaChangePollingServiceTests : IDisposable
         };
 
         await _provider.GetRequiredService<ISagaSnapshotStore<DashboardTestState>>().InsertAsync(state);
-        return new SagaSummary(id, sagaType, state.Kind, state.CurrentState, state.Status, updatedAtUtc, updatedAtUtc, 0);
+        return new SagaSummary(id, sagaType, state.Kind, state.CurrentState, state.Status, updatedAtUtc, updatedAtUtc, 0,
+            state.ParentSagaType, state.ParentCorrelationId);
     }
 
     private List<string> GroupsPushedTo() => _hub.Recorder.SagaUpdates.Select(c => c.Group).ToList();

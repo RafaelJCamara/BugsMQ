@@ -33,5 +33,26 @@ internal sealed class NotificationParticipant(IMessageTransport transport, ILogg
                 logger.LogInformation("Order {OrderId}: notified customer via {Channel} (tracking {Tracking})", m.OrderId, channel, m.TrackingNumber);
                 await ReplyAsync(new CustomerNotified(received.CorrelationId, m.OrderId, channel), received, ct);
             },
+            // Serves InvoiceDeliverySaga, the sub-saga PostShipmentChoreography starts. This handler is
+            // no different from the one above — it neither knows nor cares that its correlation id
+            // belongs to a child saga rather than to the order. A participant sees messages, not trees.
+            [typeof(SendInvoiceEmail)] = async (msg, received, ct) =>
+            {
+                var m = (SendInvoiceEmail)msg;
+                await Task.Delay(Random.Shared.Next(100, 600), ct);
+
+                // A bounce rate high enough that the child's Failed ending actually shows up in the
+                // dashboard within a few minutes of running the sample, rather than being a branch
+                // nobody ever sees exercised.
+                if (Random.Shared.NextDouble() < 0.15)
+                {
+                    logger.LogWarning("Order {OrderId}: invoice {InvoiceNumber} bounced", m.OrderId, m.InvoiceNumber);
+                    await ReplyAsync(new InvoiceEmailBounced(received.CorrelationId, m.OrderId, "Mailbox unavailable"), received, ct);
+                    return;
+                }
+
+                logger.LogInformation("Order {OrderId}: invoice {InvoiceNumber} emailed", m.OrderId, m.InvoiceNumber);
+                await ReplyAsync(new InvoiceEmailSent(received.CorrelationId, m.OrderId), received, ct);
+            },
         };
 }

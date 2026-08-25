@@ -53,6 +53,12 @@ public sealed class EfCoreSagaSnapshotStore<TState>(BugsMqDbContext db) : ISagaS
         entity.DataJson = updated.DataJson;
         entity.UpdatedAtUtc = updated.UpdatedAtUtc;
         entity.Version = updated.Version;
+        // Copied even though a parent link never changes after creation, for the same reason Kind is:
+        // these columns are a projection of what DataJson already holds, and the one invariant this
+        // file exists to protect is that the two never disagree. Leaving them out of the update would
+        // make that hold only by argument rather than by construction.
+        entity.ParentSagaType = updated.ParentSagaType;
+        entity.ParentCorrelationId = updated.ParentCorrelationId;
 
         try
         {
@@ -74,6 +80,8 @@ public sealed class EfCoreSagaSnapshotStore<TState>(BugsMqDbContext db) : ISagaS
         Status = state.Status,
         Version = state.Version,
         DataJson = JsonSerializer.Serialize(state),
+        ParentSagaType = state.ParentSagaType,
+        ParentCorrelationId = state.ParentCorrelationId,
         CreatedAtUtc = state.CreatedAtUtc,
         UpdatedAtUtc = state.UpdatedAtUtc,
     };

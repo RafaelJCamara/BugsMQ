@@ -26,7 +26,8 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     private long _sequence;
     private long _timeoutId;
 
-    private sealed record StoredSnapshot(string Json, string SagaType, SagaKind Kind, string CurrentState, SagaStatus Status, int Version, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
+    private sealed record StoredSnapshot(string Json, string SagaType, SagaKind Kind, string CurrentState, SagaStatus Status, int Version,
+        string? ParentSagaType, Guid? ParentCorrelationId, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
 
     private static string Serialize<TState>(TState state) where TState : SagaState => JsonSerializer.Serialize(state);
 
@@ -66,12 +67,16 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         }
     }
 
+    // Mirrors the EF provider's real columns, parent pointer included: both stores have to answer the
+    // same saga-type-agnostic queries without deserializing Json, so whatever ISagaSummaryReader can
+    // filter on there has to be projected out here too.
     private static StoredSnapshot ToStored<TState>(TState state) where TState : SagaState =>
-        new(Serialize(state), state.SagaType, state.Kind, state.CurrentState, state.Status, state.Version, state.CreatedAtUtc, state.UpdatedAtUtc);
+        new(Serialize(state), state.SagaType, state.Kind, state.CurrentState, state.Status, state.Version,
+            state.ParentSagaType, state.ParentCorrelationId, state.CreatedAtUtc, state.UpdatedAtUtc);
 
     public Task<PagedResult<SagaSummary>> ListAsync(SagaListFilter filter, CancellationToken cancellationToken = default)
     {
-        var query = _snapshots.Select(kvp => new SagaSummary(kvp.Key.CorrelationId, kvp.Value.SagaType, kvp.Value.Kind, kvp.Value.CurrentState, kvp.Value.Status, kvp.Value.CreatedAtUtc, kvp.Value.UpdatedAtUtc, kvp.Value.Version));
+        var query = _snapshots.Select(kvp => ToSummary(kvp.Key.CorrelationId, kvp.Value));
 
         if (filter.Status is { } status)
             query = query.Where(s => s.Status == status);
@@ -109,18 +114,33 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         if (!_snapshots.TryGetValue((sagaType, correlationId), out var s))
             return Task.FromResult<SagaSummary?>(null);
 
-        return Task.FromResult<SagaSummary?>(new SagaSummary(correlationId, s.SagaType, s.Kind, s.CurrentState, s.Status, s.CreatedAtUtc, s.UpdatedAtUtc, s.Version));
+        return Task.FromResult<SagaSummary?>(ToSummary(correlationId, s));
     }
+
+    private static SagaSummary ToSummary(Guid correlationId, StoredSnapshot s) =>
+        new(correlationId, s.SagaType, s.Kind, s.CurrentState, s.Status, s.CreatedAtUtc, s.UpdatedAtUtc, s.Version, s.ParentSagaType, s.ParentCorrelationId);
 
     public Task<IReadOnlyList<SagaSummary>> FindByCorrelationIdAsync(Guid correlationId, CancellationToken cancellationToken = default)
     {
         IReadOnlyList<SagaSummary> matches = _snapshots
             .Where(kvp => kvp.Key.CorrelationId == correlationId)
             .OrderBy(kvp => kvp.Key.SagaType, StringComparer.Ordinal)
-            .Select(kvp => new SagaSummary(correlationId, kvp.Value.SagaType, kvp.Value.Kind, kvp.Value.CurrentState, kvp.Value.Status, kvp.Value.CreatedAtUtc, kvp.Value.UpdatedAtUtc, kvp.Value.Version))
+            .Select(kvp => ToSummary(correlationId, kvp.Value))
             .ToList();
 
         return Task.FromResult(matches);
+    }
+
+    public Task<IReadOnlyList<SagaSummary>> FindChildrenAsync(string parentSagaType, Guid parentCorrelationId, CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<SagaSummary> children = _snapshots
+            .Where(kvp => string.Equals(kvp.Value.ParentSagaType, parentSagaType, StringComparison.Ordinal) &&
+                          kvp.Value.ParentCorrelationId == parentCorrelationId)
+            .OrderBy(kvp => kvp.Value.CreatedAtUtc).ThenBy(kvp => kvp.Value.SagaType, StringComparer.Ordinal)
+            .Select(kvp => ToSummary(kvp.Key.CorrelationId, kvp.Value))
+            .ToList();
+
+        return Task.FromResult(children);
     }
 
     public Task<IReadOnlyList<SagaTypeInfo>> GetSagaTypesAsync(CancellationToken cancellationToken = default)

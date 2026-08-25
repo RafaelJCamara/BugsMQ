@@ -189,4 +189,51 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         Assert.Contains(entries, e => string.Equals(e.ServiceName, "InventoryService", StringComparison.Ordinal) && string.Equals(e.MessageType, "ReserveInventory", StringComparison.Ordinal));
         Assert.Contains(entries, e => string.Equals(e.ServiceName, "PaymentService", StringComparison.Ordinal) && string.Equals(e.MessageType, "ChargePayment", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// Runs against a schema built by <c>MigrateAsync</c>, so this is as much a test of the
+    /// AddSagaParentLinkage migration as of the query: if the migration failed to add the columns, the
+    /// SQLite copy of this test would still pass (it builds its schema from the model) and only this one
+    /// would catch it. That is the same gap that let a Distinct-over-record-projection query ship
+    /// working on SQLite and throwing on Npgsql.
+    /// </summary>
+    [Fact]
+    public async Task FindChildrenAsync_TranslatesAndFiltersAgainstTheMigratedSchema()
+    {
+        var parentId = Guid.NewGuid();
+        var strangerId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaSnapshotStore<TestState>(db);
+            await store.InsertAsync(Child("InvoiceDeliverySaga", "PostShipmentChoreography", parentId));
+            await store.InsertAsync(Child("InvoiceDeliverySaga", "PostShipmentChoreography", strangerId));
+            await store.InsertAsync(Child("OrderSaga", parentSagaType: null, parentCorrelationId: null));
+        }
+
+        await using var db2 = NewContext();
+        var children = await new EfCoreSagaSummaryReader(db2).FindChildrenAsync("PostShipmentChoreography", parentId);
+
+        var child = Assert.Single(children);
+        Assert.Equal("InvoiceDeliverySaga", child.SagaType);
+        Assert.Equal(parentId, child.ParentCorrelationId);
+
+        // Nullable columns really are null for a root saga rather than defaulting to an empty string,
+        // which would otherwise make every root look like a child of a saga named "".
+        var root = await new EfCoreSagaSummaryReader(db2).ListAsync(new SagaListFilter { SagaType = "OrderSaga" });
+        Assert.Null(Assert.Single(root.Items).ParentSagaType);
+    }
+
+    private static TestState Child(string sagaType, string? parentSagaType, Guid? parentCorrelationId) => new()
+    {
+        CorrelationId = Guid.NewGuid(),
+        SagaType = sagaType,
+        Kind = SagaKind.Orchestrated,
+        CurrentState = "Requested",
+        Status = SagaStatus.Running,
+        ParentSagaType = parentSagaType,
+        ParentCorrelationId = parentCorrelationId,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+        UpdatedAtUtc = DateTimeOffset.UtcNow,
+    };
 }

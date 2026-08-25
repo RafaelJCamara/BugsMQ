@@ -12,7 +12,8 @@ namespace BugsMQ.Dashboard.Api.Tests;
 public sealed class SignalRSagaChangeNotifierTests
 {
     private static SagaSummary NewSummary(string sagaType, Guid correlationId, SagaKind kind = SagaKind.Orchestrated) =>
-        new(correlationId, sagaType, kind, "AwaitingPayment", SagaStatus.Running, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 2);
+        new(correlationId, sagaType, kind, "AwaitingPayment", SagaStatus.Running, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 2,
+            ParentSagaType: null, ParentCorrelationId: null);
 
     [Fact]
     public async Task SagaUpdated_GoesToBothTheListGroupAndTheInstanceGroup()

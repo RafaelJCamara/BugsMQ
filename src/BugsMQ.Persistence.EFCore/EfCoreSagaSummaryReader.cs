@@ -30,7 +30,7 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
         var items = await ApplySort(query, filter)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
+            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version, x.ParentSagaType, x.ParentCorrelationId))
             .ToListAsync(cancellationToken);
 
         return new PagedResult<SagaSummary>(items, page, pageSize, totalCount);
@@ -51,7 +51,7 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
     {
         return db.SagaInstances.AsNoTracking()
             .Where(x => x.SagaType == sagaType && x.CorrelationId == correlationId)
-            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
+            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version, x.ParentSagaType, x.ParentCorrelationId))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -65,7 +65,14 @@ public sealed class EfCoreSagaSummaryReader(BugsMqDbContext db) : ISagaSummaryRe
         await db.SagaInstances.AsNoTracking()
             .Where(x => x.CorrelationId == correlationId)
             .OrderBy(x => x.SagaType)
-            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version))
+            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version, x.ParentSagaType, x.ParentCorrelationId))
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<SagaSummary>> FindChildrenAsync(string parentSagaType, Guid parentCorrelationId, CancellationToken cancellationToken = default) =>
+        await db.SagaInstances.AsNoTracking()
+            .Where(x => x.ParentSagaType == parentSagaType && x.ParentCorrelationId == parentCorrelationId)
+            .OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.SagaType)
+            .Select(x => new SagaSummary(x.CorrelationId, x.SagaType, x.Kind, x.CurrentState, x.Status, x.CreatedAtUtc, x.UpdatedAtUtc, x.Version, x.ParentSagaType, x.ParentCorrelationId))
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<SagaTypeInfo>> GetSagaTypesAsync(CancellationToken cancellationToken = default)

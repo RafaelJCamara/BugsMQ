@@ -12,6 +12,8 @@ function makeMap(): SagaMap {
       createdAtUtc: '2026-01-01T00:00:00.000Z',
       updatedAtUtc: '2026-01-01T00:00:31.000Z',
       version: 1,
+      parentSagaType: null,
+      parentCorrelationId: null,
     },
     nodes: [
       { id: 'OrderSaga', displayName: 'OrderSaga', kind: 'Orchestrator', status: 'failed', messagesIn: 1, messagesOut: 2 },

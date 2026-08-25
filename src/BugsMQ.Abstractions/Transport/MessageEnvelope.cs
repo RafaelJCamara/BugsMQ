@@ -12,6 +12,17 @@ public sealed record MessageEnvelope(
     /// <summary>The MessageId of the inbound message being handled when this envelope's message was published, if any — the map's causation-stitching key.</summary>
     public const string CausationIdHeader = "x-bugsmq-causation-id";
 
+    /// <summary>
+    /// Set by <c>ISagaContext.StartChildAsync</c> on a child saga's initiating message, naming the saga
+    /// type that started it. Whichever saga's <c>CanInitiate</c> matches that message reads this pair
+    /// once, at instance creation, onto <c>SagaState.ParentSagaType</c>/<c>ParentCorrelationId</c> —
+    /// there is no compile-time link between parent and child, only these two headers.
+    /// </summary>
+    public const string ParentSagaTypeHeader = "x-bugsmq-parent-saga-type";
+
+    /// <summary>The correlation id of the instance that published a child's initiating message — see <see cref="ParentSagaTypeHeader"/>.</summary>
+    public const string ParentCorrelationIdHeader = "x-bugsmq-parent-correlation-id";
+
     public static MessageEnvelope New(Guid correlationId, IReadOnlyDictionary<string, string>? headers = null) =>
         new(correlationId, Guid.NewGuid().ToString("N"), headers);
 

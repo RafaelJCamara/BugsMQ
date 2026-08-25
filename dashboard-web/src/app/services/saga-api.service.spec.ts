@@ -63,6 +63,8 @@ describe('SagaApiService', () => {
         createdAtUtc: '2026-01-01T00:00:00Z',
         updatedAtUtc: '2026-01-01T00:00:01Z',
         version: 3,
+        parentSagaType: null,
+        parentCorrelationId: null,
       },
       dataJson: null,
     };
@@ -94,6 +96,8 @@ describe('SagaApiService', () => {
         createdAtUtc: '2026-01-01T00:00:00Z',
         updatedAtUtc: '2026-01-01T00:00:01Z',
         version: 1,
+        parentSagaType: null,
+        parentCorrelationId: null,
       },
       nodes: [],
       edges: [],
@@ -122,6 +126,14 @@ describe('SagaApiService', () => {
     const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/Order%2FSaga/abc-123`);
     expect(req.request.method).toBe('GET');
     req.flush(null);
+  });
+
+  it('getChildren() requests the children endpoint', () => {
+    service.getChildren('OrderSaga', 'abc-123').subscribe();
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/api/sagas/OrderSaga/abc-123/children`);
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
   });
 
   it('findByCorrelationId() requests the correlations endpoint', () => {

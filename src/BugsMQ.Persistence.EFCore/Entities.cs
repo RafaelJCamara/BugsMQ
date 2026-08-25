@@ -23,6 +23,16 @@ public sealed class SagaInstanceEntity
 
     public string DataJson { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The instance that started this one via <c>StartChildAsync</c>, or null/null for a root saga.
+    /// Real columns rather than only riding inside <see cref="DataJson"/>: <c>ISagaSummaryReader</c> is
+    /// saga-type-agnostic and queries columns, so "which sagas did this one start?" is not answerable
+    /// from the blob without deserializing every row.
+    /// </summary>
+    public string? ParentSagaType { get; set; }
+
+    public Guid? ParentCorrelationId { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
 
     public DateTimeOffset UpdatedAtUtc { get; set; }

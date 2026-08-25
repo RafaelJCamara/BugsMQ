@@ -19,6 +19,21 @@ public abstract class SagaState
     /// <summary>Optimistic concurrency token, incremented on every persisted transition.</summary>
     public int Version { get; set; }
 
+    /// <summary>
+    /// The saga type that started this instance via <c>ISagaContext.StartChildAsync</c>, or null if
+    /// nothing did. Together with <see cref="ParentCorrelationId"/> this is the whole of a child's
+    /// link to its parent: both null means a root saga.
+    /// <para>
+    /// Set once, when the orchestrator creates the instance, from headers the parent stamped on the
+    /// child's initiating message — never on a later step, since an instance's parent cannot change.
+    /// A child has its own correlation id, so the pair identifies a different instance than this one.
+    /// </para>
+    /// </summary>
+    public string? ParentSagaType { get; set; }
+
+    /// <summary>The correlation id of the instance that started this one — see <see cref="ParentSagaType"/>.</summary>
+    public Guid? ParentCorrelationId { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
 
     public DateTimeOffset UpdatedAtUtc { get; set; }

@@ -25,8 +25,15 @@ public sealed class PostShipmentState : SagaState
 /// The sample's choreographed counterpart to <see cref="OrderSaga"/>, tracking what happens after an
 /// order ships: NotificationService, LoyaltyService, and InvoicingService each react to
 /// <see cref="OrderShipped"/> independently and publish their own event. No conductor exists — this
-/// definition sends nothing and commands nobody, it only records the fan-out and decides when the
-/// whole leg is done.
+/// definition commands none of the three, it only records the fan-out and decides when the whole leg
+/// is done.
+///
+/// <para>
+/// <b>The one thing it does publish</b> is a sub-saga: on <see cref="InvoiceIssued"/> it starts an
+/// <see cref="InvoiceDeliverySaga"/> and does not wait for it. That is not a command to any of the
+/// three services above and does not participate in the join below — see the <c>On&lt;InvoiceIssued&gt;</c>
+/// branch.
+/// </para>
 ///
 /// <para>
 /// <b>It runs under <see cref="OrderSaga"/>'s own correlation id</b>, which is the point: it is the
@@ -101,21 +108,40 @@ public sealed class PostShipmentChoreography : ChoreographedSagaDefinition<PostS
             .RecordState(PointsAwarded)
             .Finalize(CompleteWhenAllBranchesReported);
 
+        // The one branch that does more than record: issuing the invoice is not the same thing as the
+        // customer receiving it, and getting it delivered has its own retry window and its own failure
+        // ending. So it becomes a sub-saga rather than more states here — StartChildAsync publishes
+        // DeliverInvoice under a fresh correlation id, stamped with this instance's identity, and
+        // whichever saga initiates on that message records this one as its parent.
+        //
+        // This does not wait, and deliberately so: this leg is finished once all three services have
+        // reported, and an undeliverable invoice must not hold the order's fulfilment leg open. The
+        // child's outcome is visible in the dashboard under this saga's "started" relation rather than
+        // being folded back into the join above.
         On<InvoiceIssued>()
             .StartsNewInstance()
             .CorrelateBy(m => m.OrderId, s => s.OrderId)
             .Then((ctx, _) => ctx.Saga.InvoiceIssued = true)
+            .Then((ctx, m) => ctx.StartChildAsync(new DeliverInvoice(m.OrderId, m.InvoiceNumber), ctx.CancellationToken))
             .RecordState(Invoiced)
             .Finalize(CompleteWhenAllBranchesReported);
 
-        // Every non-terminal milestone needs its own timeout registration, not just the first. Timeouts
-        // are keyed on CurrentState and the orchestrator cancels the pending one whenever the saga
-        // transitions away — so registering only on the first milestone would be silently cancelled by
-        // the first branch to report, leaving a saga stalled at two-of-three to hang forever.
-        //
-        // AwaitingFulfilment is deliberately absent: it is the initial state, so nothing ever transitions
-        // into it and a timeout registered on it could never be scheduled. Shipped exists precisely so
-        // the instance-creating event has a real transition to carry one.
+        ConfigureStallTimeouts();
+    }
+
+    /// <summary>
+    /// Every non-terminal milestone needs its own timeout registration, not just the first. Timeouts are
+    /// keyed on CurrentState and the orchestrator cancels the pending one whenever the saga transitions
+    /// away — so registering only on the first milestone would be silently cancelled by the first branch
+    /// to report, leaving a saga stalled at two-of-three to hang forever.
+    /// <para>
+    /// <c>AwaitingFulfilment</c> is deliberately absent: it is the initial state, so nothing ever
+    /// transitions into it and a timeout registered on it could never be scheduled. <c>Shipped</c>
+    /// exists precisely so the instance-creating event has a real transition to carry one.
+    /// </para>
+    /// </summary>
+    private void ConfigureStallTimeouts()
+    {
         foreach (var milestone in new[] { Shipped, Notified, PointsAwarded, Invoiced })
         {
             WithTimeout(milestone, FulfilmentStallTimeout,

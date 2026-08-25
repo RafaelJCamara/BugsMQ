@@ -214,6 +214,73 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task GetChildren_ReturnsTheSagasThisOneStarted_UnderTheirOwnCorrelationIds()
+    {
+        var parent = await SeedSagaAsync("PostShipmentChoreography", "Invoiced", SagaStatus.Running, SagaKind.Choreographed);
+        var store = _factory.Services.GetRequiredService<ISagaSnapshotStore<DashboardTestState>>();
+        var now = DateTimeOffset.UtcNow;
+        var childId = Guid.NewGuid();
+
+        await store.InsertAsync(new DashboardTestState
+        {
+            CorrelationId = childId,
+            SagaType = "InvoiceDeliverySaga",
+            CurrentState = "AwaitingDelivery",
+            Status = SagaStatus.Running,
+            ParentSagaType = parent.SagaType,
+            ParentCorrelationId = parent.CorrelationId,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+
+        var response = await _client.GetAsync($"/api/sagas/{parent.SagaType}/{parent.CorrelationId}/children");
+        response.EnsureSuccessStatusCode();
+
+        var children = await response.Content.ReadFromJsonAsync<List<SagaSummary>>(JsonOptions);
+
+        Assert.NotNull(children);
+        var child = Assert.Single(children);
+        Assert.Equal("InvoiceDeliverySaga", child.SagaType);
+        Assert.Equal(childId, child.CorrelationId);
+        Assert.Equal(parent.SagaType, child.ParentSagaType);
+        Assert.Equal(parent.CorrelationId, child.ParentCorrelationId);
+
+        // The child is not reachable through /api/correlations — it holds a different id. The two
+        // endpoints answer different questions, and conflating them is exactly the mistake the
+        // dashboard's separate "started by" / "started" strips exist to avoid.
+        var byCorrelation = await _client.GetFromJsonAsync<List<SagaSummary>>($"/api/correlations/{parent.CorrelationId}", JsonOptions);
+        Assert.NotNull(byCorrelation);
+        Assert.DoesNotContain(byCorrelation, s => s.CorrelationId == childId);
+    }
+
+    [Fact]
+    public async Task GetChildren_ForASagaThatStartedNothing_ReturnsEmptyListRatherThan404()
+    {
+        // A childless saga and an unknown one both legitimately have no children; distinguishing them
+        // is what GET /{sagaType}/{correlationId} is for, so this route deliberately does not 404.
+        var parent = await SeedSagaAsync("OrderSaga", "AwaitingPayment", SagaStatus.Running);
+
+        foreach (var url in new[] { $"/api/sagas/{parent.SagaType}/{parent.CorrelationId}/children", $"/api/sagas/OrderSaga/{Guid.NewGuid()}/children" })
+        {
+            var response = await _client.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+            Assert.Empty((await response.Content.ReadFromJsonAsync<List<SagaSummary>>(JsonOptions))!);
+        }
+    }
+
+    [Fact]
+    public async Task GetSaga_ForARootSaga_ReportsNoParent()
+    {
+        var saga = await SeedSagaAsync("OrderSaga", "Submitted", SagaStatus.Running);
+
+        var detail = await _client.GetFromJsonAsync<SagaDetail>($"/api/sagas/{saga.SagaType}/{saga.CorrelationId}", JsonOptions);
+
+        Assert.NotNull(detail);
+        Assert.Null(detail.Summary.ParentSagaType);
+        Assert.Null(detail.Summary.ParentCorrelationId);
+    }
+
+    [Fact]
     public async Task FindByCorrelationId_UnknownId_ReturnsEmptyList()
     {
         var response = await _client.GetAsync($"/api/correlations/{Guid.NewGuid()}");
