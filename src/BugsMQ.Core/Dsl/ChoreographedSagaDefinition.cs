@@ -106,10 +106,14 @@ public abstract class ChoreographedSagaDefinition<TState> : ISagaDefinition<TSta
 
         var toState = step.TargetStateName ?? fromState;
         context.Saga.CurrentState = toState;
-        if (step.FinalStatus is { } finalStatus)
-            context.Saga.Status = finalStatus;
 
-        return new SagaStepOutcome(true, fromState, toState, step.FinalStatus);
+        // Resolved after the step's actions have run, so a selector sees the state they just wrote —
+        // that is what lets the last of several independent events be the one that completes the saga.
+        var finalStatus = step.ResolveFinalStatus(context.Saga);
+        if (finalStatus is { } status)
+            context.Saga.Status = status;
+
+        return new SagaStepOutcome(true, fromState, toState, finalStatus);
     }
 
     public async Task<SagaStepOutcome> HandleTimeoutAsync(ISagaContext<TState> context, string forState, CancellationToken cancellationToken)
@@ -121,9 +125,11 @@ public abstract class ChoreographedSagaDefinition<TState> : ISagaDefinition<TSta
 
         var toState = timeout.Step.TargetStateName ?? forState;
         context.Saga.CurrentState = toState;
-        if (timeout.Step.FinalStatus is { } finalStatus)
-            context.Saga.Status = finalStatus;
 
-        return new SagaStepOutcome(true, forState, toState, timeout.Step.FinalStatus);
+        var finalStatus = timeout.Step.ResolveFinalStatus(context.Saga);
+        if (finalStatus is { } status)
+            context.Saga.Status = status;
+
+        return new SagaStepOutcome(true, forState, toState, finalStatus);
     }
 }

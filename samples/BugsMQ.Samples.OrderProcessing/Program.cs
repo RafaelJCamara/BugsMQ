@@ -29,11 +29,24 @@ builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("Rabbit
 builder.Services.AddBugsMqTopologyRecording();
 builder.Services.AddBugsMqOpenTelemetry();
 
-builder.Services.AddBugsMqEngine(o => o.AddSaga<OrderSaga, OrderSagaState>());
+// Both saga kinds in one engine. They deliberately share a correlation id per order — OrderSaga
+// drives the order to shipment, PostShipmentChoreography tracks the independent fan-out that follows
+// — which is only expressible because a saga instance is keyed by (SagaType, CorrelationId). Both
+// receive their own copy of OrderShipped: the RabbitMQ transport binds one queue per subscription to
+// a topic exchange, so a published message reaches every subscriber of that type rather than one.
+builder.Services.AddBugsMqEngine(o => o
+    .AddSaga<OrderSaga, OrderSagaState>()
+    .AddSaga<PostShipmentChoreography, PostShipmentState>());
 
 builder.Services.AddHostedService<InventoryParticipant>();
 builder.Services.AddHostedService<PaymentParticipant>();
 builder.Services.AddHostedService<ShippingParticipant>();
+
+// The choreographed leg's participants: no conductor commands these, they each react to OrderShipped.
+builder.Services.AddHostedService<NotificationParticipant>();
+builder.Services.AddHostedService<LoyaltyParticipant>();
+builder.Services.AddHostedService<InvoicingParticipant>();
+
 builder.Services.AddHostedService<OrderSubmitter>();
 
 var host = builder.Build();

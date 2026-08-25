@@ -15,6 +15,24 @@ internal sealed class StepDefinition<TState> where TState : SagaState, new()
 
     public SagaStatus? FinalStatus { get; set; }
 
+    /// <summary>
+    /// Set instead of <see cref="FinalStatus"/> when whether this step is terminal depends on the saga's
+    /// accumulated state rather than on the step alone — a choreography's fan-out/join, where the last of
+    /// several independently-published events to arrive is the one that completes the saga and no single
+    /// event type is reliably "last". Returning null means "handled, but not terminal yet".
+    /// </summary>
+    public Func<TState, SagaStatus?>? FinalStatusSelector { get; set; }
+
+    /// <summary>
+    /// The single place the two forms are collapsed, so <see cref="OrchestratedSagaDefinition{TState}"/>
+    /// and <see cref="ChoreographedSagaDefinition{TState}"/> can't drift on which one wins — the same
+    /// reason <see cref="StepExecutor"/> and <see cref="CompensationRunner"/> are shared. A selector, when
+    /// present, is authoritative: the builders clear one when the other is set, so both are never
+    /// configured at once.
+    /// </summary>
+    public SagaStatus? ResolveFinalStatus(TState state) =>
+        FinalStatusSelector is not null ? FinalStatusSelector(state) : FinalStatus;
+
     public StepDefinition(Type messageType) => MessageType = messageType;
 }
 

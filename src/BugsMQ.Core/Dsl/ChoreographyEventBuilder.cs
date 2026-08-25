@@ -106,6 +106,31 @@ public sealed class ChoreographyEventBuilder<TState, TMessage>
     public ChoreographyEventBuilder<TState, TMessage> Finalize(SagaStatus status)
     {
         _step.FinalStatus = status;
+        _step.FinalStatusSelector = null;
+        return this;
+    }
+
+    /// <summary>
+    /// Terminal-or-not decided from the saga's accumulated state, evaluated after this step's actions
+    /// have run. Return null for "handled, but not terminal yet".
+    /// <para>
+    /// This is what a fan-out/join needs and the fixed-status overload above cannot express. When several
+    /// independent participants each publish their own completion event, no single event type is reliably
+    /// the last to arrive — so "the saga is done" is a property of what has accumulated
+    /// (<c>s.A &amp;&amp; s.B &amp;&amp; s.C</c>), not of which event happened to land. Registering the
+    /// same selector on each branch makes whichever one arrives last the one that completes the saga,
+    /// without any of them assuming it is last.
+    /// </para>
+    /// <para>
+    /// Deliberately not added to <see cref="EventBuilder{TState,TMessage}"/>: an orchestrated saga gates
+    /// its steps by current state, so a conditional ending is already expressible there as separate
+    /// <c>During(...)</c> branches. A choreography has no such gate, which is exactly why it needs this.
+    /// </para>
+    /// </summary>
+    public ChoreographyEventBuilder<TState, TMessage> Finalize(Func<TState, SagaStatus?> selector)
+    {
+        _step.FinalStatusSelector = selector;
+        _step.FinalStatus = null;
         return this;
     }
 
