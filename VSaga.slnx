@@ -31,6 +31,7 @@
     <Project Path="tests/VSaga.Persistence.EFCore.Tests/VSaga.Persistence.EFCore.Tests.csproj" />
     <Project Path="tests/VSaga.Testing.Tests/VSaga.Testing.Tests.csproj" />
     <Project Path="tests/VSaga.Transport.Brighter.Tests/VSaga.Transport.Brighter.Tests.csproj" />
+    <Project Path="tests/VSaga.Transport.Http.Tests/VSaga.Transport.Http.Tests.csproj" />
     <Project Path="tests/VSaga.Transport.MassTransit.Tests/VSaga.Transport.MassTransit.Tests.csproj" />
     <Project Path="tests/VSaga.Transport.RabbitMQ.Tests/VSaga.Transport.RabbitMQ.Tests.csproj" />
     <Project Path="tests/VSaga.Transport.Wolverine.Tests/VSaga.Transport.Wolverine.Tests.csproj" />

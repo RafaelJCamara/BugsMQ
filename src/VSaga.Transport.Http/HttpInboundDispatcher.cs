@@ -83,26 +83,37 @@ public sealed class HttpInboundDispatcher : IAsyncDisposable
         return collector.Captured is { } reply ? InlineDispatchResult.WithReply(reply) : InlineDispatchResult.Accepted;
     }
 
+    /// <summary>
+    /// Drains the channel and fans each item out as its own fire-and-forget dispatch rather than
+    /// awaiting one before reading the next -- correctness for a single correlation id comes entirely
+    /// from the gate in <see cref="DispatchToSubscribersAsync"/>, not from pump ordering, so an
+    /// unrelated correlation's dispatch is never held up behind a slow one.
+    /// </summary>
     private async Task PumpLoopAsync(CancellationToken cancellationToken)
     {
         try
         {
             await foreach (var received in _localDispatchChannel.Reader.ReadAllAsync(cancellationToken))
             {
-                try
-                {
-                    await DispatchToSubscribersAsync(received, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Unhandled error draining local dispatch for {MessageType} correlation {CorrelationId}",
-                        received.MessageTypeName, received.CorrelationId);
-                }
+                _ = DispatchAndLogAsync(received, cancellationToken);
             }
         }
         catch (OperationCanceledException)
         {
             // Normal shutdown.
+        }
+    }
+
+    private async Task DispatchAndLogAsync(ReceivedMessage received, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await DispatchToSubscribersAsync(received, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled error draining local dispatch for {MessageType} correlation {CorrelationId}",
+                received.MessageTypeName, received.CorrelationId);
         }
     }
 
