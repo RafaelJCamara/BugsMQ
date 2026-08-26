@@ -1,5 +1,6 @@
 using VSaga.Chaos;
 using VSaga.Core;
+using VSaga.Http;
 using VSaga.Observability;
 using VSaga.Persistence.EFCore;
 using VSaga.Samples.OrderProcessing;
@@ -75,6 +76,11 @@ switch (builder.Configuration["Transport:Provider"] ?? "RabbitMq")
 builder.Services.AddVSagaTopologyRecording();
 builder.Services.AddVSagaOpenTelemetry();
 
+// The HttpClient LoyaltyLookupSaga's .CallHttp(...) call resolves via ISagaContext.Services -- unrelated
+// to whichever IMessageTransport is active above (docs/http-based-sagas.md §1: the two HTTP halves share
+// nothing but the name), so this is registered unconditionally rather than gated on Transport:Provider.
+builder.Services.AddVSagaHttpCalls();
+
 if (role != ServiceRole.Participants)
 {
     // Both saga kinds in one engine. They deliberately share a correlation id per order — OrderSaga
@@ -96,7 +102,11 @@ if (role != ServiceRole.Participants)
         .AddSaga<PostShipmentChoreography, PostShipmentState>()
         .AddSaga<InvoiceDeliverySaga, InvoiceDeliveryState>()
         .AddSaga<InvoiceFollowUpSaga, InvoiceFollowUpState>()
-        .AddSaga<InvoiceArchivalSaga, InvoiceArchivalState>());
+        .AddSaga<InvoiceArchivalSaga, InvoiceArchivalState>()
+        // Live-verification vehicle for .CallHttp (docs/http-based-sagas.md §5) -- see
+        // LoyaltyLookupSaga's own doc comment. A second, independent subscriber of LoyaltyPointsAwarded,
+        // same ordinary fan-out PostShipmentChoreography's own subscription already relies on.
+        .AddSaga<LoyaltyLookupSaga, LoyaltyLookupSagaState>());
 
     builder.Services.AddHostedService<OrderSubmitter>();
 }
@@ -120,6 +130,29 @@ var app = builder.Build();
 // process actually speaks on every other track.
 if (string.Equals(builder.Configuration["Transport:Provider"], "Http", StringComparison.Ordinal))
     app.MapVSagaHttp();
+
+// An ordinary REST API with no vSaga awareness at all -- the live-verification target for .CallHttp
+// (docs/http-based-sagas.md §5), called by LoyaltyLookupSaga over a real HTTP round trip regardless of
+// which IMessageTransport is active. Mapped only where that saga's engine actually runs (never
+// Participants), matching where its own .CallHttp call executes.
+if (role != ServiceRole.Participants)
+{
+    app.MapPost("/loyalty/lookup", (LoyaltyLookupRequest request) =>
+    {
+        // Simulated flaky gateway, same spirit as the RabbitMQ participants' own occasional declines/
+        // failures, so a live pass exercises both of LoyaltyLookupSaga's result-shape branches for real.
+        if (Random.Shared.NextDouble() < 0.15)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        var tier = request.Points switch
+        {
+            >= 200 => "Gold",
+            >= 100 => "Silver",
+            _ => "Bronze",
+        };
+        return Results.Ok(new { tier });
+    });
+}
 
 // Schema creation is dashboard-api's job (versioned `dotnet ef` migrations against
 // VSaga.Persistence.EFCore.Postgres) — docker-compose.yml gates this service on dashboard-api's
@@ -146,4 +179,7 @@ namespace VSaga.Samples.OrderProcessing
         Sagas,
         Participants,
     }
+
+    /// <summary>Request body for the plain /loyalty/lookup REST endpoint — see its own mapping comment in this file.</summary>
+    internal sealed record LoyaltyLookupRequest(string OrderId, int Points);
 }

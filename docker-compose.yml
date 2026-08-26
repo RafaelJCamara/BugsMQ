@@ -57,6 +57,11 @@ services:
     environment:
       ConnectionStrings__VSaga: "Host=postgres;Port=5432;Database=vsaga;Username=postgres;Password=postgres"
       RabbitMq__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"
+      # Needed so LoyaltyLookupSaga's .CallHttp(...) call (docs/http-based-sagas.md §5) has a known,
+      # stable port to reach this same process's own /loyalty/lookup endpoint at
+      # http://localhost:8080 -- an environment key, not a host `ports:` mapping, so no overlay needs
+      # editing (unlike the `!override` convention `ports:` sequences require).
+      ASPNETCORE_URLS: "http://+:8080"
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,13 +1,14 @@
 # Design: HTTP-based sagas
 
-**Status: Phase 1 (§4, `VSaga.Transport.Http`) is built and live-verified. Phase 2's §5.1
-(`ISagaContext.PublishAfterCommitAsync`) is built and live-verified on the existing RabbitMQ stack, in
-isolation, per its own instruction. §5.2 (`src/VSaga.Http`, `.CallHttp(...)`), §5.3 (the Saga Map fix),
-and §5.4 (`tests/VSaga.Http.Tests`, including the mutation-tested ordering proof) are built and green.
-Only live verification (§6) against a real HTTP target remains open.** See the README's "Transport adapter: HTTP" section for the shipped
-adapter and live-verification evidence, including a genuine cross-process deadlock found only by live
-`docker compose` traffic (never by the unit suite) and its fix — a fourth instance of "caught only by a
-live run," alongside the three in §3.
+**Status: both phases are built and live-verified.** Phase 1 (§4, `VSaga.Transport.Http`) and Phase 2
+(§5.1's `ISagaContext.PublishAfterCommitAsync`, §5.2's `src/VSaga.Http`/`.CallHttp(...)`, §5.3's Saga Map
+fix, §5.4's `tests/VSaga.Http.Tests` including the mutation-tested ordering proof) are all built, tested,
+and live-verified — §5.1 in isolation on the existing RabbitMQ stack per its own instruction, then §5.2/
+§5.3 together via a new `LoyaltyLookupSaga` calling a real, no-vSaga-awareness REST endpoint added to the
+sample. See the README's "Transport adapter: HTTP" and "Outbound REST calls from a saga step: `.CallHttp`"
+sections for both features' shipped shape and live-verification evidence — Phase 1's includes a genuine
+cross-process deadlock found only by live `docker compose` traffic (never by the unit suite), a fourth
+instance of "caught only by a live run," alongside the three in §3.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit
