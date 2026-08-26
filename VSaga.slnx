@@ -8,6 +8,7 @@
     <Project Path="src/VSaga.Chaos/VSaga.Chaos.csproj" />
     <Project Path="src/VSaga.Core/VSaga.Core.csproj" />
     <Project Path="src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj" />
+    <Project Path="src/VSaga.Http/VSaga.Http.csproj" />
     <Project Path="src/VSaga.Observability/VSaga.Observability.csproj" />
     <Project Path="src/VSaga.Persistence.EFCore/VSaga.Persistence.EFCore.csproj" />
     <Project Path="src/VSaga.Persistence.EFCore.Postgres/VSaga.Persistence.EFCore.Postgres.csproj" />

@@ -1,6 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- .CallHttp (docs/http-based-sagas.md §5.2/§5.3) needs ISagaContextLogSink to write its own
+         request/reply timeline entries, the same reason VSaga.Dashboard.Api.Tests gets this for
+         SagaChangePollingService. -->
+    <InternalsVisibleTo Include="VSaga.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
   </ItemGroup>
 

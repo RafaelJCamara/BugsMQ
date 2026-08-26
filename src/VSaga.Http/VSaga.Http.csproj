@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Plain library, no ASP.NET Core framework reference (that belongs to VSaga.Transport.Http only,
+       docs/http-based-sagas.md §5.2). This is the DSL half: .CallHttp(...) makes an ordinary outbound
+       REST call from inside a step, transport-agnostic, so a RabbitMQ-hosted saga gets it for free. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\VSaga.Core\VSaga.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+</Project>
