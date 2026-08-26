@@ -7,6 +7,7 @@ COPY src/BugsMQ.Core/BugsMQ.Core.csproj src/BugsMQ.Core/
 COPY src/BugsMQ.Observability/BugsMQ.Observability.csproj src/BugsMQ.Observability/
 COPY src/BugsMQ.Persistence.EFCore/BugsMQ.Persistence.EFCore.csproj src/BugsMQ.Persistence.EFCore/
 COPY src/BugsMQ.Persistence.EFCore.Postgres/BugsMQ.Persistence.EFCore.Postgres.csproj src/BugsMQ.Persistence.EFCore.Postgres/
+COPY src/BugsMQ.Transport.Common/BugsMQ.Transport.Common.csproj src/BugsMQ.Transport.Common/
 COPY src/BugsMQ.Transport.RabbitMQ/BugsMQ.Transport.RabbitMQ.csproj src/BugsMQ.Transport.RabbitMQ/
 COPY src/BugsMQ.Dashboard.Api/BugsMQ.Dashboard.Api.csproj src/BugsMQ.Dashboard.Api/
 RUN dotnet restore src/BugsMQ.Dashboard.Api/BugsMQ.Dashboard.Api.csproj

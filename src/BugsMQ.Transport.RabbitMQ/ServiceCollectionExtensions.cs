@@ -1,4 +1,5 @@
 using BugsMQ.Abstractions.Transport;
+using BugsMQ.Transport.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 

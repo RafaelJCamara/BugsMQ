@@ -13,6 +13,7 @@
     <Project Path="src/BugsMQ.Persistence.EFCore.Postgres/BugsMQ.Persistence.EFCore.Postgres.csproj" />
     <Project Path="src/BugsMQ.Persistence.InMemory/BugsMQ.Persistence.InMemory.csproj" />
     <Project Path="src/BugsMQ.Testing/BugsMQ.Testing.csproj" />
+    <Project Path="src/BugsMQ.Transport.Common/BugsMQ.Transport.Common.csproj" />
     <Project Path="src/BugsMQ.Transport.InMemory/BugsMQ.Transport.InMemory.csproj" />
     <Project Path="src/BugsMQ.Transport.RabbitMQ/BugsMQ.Transport.RabbitMQ.csproj" />
   </Folder>

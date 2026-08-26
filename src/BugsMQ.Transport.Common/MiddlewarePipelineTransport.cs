@@ -1,12 +1,14 @@
 using BugsMQ.Abstractions.Transport;
 
-namespace BugsMQ.Transport.RabbitMQ;
+namespace BugsMQ.Transport.Common;
 
 /// <summary>
 /// Wraps a concrete transport in the outbound/inbound middleware pipeline. Core only ever depends on
 /// <see cref="IMessageTransport"/>, never on this type directly — v1 registers zero middlewares (pure
 /// pass-through), but the seam exists now so the future BugsMQ.Chaos package can add fault-injection
-/// middlewares without touching Core, Abstractions, or this transport.
+/// middlewares without touching Core, Abstractions, or any concrete transport. Lives here rather than
+/// in a specific transport project so every adapter (RabbitMQ, Wolverine, MassTransit, ...) can share
+/// it without depending on a sibling adapter.
 /// </summary>
 public sealed class MiddlewarePipelineTransport(
     IMessageTransport inner,

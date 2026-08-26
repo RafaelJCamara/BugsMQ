@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BugsMQ.Abstractions\BugsMQ.Abstractions.csproj" />
+    <ProjectReference Include="..\BugsMQ.Transport.Common\BugsMQ.Transport.Common.csproj" />
   </ItemGroup>
 
   <ItemGroup>
