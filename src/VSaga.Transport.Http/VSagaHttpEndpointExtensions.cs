@@ -39,7 +39,15 @@ public static class VSagaHttpEndpointExtensions
         var headers = ExtractVSagaHeaders(context.Request.Headers);
         var received = new ReceivedMessage(messageTypeName, correlationId, messageId, body, headers, NoOpAckContext.Instance);
 
-        var result = await dispatcher.DispatchInlineAsync(received, cancellationToken);
+        // CancellationToken.None, not the request's RequestAborted -- exactly RabbitMqTransport's own
+        // choice for the same call (DispatchReceivedAsync passes CancellationToken.None to the handler).
+        // The handler's own outbound publishes (e.g. OrderShipped's fan-out back to the saga host) run
+        // their own independent HTTP round trips with their own RequestTimeout-bound token; tying them
+        // to *this* inbound connection's lifetime meant a client-side timeout, a proxy closing the
+        // connection, or Kestrel's own keep-alive recycling could tear down a nested outbound call that
+        // has nothing to do with the original request -- caught live: ~90% of ShipOrder handling failed
+        // with a cancelled-socket exception on the nested OrderShipped POST until this was fixed.
+        var result = await dispatcher.DispatchInlineAsync(received, CancellationToken.None);
 
         if (result.Reply is { } reply)
         {

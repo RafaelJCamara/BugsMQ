@@ -1,8 +1,10 @@
 # Design: HTTP-based sagas
 
-**Status: nothing here is built.** This is a design sketch for work that does not exist yet, in the
-sense the README's "Proposed work" paragraph means it. No `VSaga.Transport.Http`, no `VSaga.Http`, no
-`.CallHttp(...)`, no `PublishAfterCommitAsync` — every one of those names below is a proposal.
+**Status: Phase 1 (§4, `VSaga.Transport.Http`) is built and live-verified; Phase 2 (§5, `VSaga.Http` /
+`.CallHttp(...)` / `PublishAfterCommitAsync`) remains a proposal.** See the README's "Transport adapter:
+HTTP" section for the shipped adapter and live-verification evidence, including a genuine cross-process
+deadlock found only by live `docker compose` traffic (never by the unit suite) and its fix — a fourth
+instance of "caught only by a live run," alongside the three in §3.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit
@@ -275,6 +277,19 @@ them is the whole §3.1 answer:
   since a dispatch returning *is* `HandleAsync` completing.
 
 Both paths need §3.3a's dispatch-level catch.
+
+**§4.4a (found live, not anticipated in this design): a fan-out reply that routes back to its own
+originating service can deadlock that service's gate against itself.** `OrderShipped` has to reach both
+its local participants and back to the saga host (this section's own fan-out example) — but when the
+saga host's own dispatch (say, handling `PaymentCharged`) is still holding its correlation gate while
+awaiting `ShipOrder`'s HTTP response, and the participant's reply to `ShipOrder` is `OrderShipped`
+routing back to that same saga host, the inbound `OrderShipped` request cannot acquire the very gate the
+outbound `ShipOrder` call is waiting behind — a genuine cross-process circular wait, resolved only by
+`ShipOrder`'s own `RequestTimeout` expiring. Live traffic showed this on effectively every order that
+reached shipping. Fixed by bounding the inline path's gate acquisition (`InlineGateAcquireTimeout`, 5s
+default) and falling back to the same deferred (enqueue-to-pump) path a reply already uses on timeout —
+lossless, just delayed, and self-healing once the holder's own step finishes. See README.md's Transport
+adapter: HTTP section for the live evidence.
 
 Ack model, with no broker underneath: `AckAsync` → drop; `NackAsync(requeue: true)` → re-enqueue;
 `NackAsync(requeue: false)` → log at error and drop. **No `IHttpDeadLetterSink` abstraction** — an

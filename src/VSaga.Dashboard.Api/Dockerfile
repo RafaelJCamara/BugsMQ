@@ -9,6 +9,7 @@ COPY src/VSaga.Persistence.EFCore/VSaga.Persistence.EFCore.csproj src/VSaga.Pers
 COPY src/VSaga.Persistence.EFCore.Postgres/VSaga.Persistence.EFCore.Postgres.csproj src/VSaga.Persistence.EFCore.Postgres/
 COPY src/VSaga.Transport.Common/VSaga.Transport.Common.csproj src/VSaga.Transport.Common/
 COPY src/VSaga.Transport.RabbitMQ/VSaga.Transport.RabbitMQ.csproj src/VSaga.Transport.RabbitMQ/
+COPY src/VSaga.Transport.Http/VSaga.Transport.Http.csproj src/VSaga.Transport.Http/
 COPY src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj src/VSaga.Dashboard.Api/
 RUN dotnet restore src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj
 

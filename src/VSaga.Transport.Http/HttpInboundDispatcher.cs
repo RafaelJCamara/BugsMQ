@@ -16,8 +16,11 @@ namespace VSaga.Transport.Http;
 /// </para>
 /// <list type="bullet">
 /// <item><see cref="DispatchInlineAsync"/> -- a genuine inbound HTTP request. Dispatched immediately,
-/// holding the gate, because the handler's reply has to be captured before the response is
-/// written.</item>
+/// holding the gate, because the handler's reply has to be captured before the response is written --
+/// unless the gate can't be acquired within <see cref="InlineGateAcquireTimeout"/>, in which case it
+/// falls back to the deferred path below rather than blocking the connection for the full
+/// RequestTimeout (found live: a fan-out reply that routes back to its own originating service can
+/// otherwise deadlock that service's gate against itself).</item>
 /// <item><see cref="EnqueueLocalDispatch"/> -- everything else that resolves to a local subscriber: a
 /// same-process PublishAsync/PublishRawAsync (including §3.3a's redelivery, which runs from *inside*
 /// an already-gated dispatch) and a 200 reply to our own outbound POST. Never dispatched inline --
@@ -65,19 +68,45 @@ public sealed class HttpInboundDispatcher : IAsyncDisposable
     public void EnqueueLocalDispatch(ReceivedMessage received) =>
         _localDispatchChannel.Writer.TryWrite(received);
 
+    /// <summary>
+    /// Bound on acquiring the correlation gate for a genuine inbound request before giving up and
+    /// deferring to the pump instead of continuing to block the HTTP connection. Found live: a fan-out
+    /// reply that routes back to its own originating service (e.g. OrderShipped reaching both its local
+    /// participants and back to the saga host) can deadlock that service's own gate against itself --
+    /// the saga's dispatch holds the gate while awaiting ShipOrder's response, and Participants can't
+    /// finish answering ShipOrder until its own nested OrderShipped POST back to the saga host is
+    /// accepted, which needs the very gate the saga is still holding. Deferring after a short bound
+    /// breaks the cycle losslessly (202 now, dispatched once the gate frees) instead of blocking for
+    /// the full RequestTimeout.
+    /// </summary>
+    private static readonly TimeSpan InlineGateAcquireTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>The one inline path: a genuine inbound HTTP request, dispatched immediately under an ambient reply collector so a synchronous reply can be captured before the caller's response is written.</summary>
     public async Task<InlineDispatchResult> DispatchInlineAsync(ReceivedMessage received, CancellationToken cancellationToken)
     {
+        var gate = _correlationGates.GetOrAdd(received.CorrelationId, static _ => new SemaphoreSlim(1, 1));
+        var acquired = await gate.WaitAsync(InlineGateAcquireTimeout, cancellationToken);
+
+        if (!acquired)
+        {
+            _logger.LogWarning(
+                "Could not acquire the dispatch gate for correlation {CorrelationId} within {Timeout} -- deferring {MessageType} to the local dispatch queue instead of blocking this request",
+                received.CorrelationId, InlineGateAcquireTimeout, received.MessageTypeName);
+            EnqueueLocalDispatch(received);
+            return InlineDispatchResult.Accepted;
+        }
+
         var collector = new SyncReplyCollector();
         SyncReplyCollectorAccessor.Current = collector;
         try
         {
-            await DispatchToSubscribersAsync(received, cancellationToken);
+            await RunSubscribersAsync(received, cancellationToken);
         }
         finally
         {
             collector.Seal();
             SyncReplyCollectorAccessor.Current = null;
+            ReleaseGate(received.CorrelationId, gate);
         }
 
         return collector.Captured is { } reply ? InlineDispatchResult.WithReply(reply) : InlineDispatchResult.Accepted;
@@ -129,32 +158,43 @@ public sealed class HttpInboundDispatcher : IAsyncDisposable
         await gate.WaitAsync(cancellationToken);
         try
         {
-            foreach (var subscriber in _subscribers.Values)
-            {
-                if (!MatchesType(subscriber.Subscription, received.MessageTypeName))
-                    continue;
-
-                try
-                {
-                    await subscriber.Handler(received, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Unhandled error dispatching {MessageType} to consumer {ConsumerName} for correlation {CorrelationId}",
-                        received.MessageTypeName, subscriber.Subscription.ConsumerName, received.CorrelationId);
-                }
-            }
+            await RunSubscribersAsync(received, cancellationToken);
         }
         finally
         {
-            gate.Release();
-
-            // Best-effort cleanup: only removes the entry if it's uncontended at this exact moment,
-            // which is safe either way -- see the type's remarks in docs/http-based-sagas.md §4.4 for
-            // why a benign TOCTOU race here can't strand a waiter (an uncontended semaphore has none).
-            if (gate.CurrentCount == 1)
-                _correlationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(received.CorrelationId, gate));
+            ReleaseGate(received.CorrelationId, gate);
         }
+    }
+
+    /// <summary>Invokes every matching subscriber's handler in turn, each independently caught and logged -- mirroring RabbitMqTransport's dispatch-level catch (log + drop rather than propagate) so one failing subscriber can't take down a sibling's fan-out delivery of the same message, exactly as if each had its own broker-bound queue. Assumes the caller already holds this correlation's gate.</summary>
+    private async Task RunSubscribersAsync(ReceivedMessage received, CancellationToken cancellationToken)
+    {
+        foreach (var subscriber in _subscribers.Values)
+        {
+            if (!MatchesType(subscriber.Subscription, received.MessageTypeName))
+                continue;
+
+            try
+            {
+                await subscriber.Handler(received, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unhandled error dispatching {MessageType} to consumer {ConsumerName} for correlation {CorrelationId}",
+                    received.MessageTypeName, subscriber.Subscription.ConsumerName, received.CorrelationId);
+            }
+        }
+    }
+
+    private void ReleaseGate(Guid correlationId, SemaphoreSlim gate)
+    {
+        gate.Release();
+
+        // Best-effort cleanup: only removes the entry if it's uncontended at this exact moment, which
+        // is safe either way -- see the type's remarks in docs/http-based-sagas.md §4.4 for why a
+        // benign TOCTOU race here can't strand a waiter (an uncontended semaphore has none).
+        if (gate.CurrentCount == 1)
+            _correlationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(correlationId, gate));
     }
 
     private static bool MatchesType(TransportSubscription subscription, string messageTypeName) =>

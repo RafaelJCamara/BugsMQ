@@ -23,6 +23,7 @@ src/
   VSaga.Persistence.InMemory     In-memory store implementations (dev/test)
   VSaga.Testing                  SagaTestHarness for unit-testing saga definitions
   VSaga.Transport.Common         Shared IMessageTransport decorator (MiddlewarePipelineTransport)
+  VSaga.Transport.Http           IMessageTransport over plain HTTP, no broker (docs/http-based-sagas.md)
   VSaga.Transport.InMemory       In-memory IMessageTransport (dev/test)
   VSaga.Transport.RabbitMQ       Real IMessageTransport over RabbitMQ.Client
   VSaga.Transport.Wolverine      IMessageTransport over WolverineFx.RabbitMQ
@@ -59,7 +60,7 @@ the four adapters via a dedicated docker-compose overlay per adapter (`docker-co
 `.masstransit.yml`, `.brighter.yml` — RabbitMQ needs none, it's the default).
 
 **The original v1 roadmap note is now fully closed.** All four items it deferred are built: additional
-transport adapters (see the three "Transport adapter: ..." sections below — MassTransit and Wolverine
+transport adapters (see the four "Transport adapter: ..." sections below — MassTransit and Wolverine
 were the two the note named, Brighter shipped alongside them), parallel/fan-out saga steps ("Parallel
 fan-out and join" below), and sub-saga composition: a parent can start a child, the relationship is
 persisted and queryable ("Sub-saga composition: parent linkage" below), a child can report back to a
@@ -72,14 +73,16 @@ polling service tests". Nothing from that original note remains deliberately out
 **Proposed work.** Every section of this README describes something that exists. Designs for work that
 does *not* exist yet live under `docs/` instead, so the two are never confused.
 
-[`docs/http-based-sagas.md`](docs/http-based-sagas.md) is the one open proposal: HTTP-based sagas, in
-two independent halves — an `IMessageTransport` adapter that moves messages between vSaga services over
-HTTP with no broker at all, and a transport-agnostic `.CallHttp(...)` step that lets any saga call a
-plain REST API and map its response into a saga message. Nothing in it is built. Its §3 is the part to
-read first: three constraints found by tracing the engine, two of which killed an earlier draft of the
-design outright — including a third instance of this repo's recurring "header the orchestrator never
-actually reads back" scar, which here would cause infinite redelivery rather than a merely wrong
-dashboard.
+[`docs/http-based-sagas.md`](docs/http-based-sagas.md) covers HTTP-based sagas, in two independent
+halves — an `IMessageTransport` adapter that moves messages between vSaga services over HTTP with no
+broker at all, and a transport-agnostic `.CallHttp(...)` step that lets any saga call a plain REST API
+and map its response into a saga message. The first half is built and live-verified; see "Transport
+adapter: HTTP" below. The second remains an open proposal. Its §3 is the part to read first: three
+constraints found by tracing the engine, two of which killed an earlier draft of the design outright —
+including a third instance of this repo's recurring "header the orchestrator never actually reads back"
+scar, which here would cause infinite redelivery rather than a merely wrong dashboard. Live verification
+of the first half found a fourth instance of that same scar-class: a cross-process deadlock no unit test
+caught.
 
 [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) covered the whole of sub-saga
 composition and has no open work left: its last piece — whether a parent's compensation cascades into
@@ -91,7 +94,7 @@ race conditions it didn't anticipate at all.
 
 Chaos-engineering transport middleware, formerly listed here as a proposal, is implemented; see
 "Chaos-engineering transport middleware" below. Additional transport adapters — the last genuinely open
-item from the original v1 roadmap note — are also implemented; see the three "Transport adapter: ..."
+item from the original v1 roadmap note — are also implemented; see the four "Transport adapter: ..."
 sections below.
 
 ## Production-hardening pass (this commit)
@@ -134,7 +137,10 @@ applied cleanly, auth and health checks exercised over HTTP):
 
 - **RabbitMQ publisher confirms** — publishes now enable `PublisherConfirmationsEnabled`/
   `PublisherConfirmationTrackingEnabled` and `mandatory: true`, so a broker-side nack or an
-  unroutable message throws `MessageTransportPublishException` instead of vanishing silently.
+  unroutable message throws `MessageTransportPublishException` instead of vanishing silently. This is
+  not a RabbitMQ-only property of this codebase: the HTTP transport (see "Transport adapter: HTTP"
+  below) detects it too, at higher fidelity than the Wolverine and Brighter adapters, whose own tests
+  assert the verified *absence* of an unroutable signal in those packages.
 
 - **Concurrency-safe timeout claiming** — `EfCoreSagaTimeoutStore.ClaimDueAsync` now uses an
   atomic `UPDATE ... WHERE ... FOR UPDATE SKIP LOCKED ... RETURNING` on Postgres (verified under
@@ -1685,6 +1691,94 @@ instead of replacing them — without it, this overlay would also try to bind `d
 original host ports (5433/5672/15672/5080) alongside its own remapped ones, exactly the collision it
 exists to avoid. `docker-compose.wolverine.yml` and `docker-compose.masstransit.yml` were written without
 the tag and had the identical latent bug; both were fixed to match during integration.
+
+## Transport adapter: HTTP
+
+`VSaga.Transport.Http` implements `IMessageTransport` over plain HTTP with **no broker at all** —
+Phase 1 of [`docs/http-based-sagas.md`](docs/http-based-sagas.md), whose §3 traces three engine
+constraints an obvious implementation would have gotten wrong, and whose live-verification pass found a
+fourth. `PublishAsync`/`SendAsync` POST a header-based wire format (`x-vsaga-message-type`,
+`-correlation-id`, `-message-id`, plus the four `MessageEnvelope` headers) to configured peer endpoints;
+a `200` response with that same header set *is* the reply, fed back into whichever local subscriber its
+own type resolves to. `src/VSaga.Transport.Http/HttpMessageTransport.cs` and `HttpInboundDispatcher.cs`
+are the whole adapter; `ServiceCollectionExtensions.AddVSagaHttp` wraps it in the same
+`MiddlewarePipelineTransport` every other adapter shares.
+
+**Two mechanisms carry the whole design, both driven by `HttpInboundDispatcher`:**
+
+- *A per-correlation dispatch gate* — every local dispatch (a genuine inbound request, a same-process
+  publish, or a captured reply) serializes against every other dispatch for the same correlation id, so
+  a reply can never re-enter a saga while its own publishing step is still persisting.
+- *An ambient (`AsyncLocal`) `SyncReplyCollector`*, installed only around a genuine inbound request, that
+  captures a handler's own publish as that request's synchronous reply exactly when the publish resolves
+  to **no destination** — never by matching correlation id, which this repo's own `OrderSaga` sample
+  breaks (`ShipOrder` is published under the saga's own correlation id from inside a reply handler, and
+  has a real route, so it must go out as a normal POST, not be swallowed as that handler's reply).
+
+**Found live, not by the unit suite: a fan-out reply that routes back to its own originating service can
+deadlock that service's gate against itself.** `OrderShipped` has to reach both its three local
+choreography participants *and* back to the saga host (§4.3's fan-out routing) — so when the saga host's
+own dispatch (handling `PaymentCharged`, the second of two parallel branches) is still holding its
+correlation gate while awaiting `ShipOrder`'s HTTP response, and the participant's reply to `ShipOrder`
+is `OrderShipped` routing back to that same saga host, the inbound `OrderShipped` request cannot acquire
+the very gate the outbound `ShipOrder` call is blocked behind. A genuine cross-process circular wait,
+breakable only by a timeout — live traffic hit this on effectively every order that reached shipping,
+each one blocking for the full 30s `RequestTimeout` before failing outright. Fixed by bounding the
+inline path's own gate acquisition (`InlineGateAcquireTimeout`, 5s default,
+`HttpInboundDispatcher.DispatchInlineAsync`) and falling back — on timeout only — to the same
+deferred-to-the-pump path a captured reply already uses: `202` now, dispatched once the gate frees,
+lossless rather than a 30-second block. This is the fourth instance in this repo of a defect "caught
+only by a live run, never by tests that hand-built the objects under test" (§3.3b's own words about the
+third).
+
+**Live-verified**, project name `vsaga-http`, `docker compose -p vsaga-http -f docker-compose.yml -f
+docker-compose.http.yml up -d --build`. `order-processing` (Role=Sagas) and a new
+`order-processing-participants` (Role=Participants) container split the one sample image in two — see
+docker-compose.http.yml's own comments for why local subscriptions counting as routes (§3.3a) forced
+this rather than a same-process run. Brought up cold; postgres/rabbitmq/dashboard-api healthy within
+seconds, both order-processing containers started immediately after.
+
+- **The broker is out of the message path, by traffic, not absence** — `rabbitmq` stays in the compose
+  stack (`dashboard-api`'s own health check needs it) but with dozens of orders processed end to end,
+  its management API reports `GET /api/queues` → `[]` and `GET /api/overview`'s `message_stats` → `{}`:
+  zero queues ever declared, zero messages ever published or delivered, for the whole run.
+- **The Saga Map stitches request→reply correctly over the HTTP hop.** A completed order's map
+  (`GET /api/sagas/OrderSaga/{id}/map`) shows real service nodes — `OrderSubmitter`, `InventoryService`,
+  `PaymentService`, `ShippingService` — each with a real edge back to `OrderSaga`, not
+  `unresolved:{MessageType}`: proof both that `x-vsaga-source-service`/`x-vsaga-causation-id` survived
+  the HTTP hop (the exact pair §3.3b and the earlier `CausationId` story already broke on) and that the
+  participants container's own topology recording is registered (`AddVSagaEfCore` +
+  `AddVSagaTopologyRecording`, both roles, per docker-compose.http.yml's own note).
+- **Manual retry works over this transport.** A `Failed` `OrderSaga` instance, redriven via
+  `POST /api/sagas/OrderSaga/{id}/retry` (`202`), completed successfully on replay — proving
+  `VSaga.Dashboard.Api`'s wildcard `Http:Routes:"*"` route (its own fix, below) actually reaches the
+  saga host, not just that the endpoint returns a status code.
+- **After the deadlock fix, order outcomes matched the sample's own built-in failure rates**: of a
+  30-order sample, 20 `Completed`, 9 `Failed` (card declines / stock-outs / carrier rejections), 1
+  `TimedOut` — the same shape as every other transport's live pass, not a transport-specific skew.
+- **Not re-run this pass**: the chaos overlay (`docker-compose.chaos.yml`) against this track. Nothing
+  in the chaos-fault injection path is HTTP-specific (`MiddlewarePipelineTransport` wraps `HttpMessageTransport`
+  identically to every other adapter), but it hasn't been independently live-verified over HTTP yet —
+  noted here rather than silently assumed.
+
+**`VSaga.Dashboard.Api` is now transport-switchable, not unconditionally RabbitMQ.** Same
+`Transport:Provider` switch as the sample; the `Http` case binds a single wildcard route
+(`Http:Routes:"*"` in `ConfigHttpRouteTable`) to the saga host, since `/retry`'s `PublishRawAsync` never
+knows its message type ahead of time and — unlike the sample's own per-command routing — has no fixed
+universe of types to enumerate. This was a pre-existing gap (`/retry` already misbehaved on Wolverine
+and MassTransit, whose wire formats differ from the RabbitMQ one it was hardcoded to) that HTTP is only
+the first configuration to fix, not the first to have. Making the registration conditional had a second
+effect for free: `RabbitMqHealthCheck` already returns `Healthy("No message broker configured.")` when
+`RabbitMqConnectionManager` isn't registered, so the `/health` endpoint stopped being unconditionally
+RabbitMQ-shaped with no change to the health check registration itself.
+
+**Known, deliberate limitations, not defects:** the local-dispatch channel is in-process and not
+durable — a crash between an HTTP response and its dispatch loses that reply, covered by the saga's own
+state timeout, the same safety net that already covers a lost broker message. Sync request/response
+serializes what was parallel fan-out over every other transport (`ReserveInventory`/`ChargePayment`
+become two blocking round trips, not two fire-and-forget publishes). Both are inherent to the
+synchronous-request/response delivery model this phase deliberately chose (see the design doc's §1 and
+§7), not gaps in this implementation of it.
 
 ## Getting started
 
