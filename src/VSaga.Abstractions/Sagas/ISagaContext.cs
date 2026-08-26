@@ -66,4 +66,30 @@ public interface ISagaContext<out TState> where TState : SagaState
     /// </para>
     /// </summary>
     Task NotifyParentAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull;
+
+    /// <summary>
+    /// Opt-in variant of <see cref="PublishAsync{TMessage}"/> that defers the publish until after this
+    /// step's own persist has committed, and runs every deferred publish queued within one step strictly
+    /// in the order queued — never concurrently.
+    /// <para>
+    /// Use this instead of <see cref="PublishAsync{TMessage}"/> when the message being published is
+    /// itself the mapped result of a synchronous call this step already made (see <c>VSaga.Http</c>'s
+    /// <c>.CallHttp(...)</c>) — publishing it immediately would let its own reply re-enter this saga
+    /// instance before this step's optimistic-concurrency check has committed, and one of the two writers
+    /// silently loses.
+    /// </para>
+    /// <para>
+    /// Deliberately opt-in, not what every <see cref="PublishAsync{TMessage}"/> call does by default: a
+    /// deferred publish that fails has nowhere safe to go, since the step has already committed. A drain
+    /// failure is caught, logged, and recorded on the timeline rather than retried or thrown — the saga
+    /// is left <c>Running</c> for its own state timeout to rescue.
+    /// </para>
+    /// <para>
+    /// The default implementation delegates to <see cref="PublishAsync{TMessage}"/>, so any external
+    /// <see cref="ISagaContext{TState}"/> implementation gets the ordinary, non-deferred behavior for
+    /// free — <c>SagaContext</c>, the engine's only implementer, is the one that actually defers.
+    /// </para>
+    /// </summary>
+    Task PublishAfterCommitAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull =>
+        PublishAsync(message, cancellationToken);
 }

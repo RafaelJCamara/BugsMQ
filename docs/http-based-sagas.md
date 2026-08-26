@@ -1,10 +1,12 @@
 # Design: HTTP-based sagas
 
-**Status: Phase 1 (§4, `VSaga.Transport.Http`) is built and live-verified; Phase 2 (§5, `VSaga.Http` /
-`.CallHttp(...)` / `PublishAfterCommitAsync`) remains a proposal.** See the README's "Transport adapter:
-HTTP" section for the shipped adapter and live-verification evidence, including a genuine cross-process
-deadlock found only by live `docker compose` traffic (never by the unit suite) and its fix — a fourth
-instance of "caught only by a live run," alongside the three in §3.
+**Status: Phase 1 (§4, `VSaga.Transport.Http`) is built and live-verified. Phase 2's §5.1
+(`ISagaContext.PublishAfterCommitAsync`) is built and live-verified on the existing RabbitMQ stack, in
+isolation, per its own instruction; §5.2–§5.4 (`VSaga.Http` / `.CallHttp(...)` / the Saga Map fix / its
+own tests) remain a proposal.** See the README's "Transport adapter: HTTP" section for the shipped
+adapter and live-verification evidence, including a genuine cross-process deadlock found only by live
+`docker compose` traffic (never by the unit suite) and its fix — a fourth instance of "caught only by a
+live run," alongside the three in §3.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit

@@ -414,7 +414,7 @@ public sealed class SagaOrchestrator<TState>(
         VSagaDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
         activity?.SetTag(VSagaDiagnostics.TagToState, outcome.ToState);
 
-        await HandleStepSuccessAsync(state, outcome, correlationId, fromState, messageTypeName, messageId, isNew, expectedVersion, activity, cancellationToken);
+        await HandleStepSuccessAsync(state, outcome, correlationId, fromState, messageTypeName, messageId, isNew, expectedVersion, activity, context, cancellationToken);
     }
 
     private async Task HandleStepFailureAsync(TState state, Exception ex, Guid correlationId, string fromState, object message,
@@ -440,7 +440,7 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     private async Task HandleStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
-        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, CancellationToken cancellationToken)
+        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
     {
         if (!outcome.WasHandled)
         {
@@ -470,6 +470,8 @@ public sealed class SagaOrchestrator<TState>(
 
         await PersistAsync(state, isNew, expectedVersion, cancellationToken);
 
+        await DrainDeferredPublishesAsync(correlationId, context, cancellationToken);
+
         if (isNew)
             VSagaDiagnostics.SagasStarted.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
@@ -484,6 +486,35 @@ public sealed class SagaOrchestrator<TState>(
         }
 
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs every message queued via ctx.PublishAfterCommitAsync during this step, strictly in the order
+    /// queued and one at a time — never Task.WhenAll, the same reason OrderSaga's own compensation
+    /// publishes are sequential (a shared DbContext behind this saga's event log is only ever safe to
+    /// use one operation at a time). Only ever called after this step's own PersistAsync has already
+    /// committed, so a publish failing here has nowhere safe to go: unlike a publish failing inside the
+    /// step itself (which fails the whole step), this is caught, logged, and recorded on the timeline
+    /// instead of thrown, and the saga is left Running for its own state timeout to rescue rather than
+    /// being silently discarded by the redelivery dedupe check (§3.1 of docs/http-based-sagas.md).
+    /// </summary>
+    private async Task DrainDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
+    {
+        foreach (var publish in publisher.DeferredPublishes)
+        {
+            try
+            {
+                await publish();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Deferred publish failed for saga {SagaType} correlation {CorrelationId} after its step already committed; leaving the saga Running for its own state timeout to rescue it",
+                    SagaType, correlationId);
+
+                await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.DeliveryExhausted, errorMessage: ex.Message), cancellationToken);
+            }
+        }
     }
 
     private Task PersistAsync(TState state, bool isNew, int expectedVersion, CancellationToken cancellationToken)

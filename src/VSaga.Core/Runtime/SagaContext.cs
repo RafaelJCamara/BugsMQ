@@ -14,6 +14,16 @@ internal interface ISagaContextLogSink
     Task LogAsync(SagaLogEntry entry, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Lets SagaOrchestrator.HandleStepSuccessAsync drain a step's ctx.PublishAfterCommitAsync queue once
+/// its own PersistAsync has committed, through the same kind of internal cast ISagaContextLogSink already
+/// uses, without widening the public ISagaContext&lt;TState&gt; DSL surface with an engine-internal concern.
+/// </summary>
+internal interface ISagaContextDeferredPublisher
+{
+    IReadOnlyList<Func<Task>> DeferredPublishes { get; }
+}
+
 internal sealed class SagaContext<TState>(
     TState saga,
     Guid correlationId,
@@ -24,9 +34,11 @@ internal sealed class SagaContext<TState>(
     string sagaType,
     string? inboundMessageId,
     Func<SagaLogEntry, CancellationToken, Task> logAsync,
-    CancellationToken cancellationToken) : ISagaContext<TState>, ISagaContextLogSink
+    CancellationToken cancellationToken) : ISagaContext<TState>, ISagaContextLogSink, ISagaContextDeferredPublisher
     where TState : SagaState
 {
+    private readonly List<Func<Task>> _deferredPublishes = [];
+
     public TState Saga { get; } = saga;
 
     public Guid CorrelationId { get; } = correlationId;
@@ -81,6 +93,21 @@ internal sealed class SagaContext<TState>(
 
         return PublishInternalAsync(message, destination: null, envelope, cancellationToken);
     }
+
+    /// <summary>
+    /// Queues the publish rather than sending it now — see the interface doc for why. Built eagerly at
+    /// call time (correlation id, source service, causation id all come from this instance, exactly like
+    /// PublishAsync's own envelope), so only the actual transport call and its timeline entry are
+    /// deferred to the drain.
+    /// </summary>
+    public Task PublishAfterCommitAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
+    {
+        var envelope = MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId);
+        _deferredPublishes.Add(() => PublishInternalAsync(message, destination: null, envelope, cancellationToken));
+        return Task.CompletedTask;
+    }
+
+    IReadOnlyList<Func<Task>> ISagaContextDeferredPublisher.DeferredPublishes => _deferredPublishes;
 
     Task ISagaContextLogSink.LogAsync(SagaLogEntry entry, CancellationToken cancellationToken) => logAsync(entry, cancellationToken);
 
