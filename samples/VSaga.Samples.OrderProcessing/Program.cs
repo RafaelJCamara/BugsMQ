@@ -7,12 +7,12 @@ using VSaga.Samples.OrderProcessing.Participants;
 using VSaga.Transport.RabbitMQ;
 using VSaga.Transport.MassTransit;
 using VSaga.Transport.Brighter;
+using VSaga.Transport.Http;
 using VSaga.Transport.Wolverine;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("VSaga")
     ?? "Host=localhost;Port=5432;Database=vsaga;Username=postgres;Password=postgres";
@@ -24,6 +24,14 @@ builder.Services.AddVSagaEfCore(db => db.UseNpgsql(connectionString));
 // first requested, by which point every AddXyz call here has already run.
 if (builder.Configuration.GetValue("Chaos:Enabled", defaultValue: false))
     builder.Services.AddVSagaChaos(o => builder.Configuration.GetSection("Chaos").Bind(o));
+
+// Because local subscribers count as routes (docs/http-based-sagas.md §3.3a), a single process over
+// the HTTP transport would resolve every message locally and perform zero HTTP — the compose run would
+// pass while exercising nothing. Role splits the one image into two processes instead: Sagas runs the
+// engine (and the order-submitting "front door"), Participants runs the downstream services, and
+// docker-compose.http.yml is the only track that ever sets this. Every other track leaves it unset, so
+// RabbitMQ/Wolverine/MassTransit/Brighter runs stay bit-for-bit what they are today.
+var role = ParseRole(builder.Configuration["Role"]);
 
 // Transport:Provider picks which IMessageTransport adapter this sample runs against — RabbitMQ by
 // default (matching every prior compose run), or one of the other adapters via a docker-compose
@@ -47,48 +55,71 @@ switch (builder.Configuration["Transport:Provider"] ?? "RabbitMq")
         // adapters config-swappable; docker-compose.brighter.yml only overrides Transport:Provider.
         builder.Services.AddVSagaBrighter(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
         break;
+    case "Http":
+        // No shared section to bind from the way the RabbitMQ-backed adapters share "RabbitMq" —
+        // HttpTransportOptions' Endpoints/Routes are inherently role-specific (each role talks to the
+        // other), so docker-compose.http.yml populates "HttpSagas"/"HttpParticipants" as two distinct
+        // config sections (via environment variables — there's no meaningful standalone default for
+        // either, so neither lives in appsettings.json).
+        builder.Services.AddVSagaHttp(o => builder.Configuration.GetSection(
+            role == ServiceRole.Participants ? "HttpParticipants" : "HttpSagas").Bind(o));
+        break;
     default:
         throw new InvalidOperationException($"Unknown Transport:Provider '{builder.Configuration["Transport:Provider"]}'.");
 }
 // Wraps the transport so every SubscribeAsync call (the saga engine's and the participants' alike)
 // records which service consumes which message type — the only way the saga map can name a
-// destination that never actually replied (e.g. the simulated hung payment gateway).
+// destination that never actually replied (e.g. the simulated hung payment gateway). The participants
+// role needs this exactly as much as Sagas does — over HTTP, skipping it here means every participant
+// node in the map degrades to "unresolved:{MessageType}".
 builder.Services.AddVSagaTopologyRecording();
 builder.Services.AddVSagaOpenTelemetry();
 
-// Both saga kinds in one engine. They deliberately share a correlation id per order — OrderSaga
-// drives the order to shipment, PostShipmentChoreography tracks the independent fan-out that follows
-// — which is only expressible because a saga instance is keyed by (SagaType, CorrelationId). Both
-// receive their own copy of OrderShipped: the RabbitMQ transport binds one queue per subscription to
-// a topic exchange, so a published message reaches every subscriber of that type rather than one.
-//
-// InvoiceDeliverySaga and InvoiceArchivalSaga are the odd ones out: they do NOT share that correlation
-// id. Each is a sub-saga started with ctx.StartChildAsync — by PostShipmentChoreography and
-// InvoiceFollowUpSaga respectively — so each gets a fresh id of its own plus a stored pointer back to
-// the instance that started it. Registering them here is all the wiring there is — the parent publishes
-// DeliverInvoice/ArchiveInvoice and the child's CanInitiate matches it; neither type references the
-// other. InvoiceFollowUpSaga itself DOES share the order's correlation id, same as
-// PostShipmentChoreography: both react to InvoiceIssued, so both open under whatever correlation id
-// that message already carries.
-builder.Services.AddVSagaEngine(o => o
-    .AddSaga<OrderSaga, OrderSagaState>()
-    .AddSaga<PostShipmentChoreography, PostShipmentState>()
-    .AddSaga<InvoiceDeliverySaga, InvoiceDeliveryState>()
-    .AddSaga<InvoiceFollowUpSaga, InvoiceFollowUpState>()
-    .AddSaga<InvoiceArchivalSaga, InvoiceArchivalState>());
+if (role != ServiceRole.Participants)
+{
+    // Both saga kinds in one engine. They deliberately share a correlation id per order — OrderSaga
+    // drives the order to shipment, PostShipmentChoreography tracks the independent fan-out that follows
+    // — which is only expressible because a saga instance is keyed by (SagaType, CorrelationId). Both
+    // receive their own copy of OrderShipped: the RabbitMQ transport binds one queue per subscription to
+    // a topic exchange, so a published message reaches every subscriber of that type rather than one.
+    //
+    // InvoiceDeliverySaga and InvoiceArchivalSaga are the odd ones out: they do NOT share that correlation
+    // id. Each is a sub-saga started with ctx.StartChildAsync — by PostShipmentChoreography and
+    // InvoiceFollowUpSaga respectively — so each gets a fresh id of its own plus a stored pointer back to
+    // the instance that started it. Registering them here is all the wiring there is — the parent publishes
+    // DeliverInvoice/ArchiveInvoice and the child's CanInitiate matches it; neither type references the
+    // other. InvoiceFollowUpSaga itself DOES share the order's correlation id, same as
+    // PostShipmentChoreography: both react to InvoiceIssued, so both open under whatever correlation id
+    // that message already carries.
+    builder.Services.AddVSagaEngine(o => o
+        .AddSaga<OrderSaga, OrderSagaState>()
+        .AddSaga<PostShipmentChoreography, PostShipmentState>()
+        .AddSaga<InvoiceDeliverySaga, InvoiceDeliveryState>()
+        .AddSaga<InvoiceFollowUpSaga, InvoiceFollowUpState>()
+        .AddSaga<InvoiceArchivalSaga, InvoiceArchivalState>());
 
-builder.Services.AddHostedService<InventoryParticipant>();
-builder.Services.AddHostedService<PaymentParticipant>();
-builder.Services.AddHostedService<ShippingParticipant>();
+    builder.Services.AddHostedService<OrderSubmitter>();
+}
 
-// The choreographed leg's participants: no conductor commands these, they each react to OrderShipped.
-builder.Services.AddHostedService<NotificationParticipant>();
-builder.Services.AddHostedService<LoyaltyParticipant>();
-builder.Services.AddHostedService<InvoicingParticipant>();
+if (role != ServiceRole.Sagas)
+{
+    builder.Services.AddHostedService<InventoryParticipant>();
+    builder.Services.AddHostedService<PaymentParticipant>();
+    builder.Services.AddHostedService<ShippingParticipant>();
 
-builder.Services.AddHostedService<OrderSubmitter>();
+    // The choreographed leg's participants: no conductor commands these, they each react to OrderShipped.
+    builder.Services.AddHostedService<NotificationParticipant>();
+    builder.Services.AddHostedService<LoyaltyParticipant>();
+    builder.Services.AddHostedService<InvoicingParticipant>();
+}
 
-var host = builder.Build();
+var app = builder.Build();
+
+// Only meaningful for the HTTP transport, and only registered when it's the active provider — mapping
+// it unconditionally would be harmless (nothing would ever call it) but would misstate what this
+// process actually speaks on every other track.
+if (string.Equals(builder.Configuration["Transport:Provider"], "Http", StringComparison.Ordinal))
+    app.MapVSagaHttp();
 
 // Schema creation is dashboard-api's job (versioned `dotnet ef` migrations against
 // VSaga.Persistence.EFCore.Postgres) — docker-compose.yml gates this service on dashboard-api's
@@ -96,4 +127,23 @@ var host = builder.Build();
 // EnsureCreatedAsync() as a standalone-convenience fallback, but that bypasses
 // __EFMigrationsHistory: run against a database it bootstrapped, a later `dotnet ef migrations add`
 // migration fails with "relation already exists". Removed rather than kept as a landmine.
-await host.RunAsync();
+await app.RunAsync();
+
+static ServiceRole ParseRole(string? value) => value switch
+{
+    null or "" or "All" => ServiceRole.All,
+    "Sagas" => ServiceRole.Sagas,
+    "Participants" => ServiceRole.Participants,
+    _ => throw new InvalidOperationException($"Unknown Role '{value}'."),
+};
+
+namespace VSaga.Samples.OrderProcessing
+{
+    /// <summary>All (default) runs the whole sample in one process, exactly as every non-HTTP track does. Sagas/Participants split it in two — see the Role comment above.</summary>
+    internal enum ServiceRole
+    {
+        All,
+        Sagas,
+        Participants,
+    }
+}

@@ -1,0 +1,90 @@
+# HTTP-transport overlay: layer this on top of docker-compose.yml to run the OrderProcessing sample
+# against VSaga.Transport.Http (docs/http-based-sagas.md) instead of a broker-backed adapter, for that
+# adapter's own live-verification pass.
+#
+#   docker compose -p vsaga-http -f docker-compose.yml -f docker-compose.http.yml up -d --build
+#
+# Unlike every other adapter overlay, this one cannot be a pure config-swap on the existing
+# order-processing service: because local subscriptions count as routes (docs/http-based-sagas.md
+# §3.3a), a single process over HTTP would resolve every message locally and perform zero HTTP — the
+# stack would come up green while proving nothing. So this overlay turns order-processing into the
+# "Sagas" role (the engine + the order-submitting front door) and adds a second, brand-new service,
+# order-processing-participants, running the same image as the "Participants" role (the downstream
+# services). Both roles need AddVSagaEfCore + AddVSagaTopologyRecording — Program.cs already calls both
+# unconditionally for every role — or the participants' nodes in the map degrade to "unresolved:{...}".
+#
+# rabbitmq stays up even though nothing on this track ever connects to it: dashboard-api's own
+# depends_on/health check is unconditionally RabbitMQ-backed (see its own fix below), and the point of
+# this pass is to prove the broker is out of the *message* path by traffic (no vsaga.saga.* queues, zero
+# throughput in its management UI) while orders still flow end to end — not by removing it from the
+# compose file, which would prove nothing either way. Compose can override a depends_on entry but not
+# delete a key, so order-processing keeps its rabbitmq dependency from the base file regardless.
+#
+# Ports use the "!override" merge tag rather than plain sequences, same reason as every other overlay:
+# Compose's default list-merge would otherwise leave this track also trying to bind the base file's
+# original host ports. Fresh ports here (continuing each other overlay's own block): postgres 5446,
+# rabbitmq 6072/16072, dashboard-api 5480.
+services:
+  postgres:
+    ports: !override ["5446:5432"]
+  rabbitmq:
+    ports: !override ["6072:5672", "16072:15672"]
+  dashboard-api:
+    ports: !override ["5480:8080"]
+    environment:
+      Transport__Provider: "Http"
+      # Manual retry's PublishRawAsync (SagaEndpoints.RetrySagaAsync) never knows the message type ahead
+      # of time -- one wildcard route ("*" in Routes) to the saga host covers every possible redrive
+      # rather than a route per command the way order-processing's own Routes above enumerate.
+      Http__ServiceName: "dashboard-api"
+      Http__Endpoints__sagas: "http://order-processing:8080"
+      "Http__Routes__*__0": "sagas"
+
+  order-processing:
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      Role: "Sagas"
+      Transport__Provider: "Http"
+      HttpSagas__ServiceName: "order-processing"
+      HttpSagas__Endpoints__participants: "http://order-processing-participants:8080"
+      # Every message type OrderSaga and its two sub-sagas (InvoiceDeliverySaga, InvoiceArchivalSaga)
+      # publish toward the participants role. DeliverInvoice/ArchiveInvoice need no entry here: both are
+      # published via ctx.StartChildAsync to a saga type registered in this same process, so they
+      # resolve as local subscribers (§3.3a) and never touch HTTP at all.
+      HttpSagas__Routes__ReserveInventory__0: "participants"
+      HttpSagas__Routes__ReleaseInventory__0: "participants"
+      HttpSagas__Routes__ChargePayment__0: "participants"
+      HttpSagas__Routes__RefundPayment__0: "participants"
+      HttpSagas__Routes__ShipOrder__0: "participants"
+      HttpSagas__Routes__SendInvoiceEmail__0: "participants"
+      HttpSagas__Routes__StoreInvoiceCopy__0: "participants"
+    depends_on:
+      order-processing-participants:
+        condition: service_started
+
+  order-processing-participants:
+    build:
+      context: .
+      dockerfile: samples/VSaga.Samples.OrderProcessing/Dockerfile
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      Role: "Participants"
+      Transport__Provider: "Http"
+      ConnectionStrings__VSaga: "Host=postgres;Port=5432;Database=vsaga;Username=postgres;Password=postgres"
+      HttpParticipants__ServiceName: "order-processing-participants"
+      HttpParticipants__Endpoints__orderprocessing: "http://order-processing:8080"
+      # OrderShipped fans out to both the three local participants below (Notification/Loyalty/
+      # Invoicing, all in this one process) *and* back to order-processing for OrderSaga and
+      # PostShipmentChoreography — PublishAsync's routing union (§3.3a) sends it to both, not one or the
+      # other. CustomerNotified/LoyaltyPointsAwarded/InvoiceIssued are each published from a pump-driven
+      # (not inline) local dispatch — reacting to OrderShipped, not replying to an in-flight request —
+      # so none of them can ride back as anyone's synchronous reply; each needs its own explicit route.
+      HttpParticipants__Routes__OrderShipped__0: "orderprocessing"
+      HttpParticipants__Routes__CustomerNotified__0: "orderprocessing"
+      HttpParticipants__Routes__LoyaltyPointsAwarded__0: "orderprocessing"
+      HttpParticipants__Routes__InvoiceIssued__0: "orderprocessing"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dashboard-api:
+        condition: service_healthy

@@ -12,6 +12,7 @@ COPY src/VSaga.Transport.RabbitMQ/VSaga.Transport.RabbitMQ.csproj src/VSaga.Tran
 COPY src/VSaga.Transport.Wolverine/VSaga.Transport.Wolverine.csproj src/VSaga.Transport.Wolverine/
 COPY src/VSaga.Transport.MassTransit/VSaga.Transport.MassTransit.csproj src/VSaga.Transport.MassTransit/
 COPY src/VSaga.Transport.Brighter/VSaga.Transport.Brighter.csproj src/VSaga.Transport.Brighter/
+COPY src/VSaga.Transport.Http/VSaga.Transport.Http.csproj src/VSaga.Transport.Http/
 COPY samples/VSaga.Samples.OrderProcessing.Contracts/VSaga.Samples.OrderProcessing.Contracts.csproj samples/VSaga.Samples.OrderProcessing.Contracts/
 COPY samples/VSaga.Samples.OrderProcessing/VSaga.Samples.OrderProcessing.csproj samples/VSaga.Samples.OrderProcessing/
 RUN dotnet restore samples/VSaga.Samples.OrderProcessing/VSaga.Samples.OrderProcessing.csproj

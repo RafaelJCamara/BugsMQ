@@ -8,6 +8,7 @@ using VSaga.Dashboard.Api.HealthChecks;
 using VSaga.Dashboard.Api.Hubs;
 using VSaga.Observability;
 using VSaga.Persistence.EFCore;
+using VSaga.Transport.Http;
 using VSaga.Transport.RabbitMQ;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
@@ -43,7 +44,31 @@ var connectionString = builder.Configuration.GetConnectionString("VSaga")
 builder.Services.AddVSagaEfCore(db => db.UseNpgsql(connectionString,
     npgsql => npgsql.MigrationsAssembly("VSaga.Persistence.EFCore.Postgres")));
 
-builder.Services.AddVSagaRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+// Transport:Provider, same convention as the OrderProcessing sample's own switch
+// (samples/VSaga.Samples.OrderProcessing/Program.cs) — RabbitMq by default (matching every prior compose
+// run), Http when a docker-compose overlay says so (docker-compose.http.yml). This only ever needs to
+// match whichever adapter the saga host itself is running, so it doesn't grow a case per adapter the
+// way the sample does: /retry's PublishRawAsync just needs a working IMessageTransport pointed at that
+// host, not feature parity with every track. RabbitMqHealthCheck already degrades to "no message broker
+// configured" when RabbitMqConnectionManager isn't registered (see its own null check), so making this
+// conditional is what makes AddHealthChecks below stop being unconditionally RabbitMQ, with no change
+// to the health check registration itself needed.
+switch (builder.Configuration["Transport:Provider"] ?? "RabbitMq")
+{
+    case "RabbitMq":
+        builder.Services.AddVSagaRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+        break;
+    case "Http":
+        // A single wildcard route ("*" in Routes, see ConfigHttpRouteTable) rather than one entry per
+        // message type: this process only ever originates PublishRawAsync's raw, type-erased redrive
+        // (SagaEndpoints.RetrySagaAsync), never a typed publish, so every possible message type resolves
+        // to the same one place — the saga host — and there is no fixed universe of types to enumerate
+        // the way the sample's own per-command routing has.
+        builder.Services.AddVSagaHttp(o => builder.Configuration.GetSection("Http").Bind(o));
+        break;
+    default:
+        throw new InvalidOperationException($"Unknown Transport:Provider '{builder.Configuration["Transport:Provider"]}'.");
+}
 builder.Services.AddVSagaOpenTelemetry();
 
 builder.Services.AddSingleton<ISagaChangeNotifier, SignalRSagaChangeNotifier>();

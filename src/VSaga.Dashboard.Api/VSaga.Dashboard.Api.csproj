@@ -24,6 +24,7 @@
          present in this app's output for MigrationsAssembly(...)/MigrateAsync() to find at runtime. -->
     <ProjectReference Include="..\VSaga.Persistence.EFCore.Postgres\VSaga.Persistence.EFCore.Postgres.csproj" />
     <ProjectReference Include="..\VSaga.Transport.RabbitMQ\VSaga.Transport.RabbitMQ.csproj" />
+    <ProjectReference Include="..\VSaga.Transport.Http\VSaga.Transport.Http.csproj" />
   </ItemGroup>
 
 </Project>
