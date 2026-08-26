@@ -15,6 +15,7 @@
     <Project Path="src/VSaga.Testing/VSaga.Testing.csproj" />
     <Project Path="src/VSaga.Transport.Brighter/VSaga.Transport.Brighter.csproj" />
     <Project Path="src/VSaga.Transport.Common/VSaga.Transport.Common.csproj" />
+    <Project Path="src/VSaga.Transport.Http/VSaga.Transport.Http.csproj" />
     <Project Path="src/VSaga.Transport.InMemory/VSaga.Transport.InMemory.csproj" />
     <Project Path="src/VSaga.Transport.MassTransit/VSaga.Transport.MassTransit.csproj" />
     <Project Path="src/VSaga.Transport.RabbitMQ/VSaga.Transport.RabbitMQ.csproj" />

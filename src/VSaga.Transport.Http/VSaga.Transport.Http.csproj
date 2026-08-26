@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- MapVSagaHttp() needs IEndpointRouteBuilder, and this also brings Microsoft.Extensions.Http
+         transitively, so no new Directory.Packages.props entry is needed for this project. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
+    <ProjectReference Include="..\VSaga.Transport.Common\VSaga.Transport.Common.csproj" />
+  </ItemGroup>
+
+</Project>
