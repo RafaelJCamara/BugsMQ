@@ -57,13 +57,13 @@ anything new — the intent is to reuse patterns, not invent parallel ones.
 
 | Capability | Where | Why it matters here |
 |---|---|---|
-| Composite `(SagaType, CorrelationId)` identity | `src/BugsMQ.Persistence.EFCore/BugsMqDbContext.cs:28` | Two sagas can already coexist over one business transaction |
-| Join / "wait for all branches" | `src/BugsMQ.Core/Dsl/StepDefinition.cs:31` (`ResolveTargetState`), `EventBuilder.TransitionTo(Func<...>)` | **The parent's wait needs no new engine work** |
-| Header threading onto new instances | `src/BugsMQ.Core/Runtime/SagaOrchestrator.cs:127,135,309,336` | Exact pattern the parent link should copy |
-| Outbound envelope stamping | `src/BugsMQ.Core/Runtime/SagaContext.cs:53`, `MessageEnvelope.From` | Where `StartChildAsync` hangs off |
+| Composite `(SagaType, CorrelationId)` identity | `src/VSaga.Persistence.EFCore/VSagaDbContext.cs:28` | Two sagas can already coexist over one business transaction |
+| Join / "wait for all branches" | `src/VSaga.Core/Dsl/StepDefinition.cs:31` (`ResolveTargetState`), `EventBuilder.TransitionTo(Func<...>)` | **The parent's wait needs no new engine work** |
+| Header threading onto new instances | `src/VSaga.Core/Runtime/SagaOrchestrator.cs:127,135,309,336` | Exact pattern the parent link should copy |
+| Outbound envelope stamping | `src/VSaga.Core/Runtime/SagaContext.cs:53`, `MessageEnvelope.From` | Where `StartChildAsync` hangs off |
 | Cross-instance lookup for the dashboard | `ISagaSummaryReader.FindByCorrelationIdAsync` (`ISagaSummaryReader.cs:27`) | Precedent for a `FindChildrenAsync` |
 | Related-saga UI strip | `dashboard-web/src/app/pages/saga-detail/saga-detail.ts:104` | Becomes two relations instead of one |
-| Migration precedent | `src/BugsMQ.Persistence.EFCore.Postgres/Migrations/20260825045219_*` | Adding columns + index to `SagaInstances` |
+| Migration precedent | `src/VSaga.Persistence.EFCore.Postgres/Migrations/20260825045219_*` | Adding columns + index to `SagaInstances` |
 
 ---
 
@@ -74,7 +74,7 @@ anything new — the intent is to reuse patterns, not invent parallel ones.
 A child is a **separate instance with its own correlation id**, plus a stored pointer to its parent:
 
 ```csharp
-// SagaState — src/BugsMQ.Abstractions/Sagas/SagaState.cs
+// SagaState — src/VSaga.Abstractions/Sagas/SagaState.cs
 public string? ParentSagaType { get; set; }
 public Guid? ParentCorrelationId { get; set; }   // both null => root saga
 ```
@@ -96,8 +96,8 @@ Task StartChildAsync<TMessage>(TMessage message, CancellationToken ct = default)
 Implementation: publish with a **fresh** correlation id and two new headers on `MessageEnvelope`:
 
 ```
-x-bugsmq-parent-saga-type
-x-bugsmq-parent-correlation-id
+x-vsaga-parent-saga-type
+x-vsaga-parent-correlation-id
 ```
 
 `SagaOrchestrator.HandleCoreAsync` reads them when creating an instance and stamps them onto the new
@@ -237,8 +237,8 @@ receive the request — that is Slice 3, and it is the one I would push back on.
    timed out. A cascade adds implicit coupling in the reverse direction, and with both directions
    implicit nobody can predict what a single `.Compensate()` sends.
 4. **Confirmed directly in code while closing this out, not just inferred from the design.**
-   `CompensationRunner.RunAsync` (`src/BugsMQ.Core/Dsl/CompensationRunner.cs:16`) and every delegate it
-   invokes only ever receive `ISagaContext<TState>` (`src/BugsMQ.Abstractions/Sagas/ISagaContext.cs:7`),
+   `CompensationRunner.RunAsync` (`src/VSaga.Core/Dsl/CompensationRunner.cs:16`) and every delegate it
+   invokes only ever receive `ISagaContext<TState>` (`src/VSaga.Abstractions/Sagas/ISagaContext.cs:7`),
    which has no children-lookup method. Only `ISagaSummaryReader.FindChildrenAsync` has one, and that is
    a read-model query compensation code has no route to today. Argument 1 above is not a hypothetical
    engine change to imagine — it is the actual shape of the type `.Compensate()` delegates run against.
@@ -262,7 +262,7 @@ case exists yet.
 - [x] `ISagaContext.StartChildAsync` + implementation in `SagaContext`
 - [x] `SagaOrchestrator`: read the headers and stamp the new instance (in `NewInstance`, extracted from
       `HandleCoreAsync` to stay under the 60-line analyzer cap)
-- [x] `SagaInstanceEntity` + `BugsMqDbContext`: nullable columns, index on the pair
+- [x] `SagaInstanceEntity` + `VSagaDbContext`: nullable columns, index on the pair
 - [x] Migration `20260825121440_AddSagaParentLinkage` — purely additive, upgrades an existing volume in place
 - [x] `ISagaSummaryReader.FindChildrenAsync` + both providers
 - [x] `GET /api/sagas/{sagaType}/{correlationId}/children`
@@ -312,7 +312,7 @@ engine starts injecting messages on anyone's behalf.
 
 **Slice 2b — the engine reports failures the child could not (the safety net) — DONE**
 
-- [x] `ChildSagaFinished` contract — `BugsMQ.Abstractions.Sagas.ChildSagaFinished(Guid
+- [x] `ChildSagaFinished` contract — `VSaga.Abstractions.Sagas.ChildSagaFinished(Guid
       ChildCorrelationId, string ChildSagaType, SagaStatus Status)`
 - [x] Orchestrator publishes it when a child with a parent goes terminal — narrower than the checklist
       line above literally reads: only from `HandleStepFailureAsync`'s exception path (always terminal)
@@ -377,7 +377,7 @@ calculus, that is a new design question, not a resumption of this checklist.
   documented behaviour rather than a surprise.
 - **Two saga types initiate on the child message** → two children, parent counts one. Wants a guard or
   a loud note. Compare the `AddSaga` duplicate-`TState` guard added in `f00dee3`
-  (`src/BugsMQ.Core/ServiceCollectionExtensions.cs`), which turned a similar silent misbehaviour into a
+  (`src/VSaga.Core/ServiceCollectionExtensions.cs`), which turned a similar silent misbehaviour into a
   startup error. **Still unguarded** after Slice 1 — noted in the README, not solved.
 - **Parent times out while the child still runs** → orphaned child, still holding whatever it reserved.
 - **Parent retried from the dashboard** → children are *not* re-run; the reset replays the parent's
@@ -394,7 +394,7 @@ calculus, that is a new design question, not a resumption of this checklist.
   instance, the message isn't among the parent's initiating types, so it logs `UnexpectedEvent` and
   drops it — no exception, so no redelivery either. Pinned by
   `NotifyParentAsync_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`
-  (`tests/BugsMQ.Core.Tests/NotifyParentAsyncTests.cs`). Real transports decouple a child's dispatch
+  (`tests/VSaga.Core.Tests/NotifyParentAsyncTests.cs`). Real transports decouple a child's dispatch
   from the publisher's call stack, so this is not expected to reproduce deterministically the way it
   does in-memory — every real child in this repo has genuine I/O between `StartChildAsync` and
   `NotifyParentAsync` (a participant round-trip), which is what makes the parent's own persist reliably
@@ -412,7 +412,7 @@ calculus, that is a new design question, not a resumption of this checklist.
   never fire nested inside `StartChildAsync`'s call stack, since `SagaTimeoutDispatcherHostedService`
   dispatches independently on its own poll loop. Pinned by
   `ChildSagaFinishedTests.ChildSagaFinished_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`
-  (`tests/BugsMQ.Core.Tests/ChildSagaFinishedTests.cs`). Not fixed, same reasoning as above.
+  (`tests/VSaga.Core.Tests/ChildSagaFinishedTests.cs`). Not fixed, same reasoning as above.
 
 ---
 

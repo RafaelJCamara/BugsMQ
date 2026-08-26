@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

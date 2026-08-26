@@ -19,13 +19,13 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore BugsMQ.slnx
+        run: dotnet restore VSaga.slnx
 
       - name: Build
-        run: dotnet build BugsMQ.slnx --no-restore --configuration Release
+        run: dotnet build VSaga.slnx --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test BugsMQ.slnx --no-build --configuration Release --logger "console;verbosity=normal"
+        run: dotnet test VSaga.slnx --no-build --configuration Release --logger "console;verbosity=normal"
 
   angular:
     name: Angular build & test

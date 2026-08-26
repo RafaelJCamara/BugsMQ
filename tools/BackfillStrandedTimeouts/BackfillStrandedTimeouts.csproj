@@ -5,11 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Brings in BugsMQ.Persistence.EFCore (BugsMqDbContext/SagaInstanceEntity/SagaTimeoutEntity)
-         transitively, same as BugsMQ.Dashboard.Api — referenced directly rather than the plain
-         BugsMQ.Persistence.EFCore project purely for consistency with that pattern, even though this
+    <!-- Brings in VSaga.Persistence.EFCore (VSagaDbContext/SagaInstanceEntity/SagaTimeoutEntity)
+         transitively, same as VSaga.Dashboard.Api — referenced directly rather than the plain
+         VSaga.Persistence.EFCore project purely for consistency with that pattern, even though this
          tool never touches migrations. -->
-    <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore.Postgres\BugsMQ.Persistence.EFCore.Postgres.csproj" />
+    <ProjectReference Include="..\..\src\VSaga.Persistence.EFCore.Postgres\VSaga.Persistence.EFCore.Postgres.csproj" />
   </ItemGroup>
 
   <ItemGroup>

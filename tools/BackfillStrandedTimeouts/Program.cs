@@ -1,6 +1,6 @@
-using BugsMQ.Abstractions.Persistence;
-using BugsMQ.Abstractions.Sagas;
-using BugsMQ.Persistence.EFCore;
+using VSaga.Abstractions.Persistence;
+using VSaga.Abstractions.Sagas;
+using VSaga.Persistence.EFCore;
 using Microsoft.EntityFrameworkCore;
 
 // One-time operational fix for OrderSaga instances that entered AwaitingInventory/AwaitingShipment
@@ -13,17 +13,17 @@ using Microsoft.EntityFrameworkCore;
 const string SagaType = "OrderSaga";
 var strandedStates = new[] { "AwaitingInventory", "AwaitingShipment" };
 
-var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__BugsMQ")
+var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__VSaga")
     // Host-mapped port (docker-compose.yml maps host 5433 -> container 5432), not the 5432 default
-    // BugsMQ.Dashboard.Api falls back to when it runs *inside* the compose network under its own name.
+    // VSaga.Dashboard.Api falls back to when it runs *inside* the compose network under its own name.
     // This tool runs from the host against that same compose stack.
-    ?? "Host=localhost;Port=5433;Database=bugsmq;Username=postgres;Password=postgres";
+    ?? "Host=localhost;Port=5433;Database=vsaga;Username=postgres;Password=postgres";
 
-var options = new DbContextOptionsBuilder<BugsMqDbContext>()
+var options = new DbContextOptionsBuilder<VSagaDbContext>()
     .UseNpgsql(connectionString)
     .Options;
 
-await using var db = new BugsMqDbContext(options);
+await using var db = new VSagaDbContext(options);
 
 var pendingTimeoutKeys = await db.SagaTimeouts
     .Where(t => t.SagaType == SagaType && t.Status == SagaTimeoutStatus.Pending && strandedStates.Contains(t.ForState))

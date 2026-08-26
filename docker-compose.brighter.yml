@@ -1,13 +1,13 @@
 # Brighter transport overlay: layer this on top of docker-compose.yml to run the OrderProcessing sample
-# against BugsMQ.Transport.Brighter (Paramore.Brighter's RabbitMQ gateway) instead of the reference
+# against VSaga.Transport.Brighter (Paramore.Brighter's RabbitMQ gateway) instead of the reference
 # RabbitMqTransport, for that adapter's own live-verification pass. Host ports here are remapped away
-# from docker-compose.yml's defaults so this can run concurrently, under its own "-p bugsmq-brighter"
+# from docker-compose.yml's defaults so this can run concurrently, under its own "-p vsaga-brighter"
 # compose project name, alongside the other adapter tracks' own overlays on the same machine.
 #
-#   docker compose -p bugsmq-brighter -f docker-compose.yml -f docker-compose.brighter.yml up -d --build
+#   docker compose -p vsaga-brighter -f docker-compose.yml -f docker-compose.brighter.yml up -d --build
 #
 # Plain `docker compose up` (no overlay) behaves exactly as before -- RabbitMq is still the default
-# Transport:Provider (see samples/BugsMQ.Samples.OrderProcessing/appsettings.json).
+# Transport:Provider (see samples/VSaga.Samples.OrderProcessing/appsettings.json).
 # Ports use the "!override" merge tag rather than plain sequences: Compose's default list-merge
 # behavior concatenates ports arrays across files instead of replacing them, which would leave this
 # overlay trying to bind docker-compose.yml's original host ports (5433/5672/15672/5080) as well as

@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: bugsmq
+      POSTGRES_DB: vsaga
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
       - "5433:5432" # host 5433 to avoid clashing with any other locally-running Postgres on 5432
     volumes:
-      - bugsmq-postgres-data:/var/lib/postgresql/data
+      - vsaga-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -29,12 +29,12 @@ services:
   dashboard-api:
     build:
       context: .
-      dockerfile: src/BugsMQ.Dashboard.Api/Dockerfile
+      dockerfile: src/VSaga.Dashboard.Api/Dockerfile
     ports:
       - "5080:8080"
     environment:
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__BugsMQ: "Host=postgres;Port=5432;Database=bugsmq;Username=postgres;Password=postgres"
+      ConnectionStrings__VSaga: "Host=postgres;Port=5432;Database=vsaga;Username=postgres;Password=postgres"
       RabbitMq__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"
       Dashboard__WebOrigin: "http://localhost:4200"
       Dashboard__ApiKey: "dev-local-only-change-me"
@@ -53,20 +53,20 @@ services:
   order-processing:
     build:
       context: .
-      dockerfile: samples/BugsMQ.Samples.OrderProcessing/Dockerfile
+      dockerfile: samples/VSaga.Samples.OrderProcessing/Dockerfile
     environment:
-      ConnectionStrings__BugsMQ: "Host=postgres;Port=5432;Database=bugsmq;Username=postgres;Password=postgres"
+      ConnectionStrings__VSaga: "Host=postgres;Port=5432;Database=vsaga;Username=postgres;Password=postgres"
       RabbitMq__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      # dashboard-api now owns schema migrations (BugsMQ.Persistence.EFCore.Postgres); waiting for it
+      # dashboard-api now owns schema migrations (VSaga.Persistence.EFCore.Postgres); waiting for it
       # to report healthy avoids racing its MigrateAsync against this service's own EnsureCreatedAsync
       # bootstrap on a fresh database.
       dashboard-api:
         condition: service_healthy
 
 volumes:
-  bugsmq-postgres-data:
+  vsaga-postgres-data:

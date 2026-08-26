@@ -125,7 +125,7 @@ export class SagaList implements OnInit, OnDestroy {
           this.loading.set(false);
         },
         error: () => {
-          this.error.set('Could not reach the BugsMQ Dashboard API. Is it running?');
+          this.error.set('Could not reach the vSaga Dashboard API. Is it running?');
           this.loading.set(false);
         },
       });

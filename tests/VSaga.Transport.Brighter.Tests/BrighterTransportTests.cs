@@ -1,0 +1,131 @@
+using VSaga.Abstractions.Transport;
+using Microsoft.Extensions.Logging.Abstractions;
+using Testcontainers.RabbitMq;
+
+namespace VSaga.Transport.Brighter.Tests;
+
+public sealed record PingMessage(string Text);
+
+#pragma warning disable CA1001 // no unmanaged/disposable fields are held outside what IAsyncLifetime.DisposeAsync already tears down
+public sealed class BrighterTransportTests : IAsyncLifetime
+{
+#pragma warning restore CA1001
+    private readonly RabbitMqContainer _container = new RabbitMqBuilder("rabbitmq:4-management").Build();
+    private BrighterTransport _transport = null!;
+
+    public async Task InitializeAsync()
+    {
+        await _container.StartAsync();
+
+        var options = new BrighterOptions
+        {
+            ConnectionString = _container.GetConnectionString(),
+            ExchangeName = "vsaga.saga.events.brighter.test",
+        };
+
+        _transport = new BrighterTransport(options, NullLogger<BrighterTransport>.Instance);
+    }
+
+    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task PublishAndSubscribe_DeliversMessageWithCorrelationAndType()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer", [typeof(PingMessage)], "vsaga.brighter.test.ping-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        await _transport.PublishAsync(new PingMessage("hello"), MessageEnvelope.New(correlationId));
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(correlationId, received.CorrelationId);
+        Assert.Equal(nameof(PingMessage), received.MessageTypeName);
+
+        var payload = System.Text.Json.JsonSerializer.Deserialize<PingMessage>(received.Body.Span);
+        Assert.Equal("hello", payload!.Text);
+    }
+
+    [Fact]
+    public async Task Send_DeliversDirectlyToNamedQueueWithoutExchange()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer2", [typeof(PingMessage)], "vsaga.brighter.test.direct-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        await _transport.SendAsync("vsaga.brighter.test.direct-queue", new PingMessage("direct"), MessageEnvelope.New(correlationId));
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+        Assert.Equal(correlationId, (await tcs.Task).CorrelationId);
+    }
+
+    // Deviation from the RabbitMQ transport's equivalent test (see deviationsOrIssues in the build
+    // report and docs/readme-section-brighter.md): Paramore.Brighter.MessagingGateway.RMQ.Async's
+    // RmqMessageProducer never sets AMQP's "mandatory" flag when publishing. Confirmed both by reading
+    // the package's exchange/publish code and by direct testing against a live broker: publishing to a
+    // routing key nobody has ever bound a queue to still yields a broker-side ack (Success=true) on the
+    // publisher-confirm, because the broker only refuses to route a message back to the publisher (a
+    // "basic.return") when the publish explicitly opts into mandatory delivery, which this package's
+    // producer does not. There is no equivalent of RabbitMqTransport's mandatory-plus-publisher-confirms
+    // unroutable-return detection exposed anywhere in this package (no such option on RmqPublication,
+    // RmqMessagingGatewayConnection, or RmqMessageProducer's constructors). Rather than fake a passing
+    // test for a throw that cannot occur, this test documents the actual, verified behavior instead.
+    [Fact]
+    public async Task Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway()
+    {
+        var exception = await Record.ExceptionAsync(() =>
+            _transport.PublishAsync(new PingMessage("nobody's listening"), MessageEnvelope.New(Guid.NewGuid())));
+
+        // No exception: the broker confirms the publish even though it was never routed anywhere.
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task PublishAndSubscribe_PropagatesAllFourVSagaHeadersUnchanged()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer3", [typeof(PingMessage)], "vsaga.brighter.test.headers-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [MessageEnvelope.SourceServiceHeader] = "order-processing-test",
+            [MessageEnvelope.CausationIdHeader] = "causation-" + Guid.NewGuid().ToString("N"),
+            [MessageEnvelope.ParentSagaTypeHeader] = "InvoiceFollowUpSaga",
+            [MessageEnvelope.ParentCorrelationIdHeader] = Guid.NewGuid().ToString(),
+        };
+        var envelope = MessageEnvelope.New(correlationId, headers);
+
+        await _transport.PublishAsync(new PingMessage("sub-saga headers"), envelope);
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(headers[MessageEnvelope.SourceServiceHeader], received.Headers[MessageEnvelope.SourceServiceHeader]);
+        Assert.Equal(headers[MessageEnvelope.CausationIdHeader], received.Headers[MessageEnvelope.CausationIdHeader]);
+        Assert.Equal(headers[MessageEnvelope.ParentSagaTypeHeader], received.Headers[MessageEnvelope.ParentSagaTypeHeader]);
+        Assert.Equal(headers[MessageEnvelope.ParentCorrelationIdHeader], received.Headers[MessageEnvelope.ParentCorrelationIdHeader]);
+    }
+}
