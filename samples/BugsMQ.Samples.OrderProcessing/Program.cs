@@ -22,7 +22,19 @@ builder.Services.AddBugsMqEfCore(db => db.UseNpgsql(connectionString));
 if (builder.Configuration.GetValue("Chaos:Enabled", defaultValue: false))
     builder.Services.AddBugsMqChaos(o => builder.Configuration.GetSection("Chaos").Bind(o));
 
-builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+// Transport:Provider picks which IMessageTransport adapter this sample runs against — RabbitMQ by
+// default (matching every prior compose run), or one of the other adapters via a docker-compose
+// overlay (e.g. docker-compose.wolverine.yml sets Transport__Provider=Wolverine) for that adapter's
+// own live-verification pass. Each adapter's own ServiceCollectionExtensions wraps its transport in
+// the same MiddlewarePipelineTransport as RabbitMQ, so chaos/topology-recording work unchanged.
+switch (builder.Configuration["Transport:Provider"] ?? "RabbitMq")
+{
+    case "RabbitMq":
+        builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+        break;
+    default:
+        throw new InvalidOperationException($"Unknown Transport:Provider '{builder.Configuration["Transport:Provider"]}'.");
+}
 // Wraps the transport so every SubscribeAsync call (the saga engine's and the participants' alike)
 // records which service consumes which message type — the only way the saga map can name a
 // destination that never actually replied (e.g. the simulated hung payment gateway).
