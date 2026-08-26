@@ -29,12 +29,17 @@ internal sealed class LoopbackOutcomeAction<TState, TOut> : IHttpOutcomeAction<T
 {
     private static readonly byte[] EmptyJsonObject = "{}"u8.ToArray();
 
+    // Case-insensitive, unlike every other JsonSerializer.Deserialize call in this repo (which round-trips
+    // its own PascalCase wire format end to end): the far side here is an arbitrary REST API, per §1, and
+    // real ones overwhelmingly return camelCase JSON.
+    private static readonly JsonSerializerOptions ResponseOptions = new() { PropertyNameCaseInsensitive = true };
+
     public string DescribeReply() => typeof(TOut).Name;
 
     public Task ApplyAsync(ISagaContext<TState> context, ReadOnlyMemory<byte> responseBody, CancellationToken cancellationToken)
     {
         var bytes = responseBody.IsEmpty ? EmptyJsonObject.AsSpan() : responseBody.Span;
-        var mapped = JsonSerializer.Deserialize<TOut>(bytes)
+        var mapped = JsonSerializer.Deserialize<TOut>(bytes, ResponseOptions)
                      ?? throw new InvalidOperationException($"Deserializing the HTTP response as '{typeof(TOut).Name}' produced null.");
 
         return context.PublishAfterCommitAsync(mapped, cancellationToken);

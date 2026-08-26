@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VSaga.Http\VSaga.Http.csproj" />
+    <ProjectReference Include="..\..\src\VSaga.Testing\VSaga.Testing.csproj" />
+    <!-- SagaMapBuilder is a pure function (SagaSummary + timeline + topology -> nodes/edges) with no
+         other dependency on VSaga.Dashboard.Api's hosting/API surface, exactly how the dashboard's own
+         SagaMapBuilderTests exercise it; referenced directly here for the §5.3 stitching test. -->
+    <ProjectReference Include="..\..\src\VSaga.Dashboard.Api\VSaga.Dashboard.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

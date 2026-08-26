@@ -5,6 +5,12 @@
        REST call from inside a step, transport-agnostic, so a RabbitMQ-hosted saga gets it for free. -->
 
   <ItemGroup>
+    <!-- Tests need ServiceCollectionExtensions.ClientName to swap in a stub HttpMessageHandler for the
+         named client, the same reason VSaga.Core grants this to VSaga.Http itself. -->
+    <InternalsVisibleTo Include="VSaga.Http.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VSaga.Core\VSaga.Core.csproj" />
   </ItemGroup>
 

@@ -29,6 +29,7 @@
     <Project Path="tests/VSaga.Chaos.Tests/VSaga.Chaos.Tests.csproj" />
     <Project Path="tests/VSaga.Core.Tests/VSaga.Core.Tests.csproj" />
     <Project Path="tests/VSaga.Dashboard.Api.Tests/VSaga.Dashboard.Api.Tests.csproj" />
+    <Project Path="tests/VSaga.Http.Tests/VSaga.Http.Tests.csproj" />
     <Project Path="tests/VSaga.Persistence.EFCore.Tests/VSaga.Persistence.EFCore.Tests.csproj" />
     <Project Path="tests/VSaga.Testing.Tests/VSaga.Testing.Tests.csproj" />
     <Project Path="tests/VSaga.Transport.Brighter.Tests/VSaga.Transport.Brighter.Tests.csproj" />

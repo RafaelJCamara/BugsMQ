@@ -2,9 +2,9 @@
 
 **Status: Phase 1 (§4, `VSaga.Transport.Http`) is built and live-verified. Phase 2's §5.1
 (`ISagaContext.PublishAfterCommitAsync`) is built and live-verified on the existing RabbitMQ stack, in
-isolation, per its own instruction. §5.2 (`src/VSaga.Http`, `.CallHttp(...)`) and §5.3 (the Saga Map
-fix) are built and unit-test-suite-green; §5.4 (this feature's own tests) and live verification remain
-open.** See the README's "Transport adapter: HTTP" section for the shipped
+isolation, per its own instruction. §5.2 (`src/VSaga.Http`, `.CallHttp(...)`), §5.3 (the Saga Map fix),
+and §5.4 (`tests/VSaga.Http.Tests`, including the mutation-tested ordering proof) are built and green.
+Only live verification (§6) against a real HTTP target remains open.** See the README's "Transport adapter: HTTP" section for the shipped
 adapter and live-verification evidence, including a genuine cross-process deadlock found only by live
 `docker compose` traffic (never by the unit suite) and its fix — a fourth instance of "caught only by a
 live run," alongside the three in §3.
