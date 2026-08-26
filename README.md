@@ -70,19 +70,29 @@ service, listed here as an untested gap through several passes, are covered as o
 polling service tests". Nothing from that original note remains deliberately out of scope.
 
 **Proposed work.** Every section of this README describes something that exists. Designs for work that
-does *not* exist yet live under `docs/` instead, so the two are never confused. `docs/` currently has no
-open proposals: [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) covered the whole of
-sub-saga composition, and its last open piece — whether a parent's compensation cascades into its
-children (Slice 3) — is now closed rather than proposed: considered, and deliberately not built, per the
-doc's own recommendation. See "Sub-saga composition: parent linkage" below for where that's documented as
-shipped (non-)behaviour, and the doc itself for the full reasoning, including one claim it made that
+does *not* exist yet live under `docs/` instead, so the two are never confused.
+
+[`docs/http-based-sagas.md`](docs/http-based-sagas.md) is the one open proposal: HTTP-based sagas, in
+two independent halves — an `IMessageTransport` adapter that moves messages between vSaga services over
+HTTP with no broker at all, and a transport-agnostic `.CallHttp(...)` step that lets any saga call a
+plain REST API and map its response into a saga message. Nothing in it is built. Its §3 is the part to
+read first: three constraints found by tracing the engine, two of which killed an earlier draft of the
+design outright — including a third instance of this repo's recurring "header the orchestrator never
+actually reads back" scar, which here would cause infinite redelivery rather than a merely wrong
+dashboard.
+
+[`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) covered the whole of sub-saga
+composition and has no open work left: its last piece — whether a parent's compensation cascades into
+its children (Slice 3) — is closed rather than proposed, considered and deliberately not built per the
+doc's own recommendation. See "Sub-saga composition: parent linkage" below for where that's documented
+as shipped (non-)behaviour, and the doc itself for the full reasoning, including one claim it made that
 turned out to be wrong, one about `UnhandledEventPolicy.Throw` that also turned out to be wrong, and two
 race conditions it didn't anticipate at all.
 
 Chaos-engineering transport middleware, formerly listed here as a proposal, is implemented; see
 "Chaos-engineering transport middleware" below. Additional transport adapters — the last genuinely open
 item from the original v1 roadmap note — are also implemented; see the three "Transport adapter: ..."
-sections below. `docs/` currently has no open proposals.
+sections below.
 
 ## Production-hardening pass (this commit)
 
