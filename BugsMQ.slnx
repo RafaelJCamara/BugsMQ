@@ -13,9 +13,12 @@
     <Project Path="src/BugsMQ.Persistence.EFCore.Postgres/BugsMQ.Persistence.EFCore.Postgres.csproj" />
     <Project Path="src/BugsMQ.Persistence.InMemory/BugsMQ.Persistence.InMemory.csproj" />
     <Project Path="src/BugsMQ.Testing/BugsMQ.Testing.csproj" />
+    <Project Path="src/BugsMQ.Transport.Brighter/BugsMQ.Transport.Brighter.csproj" />
     <Project Path="src/BugsMQ.Transport.Common/BugsMQ.Transport.Common.csproj" />
     <Project Path="src/BugsMQ.Transport.InMemory/BugsMQ.Transport.InMemory.csproj" />
+    <Project Path="src/BugsMQ.Transport.MassTransit/BugsMQ.Transport.MassTransit.csproj" />
     <Project Path="src/BugsMQ.Transport.RabbitMQ/BugsMQ.Transport.RabbitMQ.csproj" />
+    <Project Path="src/BugsMQ.Transport.Wolverine/BugsMQ.Transport.Wolverine.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BackfillStrandedTimeouts/BackfillStrandedTimeouts.csproj" />
@@ -26,6 +29,9 @@
     <Project Path="tests/BugsMQ.Dashboard.Api.Tests/BugsMQ.Dashboard.Api.Tests.csproj" />
     <Project Path="tests/BugsMQ.Persistence.EFCore.Tests/BugsMQ.Persistence.EFCore.Tests.csproj" />
     <Project Path="tests/BugsMQ.Testing.Tests/BugsMQ.Testing.Tests.csproj" />
+    <Project Path="tests/BugsMQ.Transport.Brighter.Tests/BugsMQ.Transport.Brighter.Tests.csproj" />
+    <Project Path="tests/BugsMQ.Transport.MassTransit.Tests/BugsMQ.Transport.MassTransit.Tests.csproj" />
     <Project Path="tests/BugsMQ.Transport.RabbitMQ.Tests/BugsMQ.Transport.RabbitMQ.Tests.csproj" />
+    <Project Path="tests/BugsMQ.Transport.Wolverine.Tests/BugsMQ.Transport.Wolverine.Tests.csproj" />
   </Folder>
 </Solution>

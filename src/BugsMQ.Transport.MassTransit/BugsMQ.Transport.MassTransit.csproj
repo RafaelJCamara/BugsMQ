@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BugsMQ.Abstractions\BugsMQ.Abstractions.csproj" />
+    <ProjectReference Include="..\BugsMQ.Transport.Common\BugsMQ.Transport.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- MassTransit v9 is commercially licensed; pin to the latest Apache-2.0 8.x release. Confirmed
+         current via NuGet as of this writing (see docs/readme-section-masstransit.md). -->
+    <PackageReference Include="MassTransit.RabbitMQ" VersionOverride="8.5.8" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

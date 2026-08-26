@@ -10,6 +10,9 @@
     <ProjectReference Include="..\..\src\BugsMQ.Observability\BugsMQ.Observability.csproj" />
     <ProjectReference Include="..\..\src\BugsMQ.Persistence.EFCore\BugsMQ.Persistence.EFCore.csproj" />
     <ProjectReference Include="..\..\src\BugsMQ.Transport.RabbitMQ\BugsMQ.Transport.RabbitMQ.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Transport.Wolverine\BugsMQ.Transport.Wolverine.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Transport.MassTransit\BugsMQ.Transport.MassTransit.csproj" />
+    <ProjectReference Include="..\..\src\BugsMQ.Transport.Brighter\BugsMQ.Transport.Brighter.csproj" />
     <ProjectReference Include="..\BugsMQ.Samples.OrderProcessing.Contracts\BugsMQ.Samples.OrderProcessing.Contracts.csproj" />
   </ItemGroup>
 

@@ -22,8 +22,12 @@ src/
   BugsMQ.Persistence.EFCore.Postgres   Postgres-specific EF Core migrations (see "EF Core migrations" below)
   BugsMQ.Persistence.InMemory     In-memory store implementations (dev/test)
   BugsMQ.Testing                  SagaTestHarness for unit-testing saga definitions
+  BugsMQ.Transport.Common         Shared IMessageTransport decorator (MiddlewarePipelineTransport)
   BugsMQ.Transport.InMemory       In-memory IMessageTransport (dev/test)
   BugsMQ.Transport.RabbitMQ       Real IMessageTransport over RabbitMQ.Client
+  BugsMQ.Transport.Wolverine      IMessageTransport over WolverineFx.RabbitMQ
+  BugsMQ.Transport.MassTransit    IMessageTransport over MassTransit 8.x + RabbitMQ
+  BugsMQ.Transport.Brighter       IMessageTransport over Paramore.Brighter's RabbitMQ gateway
   BugsMQ.Dashboard.Api            ASP.NET Core API + SignalR hub for the ops dashboard
 dashboard-web/                    Angular 21 SPA for the dashboard (list/detail, live updates)
 samples/
@@ -43,38 +47,42 @@ described below.
 
 **What's implemented and tested:** orchestrated sagas (linear state machines with compensation,
 step-level retry policies, per-state timeouts, manual whole-saga retry), choreographed sagas (see
-"Choreographed saga support" below), EF Core/Postgres and in-memory persistence, the RabbitMQ and
-in-memory transports, the dashboard API/SPA, and the `BugsMQ.Testing` harness. The OrderProcessing
-sample runs both saga kinds side by side against real Postgres/RabbitMQ via `docker-compose.yml` —
-`OrderSaga` (orchestrated: compensation, timeouts) and `PostShipmentChoreography` (choreographed:
-an independent fan-out tracked under the same correlation id) — see "Choreography in the
-OrderProcessing sample" below.
+"Choreographed saga support" below), EF Core/Postgres and in-memory persistence, four
+`IMessageTransport` adapters — RabbitMQ (the reference implementation), Wolverine, MassTransit, and
+Brighter, all over RabbitMQ-family brokers — plus the in-memory transport, the dashboard API/SPA, and
+the `BugsMQ.Testing` harness. The OrderProcessing sample runs both saga kinds side by side against real
+Postgres/RabbitMQ via `docker-compose.yml` — `OrderSaga` (orchestrated: compensation, timeouts) and
+`PostShipmentChoreography` (choreographed: an independent fan-out tracked under the same correlation
+id) — see "Choreography in the OrderProcessing sample" below. Its transport is config-switchable
+(`Transport:Provider`, see `samples/BugsMQ.Samples.OrderProcessing/Program.cs`) to run against any of
+the four adapters via a dedicated docker-compose overlay per adapter (`docker-compose.wolverine.yml`,
+`.masstransit.yml`, `.brighter.yml` — RabbitMQ needs none, it's the default).
 
-**What's deliberately out of scope for v1** (per the original commit's own roadmap note, not
-addressed in this pass): additional transport adapters (MassTransit/Wolverine). Parallel/fan-out saga
-steps, also on that original list, are covered as of "Parallel fan-out and join" below. Sub-saga
-composition, the last item from that note, is now fully covered: a parent can start a child, the
-relationship is persisted and queryable ("Sub-saga composition: parent linkage" below), a child can
-report back to a parent that actually waits for it ("Sub-saga composition: completion notification"
-below), and the engine now publishes a safety net for a child that fails or times out before it ever
-reaches its own report-back step ("Sub-saga composition: engine safety net" below). The SignalR hub and
-polling service, listed here as an untested gap through several passes, are covered as of "SignalR hub
-and polling service tests".
+**The original v1 roadmap note is now fully closed.** All four items it deferred are built: additional
+transport adapters (see the three "Transport adapter: ..." sections below — MassTransit and Wolverine
+were the two the note named, Brighter shipped alongside them), parallel/fan-out saga steps ("Parallel
+fan-out and join" below), and sub-saga composition: a parent can start a child, the relationship is
+persisted and queryable ("Sub-saga composition: parent linkage" below), a child can report back to a
+parent that actually waits for it ("Sub-saga composition: completion notification" below), and the
+engine publishes a safety net for a child that fails or times out before it ever reaches its own
+report-back step ("Sub-saga composition: engine safety net" below). The SignalR hub and polling
+service, listed here as an untested gap through several passes, are covered as of "SignalR hub and
+polling service tests". Nothing from that original note remains deliberately out of scope.
 
 **Proposed work.** Every section of this README describes something that exists. Designs for work that
-does *not* exist yet live under `docs/` instead, so the two are never confused:
+does *not* exist yet live under `docs/` instead, so the two are never confused. `docs/` currently has no
+open proposals: [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) covered the whole of
+sub-saga composition, and its last open piece — whether a parent's compensation cascades into its
+children (Slice 3) — is now closed rather than proposed: considered, and deliberately not built, per the
+doc's own recommendation. See "Sub-saga composition: parent linkage" below for where that's documented as
+shipped (non-)behaviour, and the doc itself for the full reasoning, including one claim it made that
+turned out to be wrong, one about `UnhandledEventPolicy.Throw` that also turned out to be wrong, and two
+race conditions it didn't anticipate at all.
 
-- [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) — the one piece of sub-saga composition
-  still proposed: whether a parent's compensation cascades into its children (Slice 3, the one the doc
-  recommends pushing back on). Slices 1, 2a, and 2b are built and described below; the doc now carries
-  what building them taught, including one claim it made that turned out to be wrong, one about
-  `UnhandledEventPolicy.Throw` that also turned out to be wrong, and two race conditions it didn't
-  anticipate at all.
-
-Chaos-engineering transport middleware — listed as out of scope in the original v1 roadmap note,
-with the `MessageMiddleware`/`MiddlewarePipelineTransport` seam left in place unused specifically so
-it could be added later without touching Core/Abstractions/the transport — is implemented in a
-later pass; see "Chaos-engineering transport middleware" below.
+Chaos-engineering transport middleware, formerly listed here as a proposal, is implemented; see
+"Chaos-engineering transport middleware" below. Additional transport adapters — the last genuinely open
+item from the original v1 roadmap note — are also implemented; see the three "Transport adapter: ..."
+sections below. `docs/` currently has no open proposals.
 
 ## Production-hardening pass (this commit)
 
@@ -1240,6 +1248,433 @@ just this file, since no other registered parent in this repo both declares a `C
 handler and has a child that finishes ordinarily. Dropping `StartChildAsync`'s `ChildSagaStarted`
 entry-type override back to the old `MessagePublished` fails exactly the one Slice-1-era test updated
 for this slice.
+
+## Transport adapter: Wolverine
+
+`IMessageTransport`'s own doc comment (`src/BugsMQ.Abstractions/Transport/IMessageTransport.cs:4-6`) names
+Wolverine as a future adapter alongside MassTransit, on the same terms as RabbitMqTransport: use the
+target bus's own raw send/receive primitives, never its native saga/state-machine or handler-discovery
+machinery. `BugsMQ.Transport.Wolverine` is that adapter, built on WolverineFx 6.30.0 / WolverineFx.RabbitMQ
+6.30.0 (latest stable on NuGet as of this pass — confirmed via the NuGet flat-container index, not
+training-data memory) plus WolverineFx.RuntimeCompilation, which Wolverine 6.x now requires explicitly
+(core no longer ships the Roslyn-based runtime compiler; referencing the package auto-registers it).
+
+**The scope boundary, concretely.** Wolverine is fundamentally a mediator: its normal mode deserializes an
+inbound envelope into a specific CLR type and invokes a `Handle(T)` method discovered by assembly
+scanning at startup. BugsMQ's `SubscribeAsync` is the opposite shape — a runtime-registered
+`(TransportSubscription, Func<ReceivedMessage, CancellationToken, Task>)` pair, created dynamically,
+often several times, well after the host has already started. Routing a real saga message type through
+Wolverine's own discovery would mean Wolverine owning dispatch to business logic, which is exactly what
+the doc comment forbids. `RawEnvelope` (`src/BugsMQ.Transport.Wolverine/RawEnvelope.cs`) is the fix: every
+single piece of BugsMQ traffic — regardless of its real message type — is sent and received as this one
+empty marker type, so Wolverine's handler discovery only ever has to know about one static
+`RawEnvelopeHandler.Handle` method (`RawEnvelope.cs`), never a saga-specific type. The four BugsMQ headers,
+the real message type name, the correlation id, and the message id all travel inside a small
+self-describing JSON payload (`WireEnvelope`, `src/BugsMQ.Transport.Wolverine/WireEnvelope.cs`) carried
+verbatim as `Envelope.Data` — deliberately *not* relying on Wolverine's own `Envelope.Headers`-to-AMQP-property
+mapping, so the header round trip is provably correct independent of whatever that mapping does.
+
+**Publish/send: Wolverine's raw-send primitive, not its routing rules.** `WolverineTransport.PublishAsync`/
+`SendAsync`/`PublishRawAsync` all funnel into `PublishInternalAsync`
+(`WolverineTransport.cs:47`), which calls `IDestinationEndpoint.SendRawMessageAsync` (`WolverineTransport.cs:65`)
+against a `RabbitMqEndpointUri.Topic(exchange, messageTypeName)` URI for publish/raw or
+`RabbitMqEndpointUri.Queue(destination)` for a direct send — mirroring RabbitMqTransport's own
+topic-exchange-vs-default-exchange split, just addressed through Wolverine's URI scheme instead of
+`RabbitMQ.Client.IChannel.BasicPublishAsync`. `SendRawMessageAsync` puts exactly the bytes handed to it on
+the wire; nothing about the real BugsMQ message type ever reaches Wolverine's own serializer.
+
+**Subscribe: a dynamically-started listener, not a startup-declared one.** This is the one place Wolverine's
+own docs stopped being useful and reflection on the actual 6.30.0 binaries had to settle it.
+`IWolverineRuntime`'s own `RegisterListenerAsync`/`RemoveListenerAsync` extension methods
+(`Wolverine.Runtime.WolverineRuntimeListenerExtensions`) looked like the obvious fit, but their XML doc
+gives it away: "*persist as a registered listener that the cluster will activate on one node… within one
+cluster assignment cycle (default 30s)*" — that's Wolverine's leader-elected, durability-store-backed
+dynamic-multi-tenancy machinery, not an immediate single-node start, and it left every test hanging past
+its 15s timeout with the listener simply never active. The actual fix,
+`IEndpointCollection.StartListenerAsync`/`StopListenerAsync` (`WolverineTransport.cs:110`, `132`), starts a
+listener on this node immediately, no durability store or cluster involved — `SubscribeAsync` calls it
+directly against the `RabbitMqQueue` object `ModifyRabbitMqObjects` just declared
+(`WolverineTransport.cs:89`), since `RabbitMqQueue` *is* a Wolverine `Endpoint`
+(`RabbitMqQueue → RabbitMqEndpoint → Endpoint`, confirmed by walking the actual type hierarchy via
+reflection, not the docs). Topology (one durable queue per consumer, bound to the shared topic exchange
+per declared message type) is declared JIT inside that same call, through Wolverine's own
+`IWolverineRuntime.ModifyRabbitMqObjects` object-management API — mirroring
+`RabbitMqTransport.DeclareSubscriptionTopologyAsync`'s shape without ever touching `RabbitMQ.Client`
+directly from this adapter.
+
+**Ack/nack, without Wolverine's own retry fighting Core's.** Wolverine's model is implicit: return from
+`Handle` and it acks; throw and its own error-handling policy decides what happens next. BugsMQ's model is
+explicit: the caller of `SubscribeAsync`'s handler always calls `received.Ack.AckAsync`/`NackAsync` itself
+before returning (see `SagaOrchestrator.HandleAsync`, `src/BugsMQ.Core/Runtime/SagaOrchestrator.cs:39-50`).
+`WolverineAckContext` (`src/BugsMQ.Transport.Wolverine/WolverineAckContext.cs`) bridges the two: by the
+time `RawDispatchRegistry.DispatchAsync` resumes after awaiting the downstream handler, one of Ack/Nack has
+always already run, and a Nack is turned into a thrown exception so Wolverine's own `Handle` faults.
+`ServiceCollectionExtensions.cs:46` configures `opts.OnException<Exception>().MoveToErrorQueue()` —
+zero Wolverine-level retries, straight to its error queue on the first failure — because Core already owns
+bounded, application-level redelivery (`SagaOrchestrator.HandleInfrastructureFailureAsync`,
+`SagaOrchestrator.cs:52-90`, republishing via `PublishRawAsync` with an incremented
+`x-bugsmq-delivery-attempt` header) and never relied on broker-native requeue in the first place — see that
+method's own doc comment. `NackAsync(requeue: false)` therefore only ever needs to mean "settle this as
+rejected", exactly as the task brief anticipated.
+
+**No Wolverine equivalent of RabbitMqTransport's unroutable-publish exception — confirmed, not assumed.**
+RabbitMqTransport turns on `mandatory: true` plus publisher confirms and lets RabbitMQ.Client surface the
+broker's `basic.return` as `MessageTransportPublishException.IsUnroutable`. WolverineFx.RabbitMQ 6.30.0
+exposes publisher-confirm *settings* (`WolverineRabbitMqChannelOptions.PublisherConfirmationsEnabled` /
+`PublisherConfirmationTrackingEnabled`) but never sets AMQP's `mandatory` flag and has no unroutable-return
+handling anywhere — checked by scanning `Wolverine.RabbitMQ.dll` itself for `mandatory`/`Unroutable`/
+`BasicReturn`: zero matches, and the shipped XML docs are equally silent. A message published to a routing
+key nobody is bound to is therefore silently discarded by the broker. `Publish_ToUnboundRoutingKey_CompletesWithoutThrowing_NoWolverineUnroutableSignal`
+(`tests/BugsMQ.Transport.Wolverine.Tests/WolverineTransportTests.cs`) asserts that actual, verified
+behavior instead of faking the RabbitMQ adapter's exception.
+
+**Tests: 4/4 against a real broker, one new.** `WolverineTransportTests` mirrors
+`RabbitMqTransportTests`'s Testcontainers-per-class shape (no mocks), adding the host-lifecycle setup
+Wolverine's own hosted service needs (`services.AddWolverine` only actually opens a connection once
+`IHost.StartAsync` runs its hosted services). `PublishAndSubscribe_DeliversMessageWithCorrelationAndType`,
+`Send_DeliversDirectlyToNamedQueueWithoutExchange`, and the unroutable-publish test above pass unchanged in
+spirit from the RabbitMQ suite; `PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged` is new and is
+the one that actually proves the sub-saga headers round-trip — the other three never set a custom header at
+all. All 4 pass: `Passed! - Failed: 0, Passed: 4, Skipped: 0, Total: 4, Duration: 19s`.
+
+**Verified by mutation.** Dropping `envelope.Headers` entirely when building the outbound `WireEnvelope`
+(`WolverineTransport.cs`'s `PublishInternalAsync`) fails exactly one test —
+`PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged`, with `KeyNotFoundException: The given key
+'x-bugsmq-source-service' was not present in the dictionary` — and leaves the other three green. Reverting
+restores 4/4. That is the same "does the mutation break only the thing it should" bar the sub-saga slices
+above were held to.
+
+**Live verification**, tracing a real `StartChildAsync`/parent-linkage pair through Wolverine end to end,
+under `docker compose -p bugsmq-wolverine -f docker-compose.yml -f docker-compose.wolverine.yml up -d
+--build` (host ports 5443/5772/15772/5180, chosen not to collide with the two other adapter tracks' worktrees
+running concurrently on the same machine) with `Transport__Provider=Wolverine`:
+
+- Container start at `2026-08-26T05:35:25Z`. `docker compose ... logs order-processing` shows normal saga
+  traffic (inventory holds, payment charges/refunds, timeout scheduling) running entirely over
+  `BugsMQ.Transport.Wolverine` seconds after start — no RabbitMQ.Client transport code in the loaded
+  assembly graph at all for this run.
+- Querying `SagaInstances` for rows created after the start timestamp: `PostShipmentChoreography` 4+,
+  `InvoiceFollowUpSaga` 4+, `InvoiceArchivalSaga` 4+, `InvoiceDeliverySaga` 4+, `OrderSaga` 6+ (44 total by
+  teardown) — both sub-saga pairs the task named are present.
+- One concrete traced chain: `OrderSaga` correlation `3d415c9a-82ca-4370-9019-870a802775a8` reached
+  `Completed`; the same correlation id's `PostShipmentChoreography` row (same id, per "Saga identity:
+  (SagaType, CorrelationId)" above) reached `Invoiced` and, via `ctx.StartChildAsync`, started an
+  `InvoiceDeliverySaga` with its **own fresh** correlation id `2d6c27f0-0cdd-4924-9041-aaed35b1d9a1` —
+  and that child's `ParentSagaType`/`ParentCorrelationId` columns read back exactly
+  `PostShipmentChoreography` / `3d415c9a-82ca-4370-9019-870a802775a8`. The other named pair
+  (`InvoiceFollowUpSaga` → `InvoiceArchivalSaga`) shows the identical shape: correlation
+  `107afb67-8b68-4f9f-bfc9-d31b967a2ef6`'s `InvoiceArchivalSaga` row points back to
+  `InvoiceFollowUpSaga` / `3d415c9a-82ca-4370-9019-870a802775a8`. This is the concrete proof the four
+  headers made it through a real publish→receive round trip on Wolverine, not just a unit test with a
+  hand-built envelope.
+- One inconsequential log line seen during startup, `Error: libgssapi_krb5.so.2: cannot open shared object
+  file` — a Kerberos-auth-mechanism probe from the underlying client library on a Debian slim image with no
+  Kerberos installed, unrelated to Wolverine and with no effect on any of the above (all 44 saga instances
+  and every parent link resolved correctly).
+- Torn down with `docker compose -p bugsmq-wolverine ... down` (no `-v`, matching this repo's habit of
+  leaving the volume between runs).
+
+**Integration note, for the record.** This adapter was originally built in an isolated worktree that had
+branched before the shared `BugsMQ.Transport.Common` relocation and the sample's `Transport:Provider`
+switch existed, so that worktree worked around it by duplicating `MiddlewarePipelineTransport.cs` locally
+and building its own version of the switch from scratch. Both were reconciled during integration into
+`main`: the duplicate was deleted, `BugsMQ.Transport.Wolverine.csproj` now references the real
+`BugsMQ.Transport.Common` project like every other adapter, and the `Wolverine` case was merged into the
+one shared switch in `Program.cs` alongside MassTransit's and Brighter's. Rebuilt and re-verified — all 4
+tests, the full 213-test solution suite, and a fresh `docker compose` pass — against the corrected
+reference with no behavioral change.
+
+## Transport adapter: MassTransit
+
+`BugsMQ.Transport.MassTransit` (`src/BugsMQ.Transport.MassTransit/`) is the second real
+`IMessageTransport` adapter, alongside `BugsMQ.Transport.RabbitMQ`. Same contract
+(`src/BugsMQ.Abstractions/Transport/IMessageTransport.cs:8-32`), same four methods, same
+`MiddlewarePipelineTransport` wrapper — a different wire underneath. Pinned to **MassTransit
+8.5.8** (`src/BugsMQ.Transport.MassTransit/BugsMQ.Transport.MassTransit.csproj`), the latest 8.x
+release confirmed on NuGet at the time of writing: MassTransit v9 is transitioning to a commercial
+license, v8 remains Apache-2.0, and this adapter is built on it deliberately rather than on
+whatever happened to be cached in training data.
+
+**Built on MassTransit's transport, not its saga features — same boundary the doc comment already
+states.** `IMessageTransport`'s own doc comment says concrete adapters "never use another bus's
+native saga/state-machine features, only its transport"
+(`src/BugsMQ.Abstractions/Transport/IMessageTransport.cs:4-6`). `MassTransitTransport` is built
+entirely on `IBus`/`IPublishEndpoint`/`ISendEndpointProvider` for outbound and
+`IConsumer<T>`/`ConsumeContext<T>` for inbound, over MassTransit's RabbitMQ transport — never
+Courier (routing slips) and never Automatonymous/its own saga persistence. `SagaOrchestrator`
+still owns every bit of retry, redelivery, and dedup (`src/BugsMQ.Core/Runtime/SagaOrchestrator.cs:52-90`);
+this adapter only moves bytes.
+
+**One MassTransit contract for every BugsMQ message, not one per type.** MassTransit's own pub/sub
+topology is built around compile-time generics (`Publish<T>`, `IConsumer<T>`), but
+`TransportSubscription.MessageTypes` only ever hands `SubscribeAsync` a list of runtime `Type`
+instances — the same mismatch `RabbitMqTransport` sidesteps by treating the RabbitMQ.Client body as
+opaque JSON bytes. `BugsMqEnvelopeMessage` (`src/BugsMQ.Transport.MassTransit/BugsMqEnvelopeMessage.cs`)
+is the one fixed record every BugsMQ message actually travels as: `MessageTypeName` plus an
+already-`System.Text.Json`-serialized body. `AddBugsMqMassTransit`
+(`src/BugsMQ.Transport.MassTransit/ServiceCollectionExtensions.cs`) forces it onto one durable
+topic exchange (`cfg.Message<BugsMqEnvelopeMessage>(m => m.SetEntityName(...))`,
+`cfg.Publish<BugsMqEnvelopeMessage>(p => p.ExchangeType = "topic")`) and reads the routing key back
+off the message itself (`cfg.Send<BugsMqEnvelopeMessage>(s => s.UseRoutingKeyFormatter(ctx =>
+ctx.Message.MessageTypeName))`) — the same shared-topic-exchange-plus-per-type-routing-key shape
+`RabbitMqTransport` gets natively, reconstructed one layer up. `SubscribeAsync`
+(`src/BugsMQ.Transport.MassTransit/MassTransitTransport.cs`) turns off MassTransit's default
+auto-bind-on-consume (`e.ConfigureConsumeTopology = false`) — left on, every subscriber's queue
+would receive every BugsMQ message ever published, since they all share one contract — and instead
+binds one `IRabbitMqReceiveEndpointConfigurator.Bind<BugsMqEnvelopeMessage>` per declared message
+type, each with that type's name as the routing key.
+
+**The four envelope headers ride on MassTransit's own header pipeline, not inside the wrapper
+record.** `CorrelationId`/`MessageId` are set as native `SendContext` fields; `SourceServiceHeader`,
+`CausationIdHeader`, `ParentSagaTypeHeader`, and `ParentCorrelationIdHeader` — plus a redundant
+correlation/message-id pair, the same defense-in-depth `RabbitMqTransport` applies — are set via
+`SendContext.Headers.Set(key, value)` and read back via `ConsumeContext.Headers.GetAll()`. This
+matters because it is real MassTransit metadata making the round trip, not payload data smuggled
+through a field nothing but this adapter ever inspects — the same distinction that mattered for
+`SourceService`/`CausationId` shipping once already with tests that hand-built the field and proved
+nothing (see "Sub-saga composition: parent linkage" above).
+
+**Ack/nack, adapted rather than replicated.** MassTransit has no mid-flight equivalent of
+RabbitMQ.Client's channel-level `BasicAck` — a consumer settles a delivery only by returning
+normally (ack) or throwing (fault). `BugsMqEnvelopeConsumer` bridges this onto
+`IMessageAckContext`: `AckAsync`/`NackAsync` just record the caller's decision, and `Consume`
+turns a recorded nack — or no decision at all — into a thrown exception once the handler
+completes. Every receive endpoint is configured `UseMessageRetry(r => r.None())`, so a fault lands
+straight in `{queue}_error` rather than being retried by MassTransit itself against
+`SagaOrchestrator`'s own bounded-redelivery wishes (`HandleInfrastructureFailureAsync`,
+`src/BugsMQ.Core/Runtime/SagaOrchestrator.cs:61-90`, never relies on broker-native requeue). No
+poison-queue/DLX topology is replicated from `RabbitMqTransport` — the scope note calling that
+defense-in-depth specific to that adapter, not a contract requirement, held up under actual
+implementation.
+
+**Unroutable publish.** MassTransit surfaces RabbitMQ's mandatory-publish-plus-return semantics as
+`MessageReturnedException` (confirmed against MassTransit's own test suite,
+`tests/MassTransit.RabbitMqTransport.Tests/Mandatory_Specs.cs`) when `PublishContext.Mandatory` is
+set and no queue is bound for the routing key. `MassTransitTransport` sets it on every publish and
+wraps the exception into the same provider-agnostic `MessageTransportPublishException` RabbitMQ's
+own adapter throws, `IsUnroutable` included.
+
+**Tests: 4 against a real broker, no mocks** (`tests/BugsMQ.Transport.MassTransit.Tests/`,
+Testcontainers `rabbitmq:4-management`, mirroring `RabbitMqTransportTests`' own IAsyncLifetime
+shape): publish-and-subscribe with correlation id and type preserved; direct send to a named queue
+bypassing the exchange; unroutable publish throwing `MessageTransportPublishException`; and the new
+`PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged`, which stamps all four BugsMQ headers
+to distinct values and asserts every one survives a real publish→receive round trip byte-for-byte —
+the one test of the four that actually exercises the header pipeline this section is about.
+
+**Mutation-tested.** Commenting out the loop in `MassTransitTransport.ApplyEnvelope` that copies
+`envelope.Headers` onto `SendContext.Headers` — the only line standing between the four BugsMQ
+headers and MassTransit's wire — reran the suite: exactly
+`PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged` failed
+(`Header 'x-bugsmq-source-service' did not survive the round trip at all.`), all three other tests
+stayed green. Reverting the break brought all four back to green. The failure mode is exactly the
+one this test exists to catch, and nothing else does.
+
+**Live-verified under `docker compose`**, its own project namespace (`bugsmq-masstransit`, remapped
+host ports so it runs concurrently with the RabbitMQ and Wolverine tracks' own stacks on the same
+machine — `docker-compose.masstransit.yml`), tracing a real `StartChildAsync`/`NotifyParentAsync`
+pair end to end to prove the parent-linkage headers made it through an actual MassTransit
+publish→receive round trip, not just the unit test above:
+
+- Project `bugsmq-masstransit`, host ports remapped per `docker-compose.masstransit.yml`
+  (postgres 5444, rabbitmq 5872/15872, dashboard-api 5280) so this ran concurrently with the other
+  two adapter tracks' own stacks on the same machine. Brought up at `2026-08-26T05:21:51Z` UTC;
+  `docker compose -p bugsmq-masstransit -f docker-compose.yml -f docker-compose.masstransit.yml up
+  -d --build` finished image builds (both `order-processing` and `dashboard-api`, dependency
+  restore + publish) and had every container healthy in under 15s of build time on top of an
+  already-warm base-image cache.
+- `order-processing`'s own startup log line confirms the real adapter, not a silent fallback to
+  RabbitMQ: `info: MassTransit[0] / Bus started: rabbitmq://rabbitmq/`. No `MessageReturnedException`,
+  no `MassTransitNackException`/`MassTransitDispatchException`, and nothing routed to a MassTransit
+  `_error` queue across the whole run.
+- 126 saga instances created after the startup timestamp: 37 `OrderSaga`, 22
+  `PostShipmentChoreography`, 22 `InvoiceDeliverySaga`, 22 `InvoiceFollowUpSaga`, 23
+  `InvoiceArchivalSaga`. 45 of those are children (`ParentSagaType IS NOT NULL`) — 22
+  `InvoiceDeliverySaga` off `PostShipmentChoreography`, 23 `InvoiceArchivalSaga` off
+  `InvoiceFollowUpSaga` — and a direct SQL check for `("ParentSagaType" IS NULL) <>
+  ("ParentCorrelationId" IS NULL)` returns **0**: no half-linked rows, every child resolves to a
+  real parent row.
+- One pair traced end to end through `SagaEventLog`, correlation id
+  `a8298edd-b616-4153-95a4-5214bf688a69` for the parent (`InvoiceFollowUpSaga`) and
+  `4096c521-574e-454d-8758-1c5628ca1bd4` for the child (`InvoiceArchivalSaga`):
+  child — `SagaStarted ArchiveInvoice` → `Requested`, `MessagePublished StoreInvoiceCopy` →
+  `AwaitingStorage`, `MessageReceived InvoiceCopyStored` → `Archived`/`Completed`, with a
+  `NotifyParentAsync`-published `InvoiceArchivalFinished` entry in between; parent —
+  `SagaStarted InvoiceIssued` → `Requested`, a `ChildSagaStarted ArchiveInvoice` entry →
+  `AwaitingArchival`, `MessageReceived InvoiceArchivalFinished` → `Archived`/`Completed`. Both
+  transitions landed within the same ~330ms window (`05:22:48.58`–`05:22:48.91` UTC) — the fast
+  path, no timeout involved — and the same correlation id widens out to the whole chain sharing
+  `OrderSaga`'s id: `OrderSaga` Completed, `PostShipmentChoreography` Completed/`Invoiced`,
+  `InvoiceDeliverySaga` (a sibling child under the same parent correlation id) Completed/`Delivered`,
+  `InvoiceFollowUpSaga` Completed/`Archived`. This is the concrete proof the
+  `x-bugsmq-parent-saga-type`/`x-bugsmq-parent-correlation-id` headers made it through a real
+  MassTransit publish→receive round trip, read back by `SagaOrchestrator` into real
+  `ParentSagaType`/`ParentCorrelationId` columns — not just the unit test above.
+- Torn down with `docker compose -p bugsmq-masstransit -f docker-compose.yml -f
+  docker-compose.masstransit.yml down` (no `-v`, matching this repo's habit of leaving the volume
+  between runs).
+
+**Deviations from the brief:** `docker-compose.masstransit.yml`'s `order-processing.environment`
+block adds one key beyond the exact block specified in the task
+(`MassTransit__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"`) — the base
+`docker-compose.yml` already sets `RabbitMq__ConnectionString` for the default provider, but
+nothing populates the "MassTransit" config section `MassTransitOptions` binds from, and without it
+the adapter would default to `localhost:5672`, unreachable from inside the container network. Noted
+rather than silently worked around.
+
+## Transport adapter: Brighter
+
+`BugsMQ.Transport.Brighter` (`Paramore.Brighter` + `Paramore.Brighter.MessagingGateway.RMQ.Async`
+10.7.0, latest stable at the time of writing) implements `IMessageTransport` directly on Brighter's own
+transport-level primitives — `RmqMessageProducer`'s `IAmAMessageProducerAsync.SendAsync` to publish, and
+`RmqMessageConsumer`'s `IAmAMessageConsumerAsync` to receive/ack/reject — never Brighter's
+`CommandProcessor` dispatch pipeline, its Outbox/Inbox, its request-handler routing, or any
+workflow/scheduler feature. Same rule this repo already applies to RabbitMQ.Client directly
+(`src/BugsMQ.Abstractions/Transport/IMessageTransport.cs:4-6`): BugsMQ never uses another bus's own
+saga/state-machine machinery, only its wire-level publish/consume primitives.
+`src/BugsMQ.Transport.Brighter/BrighterTransport.cs:78-146` (publish) and `:148-232` (subscribe/consume)
+are the whole adapter; `ServiceCollectionExtensions.AddBugsMqBrighter` wraps it in the same
+`MiddlewarePipelineTransport` every other adapter shares, so chaos/topology-recording middleware work
+unchanged (`src/BugsMQ.Transport.Brighter/ServiceCollectionExtensions.cs`).
+
+**Constructed directly, not through Brighter's usual DI story.** Brighter is normally wired via
+`services.AddBrighter(...).UseExternalBus(...)` plus a producer registry keyed by topic — but that helper
+exists to wire up `CommandProcessor`'s dispatch/outbox stack, which this adapter must not depend on.
+`AddBugsMqBrighter` (`ServiceCollectionExtensions.cs`) instead registers `BrighterOptions` and
+`BrighterTransport` as plain singletons and wraps the latter in `MiddlewarePipelineTransport` — the same
+one-call shape as `AddBugsMqRabbitMq`, at the cost of diverging from Brighter's own idiomatic setup.
+
+**Two mechanical differences from `RabbitMqTransport`, both forced by what Brighter's gateway actually
+exposes, not a design preference:**
+
+- *Direct-to-queue `SendAsync` has no default exchange to target.* Brighter's `RmqMessageProducer` is
+  bound to exactly one `Exchange` for its whole lifetime and always publishes using
+  `Header.Topic.Value` as the routing key — there is no per-publish exchange override and no
+  "default/nameless exchange" concept exposed anywhere in the package (confirmed by reflecting over
+  `RmqMessagingGatewayConnection`, `RmqPublication`, and `RmqMessageProducer`'s constructors: none expose
+  it). `RabbitMqTransport.SendAsync` targets AMQP's default exchange directly
+  (`src/BugsMQ.Transport.RabbitMQ/RabbitMqTransport.cs:70-74`); that path doesn't exist here. Instead,
+  `SubscribeAsync` binds the queue's own name as an *extra* routing key on the same topic exchange
+  (`BrighterTransport.cs:160-164`), so a direct send just publishes with that routing key — one queue
+  reached, mechanically different route, functionally identical outcome. `Send_DeliversDirectlyToNamedQueueWithoutExchange` passes either way.
+- *One queue, many routing keys, needs the primitive under `IAmAChannelFactory`.* The higher-level
+  `Subscription` config type that `IAmAChannelFactory`/`RmqSubscription` consume exposes a single
+  `RoutingKey` property — it cannot express "bind this one queue to N routing keys," which is exactly
+  what one consumer subscribed to several message types needs. `RmqMessageConsumer`'s own constructor
+  can (it takes a `RoutingKeys` collection), so `SubscribeAsync` constructs it directly
+  (`BrighterTransport.cs:166-171`) rather than going through `IAmAChannelFactory` — the "lowest-level
+  primitive the Service Activator itself sits on," per this track's own scope notes.
+
+**Pull-based consumption needs its own pump.** `IAmAMessageConsumerAsync.ReceiveAsync(timeout)` is
+poll-based, unlike RabbitMQ.Client's push-based `AsyncEventingBasicConsumer` that `RabbitMqTransport`
+wires up. `SubscribeAsync` runs its own background loop (`ConsumeLoopAsync`, `BrighterTransport.cs:194-205`)
+playing the same role Brighter's own Service Activator message pump would — deliberately never brought
+in, since it's part of the `CommandProcessor`/dispatcher stack this adapter must not depend on.
+
+**A gotcha live-verification-adjacent testing caught, not the live pass itself this time: topology
+declares lazily, on the first receive.** Direct testing against a live broker (constructing
+`RmqMessageConsumer`/`RmqMessageProducer` from this package outside any test harness) showed a message
+published before a fresh consumer's first `ReceiveAsync` call is silently dropped — the queue and its
+bindings don't exist yet, because `RmqMessageConsumer.EnsureChannelAsync` declares them lazily inside
+`ReceiveAsync` itself, not in the constructor. `IMessageTransport.SubscribeAsync`'s contract requires
+topology to exist *before* the method returns (RabbitMqTransport's own doc comment says so explicitly:
+"need to declare exchanges/queues/bindings ... before returning" —
+`src/BugsMQ.Abstractions/Transport/IMessageTransport.cs:26-30`). `SubscribeAsync` forces that eagerly with
+a 50ms warm-up receive before starting the consume loop (`BrighterTransport.cs:173-178`). Skipping it
+reproduces the exact bug the sub-saga headers are supposed to prove don't exist: a header nobody actually
+reads because the message carrying it was silently dropped before a real receive path ever touched it.
+
+**Known gap: no unroutable-publish detection.** `RabbitMqTransport` publishes with `mandatory: true`
+plus RabbitMQ.Client's native publisher-confirm tracking, so an unroutable message throws
+`MessageTransportPublishException` deterministically
+(`src/BugsMQ.Transport.RabbitMQ/RabbitMqTransport.cs:79-88`). `Paramore.Brighter.MessagingGateway.RMQ.Async`
+10.7.0's `RmqMessageProducer` never sets that flag — confirmed both by inspecting its publish path
+(`RmqMessageProducer`/`RmqMessagePublisher`'s constructors and properties expose no such option anywhere:
+not on `RmqPublication`, not on `RmqMessagingGatewayConnection`) and by direct testing against a live
+broker: publishing to a routing key nobody has ever bound a queue to still yields
+`PublishConfirmationResult.Success = true`. The broker only ever refuses to route a message back
+(`basic.return`) when the publish opts into mandatory delivery, which this package's producer does not do
+and provides no way to request. `BrighterTransport.SendWithConfirmationAsync`
+(`BrighterTransport.cs:115-146`) still wires up `ISupportPublishConfirmationAsync`'s confirmation event
+and throws `MessageTransportPublishException` on `Success = false` — the one failure mode this package's
+confirmation event can actually surface (a genuine broker-side nack, e.g. a queue at its length limit) —
+but that is a strictly smaller net than RabbitMQ's mandatory-plus-confirms combination catches.
+`tests/BugsMQ.Transport.Brighter.Tests/BrighterTransportTests.cs`'s
+`Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway` documents this
+verified behavior directly rather than asserting a throw that cannot occur.
+
+**Header round-trip, the property that actually matters for sub-saga composition.** All four
+`MessageEnvelope` headers (`SourceServiceHeader`, `CausationIdHeader`, `ParentSagaTypeHeader`,
+`ParentCorrelationIdHeader`) ride in Brighter's `MessageHeader.Bag`
+(`BrighterTransport.cs:98-103` outbound, `:267-280` inbound) — confirmed byte-for-byte by
+`PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged`, the one test in this suite that a-c don't
+exercise since they never set custom headers. `ReceivedMessage.Headers` is filtered to the `x-bugsmq-`
+prefix on the way in (`BrighterTransport.cs:270`) rather than passed through unfiltered the way
+`RabbitMqTransport.ToStringHeaders` does: Brighter's `Bag` also carries its own CloudEvents-flavored
+echoes of core header fields on receipt (`CorrelationId`, `Topic`, `HandledCount`, `cloudEvents_id`, ...)
+that raw AMQP headers never have, and letting those round-trip forward through redelivery
+(`SagaOrchestrator.HandleInfrastructureFailureAsync` rebuilds `envelope.Headers` from
+`received.Headers` — `src/BugsMQ.Core/Runtime/SagaOrchestrator.cs:70-74`) would carry Brighter-internal
+noise as bogus outbound headers on every redelivered message. Every real BugsMQ header in this codebase
+is `x-bugsmq-`-prefixed with no exception, so the filter drops nothing that matters.
+
+**Mutation-tested the same way the RabbitMQ adapter's own header handling gets no free pass on.**
+Deliberately removing the `envelope.Headers` copy loop in `BuildOutboundMessage`
+(`BrighterTransport.cs:98-103` at the time) reran all four tests: exactly
+`PublishAndSubscribe_PropagatesAllFourBugsMqHeadersUnchanged` failed
+(`KeyNotFoundException: The given key 'x-bugsmq-source-service' was not present in the dictionary`), the
+other three stayed green. Reverting the break brought all four back to green. The three that don't set
+custom headers genuinely can't catch a header-dropping bug — same lesson this repo already drew from the
+`CausationId` header story in "Sub-saga composition: parent linkage" above.
+
+**Live-verified under docker compose**, project name `bugsmq-brighter`, ports remapped via
+`docker-compose.brighter.yml` (postgres `5445`, rabbitmq `5972`/`15972`, dashboard-api `5380`) to run
+alongside two other adapter tracks' own concurrent stacks on the same machine. Brought up at
+`2026-08-26T05:27:06Z`; postgres and rabbitmq reported healthy by `05:27:18Z`, dashboard-api by
+`05:27:24Z`, order-processing by `05:27:30Z` — under 25 seconds end to end, cold (no prior image cache for
+this track's Dockerfile layer additions). Traced `PostShipmentChoreography`'s `StartChildAsync` →
+`InvoiceDeliverySaga` and `InvoiceFollowUpSaga`'s → `InvoiceArchivalSaga`, both real `StartChildAsync`/
+initiating-message pairs over a live Brighter-mediated publish→receive round trip:
+
+| Child saga | Child `CorrelationId` | `ParentSagaType` | `ParentCorrelationId` |
+|---|---|---|---|
+| `InvoiceDeliverySaga` | `4dc67113-4691-4c9a-bed5-7de609fd707a` | `PostShipmentChoreography` | `53b94350-a768-474f-a89c-02530ee2300d` |
+| `InvoiceArchivalSaga` | `dac3551b-5dd7-4d66-8976-95b40c4b3885` | `InvoiceFollowUpSaga` | `53b94350-a768-474f-a89c-02530ee2300d` |
+
+Both children's `ParentCorrelationId` (`53b94350-a768-474f-a89c-02530ee2300d`) resolves to a real parent
+row: `OrderSaga`/`PostShipmentChoreography`/`InvoiceFollowUpSaga` all share that exact correlation id
+(one order, observed three times), with final states `Completed`/`Invoiced`/`Archived` respectively — the
+concrete proof that `ParentSagaTypeHeader`/`ParentCorrelationIdHeader` survived a real
+`StartChildAsync` publish, a real Brighter `RmqMessageProducer.SendAsync`, a real broker round trip, and a
+real `RmqMessageConsumer.ReceiveAsync`, landing correctly on `SagaState.ParentSagaType`/
+`ParentCorrelationId` at instance-creation time — on this transport, not just in a Testcontainers unit
+test. 27 `OrderSaga` instances were created in the same window; only the one traced above happened to
+race its way to `InvoiceIssued` before the pass was torn down, which is expected given the sample's
+built-in random failure rates and this adapter needing no changes to that timing.
+
+**Open issue found during the live pass, not blocking.** `RmqMessageConsumer` on the two low-traffic
+sub-saga queues (`bugsmq.saga.InvoiceDeliverySaga`, `bugsmq.saga.InvoiceArchivalSaga`) intermittently
+logged `Paramore.Brighter.ChannelFailureException` / `precondition_failed: unknown delivery tag N` a
+handful of times over several minutes, each time followed by RabbitMQ.Client's automatic connection
+recovery reconnecting successfully within 1-5 seconds. This is consistent with the documented
+RabbitMQ.Client limitation that a message delivered-but-unacked immediately before an automatic
+connection/channel recovery cannot be acked afterward against the recovered channel's restarted delivery
+tag numbering — `RabbitMqConnectionManager` enables the same `AutomaticRecoveryEnabled`/
+`TopologyRecoveryEnabled` flags for `RabbitMqTransport`
+(`src/BugsMQ.Transport.RabbitMQ/RabbitMqConnectionManager.cs:26-27`), so this class of issue isn't unique
+to Brighter's gateway, just more likely to surface on a queue idle enough that a long-lived consumer
+channel goes a while between real deliveries. `PollBatchAsync`'s existing catch-log-retry loop
+(`BrighterTransport.cs:217-231`) already recovers from it automatically and no message was lost in this
+pass — both traced sub-saga instances above were created correctly despite it — but it's reported here
+rather than silently absorbed, since a livelier queue under sustained chaos-overlay load might surface it
+more often than this pass's five occurrences.
+
+**One more thing this pass caught.** `docker-compose.brighter.yml` uses the `!override` YAML merge tag on
+`ports` because Compose's default list-merge behavior concatenates `ports` arrays across `-f` files
+instead of replacing them — without it, this overlay would also try to bind `docker-compose.yml`'s
+original host ports (5433/5672/15672/5080) alongside its own remapped ones, exactly the collision it
+exists to avoid. `docker-compose.wolverine.yml` and `docker-compose.masstransit.yml` were written without
+the tag and had the identical latent bug; both were fixed to match during integration.
 
 ## Getting started
 

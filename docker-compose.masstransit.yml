@@ -1,0 +1,31 @@
+# MassTransit adapter overlay: layer this on top of docker-compose.yml to run the OrderProcessing
+# sample against BugsMQ.Transport.MassTransit (MassTransit 8.x over RabbitMQ) instead of the default
+# BugsMQ.Transport.RabbitMQ adapter, for that adapter's own live-verification pass. Remaps every fixed
+# host port so this can run concurrently, under its own "bugsmq-masstransit" compose project name,
+# alongside the other adapter tracks' own compose stacks on the same machine — internal
+# service-to-service DNS names/ports (e.g. order-processing talking to "rabbitmq:5672") are unaffected
+# by the project name and need no remapping.
+#
+#   docker compose -p bugsmq-masstransit -f docker-compose.yml -f docker-compose.masstransit.yml up -d --build
+#
+# Plain `docker compose up` (no this file) behaves exactly as before — RabbitMq remains the default
+# Transport:Provider (see appsettings.json), chosen when Transport__Provider is unset.
+#
+# Ports use the "!override" merge tag rather than plain sequences: Compose's default list-merge
+# behavior concatenates ports arrays across files instead of replacing them, which would leave this
+# overlay also trying to bind docker-compose.yml's original host ports (5433/5672/15672/5080) —
+# exactly the collision this overlay exists to avoid when another track's stack already holds those.
+services:
+  postgres:
+    ports: !override ["5444:5432"]
+  rabbitmq:
+    ports: !override ["5872:5672", "15872:15672"]
+  dashboard-api:
+    ports: !override ["5280:8080"]
+  order-processing:
+    environment:
+      Transport__Provider: "MassTransit"
+      # docker-compose.yml's own RabbitMq__ConnectionString env var only ever populates the "RabbitMq"
+      # config section MassTransitOptions never reads; without this, MassTransitOptions.ConnectionString
+      # would fall back to its localhost default, which is unreachable from inside this container.
+      MassTransit__ConnectionString: "amqp://guest:guest@rabbitmq:5672/"

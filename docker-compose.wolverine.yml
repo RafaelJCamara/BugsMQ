@@ -1,0 +1,23 @@
+# Wolverine-adapter overlay: layer this on top of docker-compose.yml to run the sample against
+# BugsMQ.Transport.Wolverine instead of BugsMQ.Transport.RabbitMQ, without editing docker-compose.yml
+# itself - same pattern as docker-compose.chaos.yml. Host-side ports are remapped here (not the base
+# file) so this can run concurrently, under its own "-p bugsmq-wolverine" compose project name, alongside
+# other adapter tracks' stacks on the same machine without colliding on fixed host ports. Internal
+# service-to-service DNS names/ports (e.g. order-processing talking to "rabbitmq:5672") are unaffected.
+#
+#   docker compose -p bugsmq-wolverine -f docker-compose.yml -f docker-compose.wolverine.yml up -d --build
+#
+# Ports use the "!override" merge tag rather than plain sequences: Compose's default list-merge
+# behavior concatenates ports arrays across files instead of replacing them, which would leave this
+# overlay also trying to bind docker-compose.yml's original host ports (5433/5672/15672/5080) —
+# exactly the collision this overlay exists to avoid when another track's stack already holds those.
+services:
+  postgres:
+    ports: !override ["5443:5432"]
+  rabbitmq:
+    ports: !override ["5772:5672", "15772:15672"]
+  dashboard-api:
+    ports: !override ["5180:8080"]
+  order-processing:
+    environment:
+      Transport__Provider: "Wolverine"

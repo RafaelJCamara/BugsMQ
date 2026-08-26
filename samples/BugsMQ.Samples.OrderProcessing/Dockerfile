@@ -9,6 +9,9 @@ COPY src/BugsMQ.Observability/BugsMQ.Observability.csproj src/BugsMQ.Observabili
 COPY src/BugsMQ.Persistence.EFCore/BugsMQ.Persistence.EFCore.csproj src/BugsMQ.Persistence.EFCore/
 COPY src/BugsMQ.Transport.Common/BugsMQ.Transport.Common.csproj src/BugsMQ.Transport.Common/
 COPY src/BugsMQ.Transport.RabbitMQ/BugsMQ.Transport.RabbitMQ.csproj src/BugsMQ.Transport.RabbitMQ/
+COPY src/BugsMQ.Transport.Wolverine/BugsMQ.Transport.Wolverine.csproj src/BugsMQ.Transport.Wolverine/
+COPY src/BugsMQ.Transport.MassTransit/BugsMQ.Transport.MassTransit.csproj src/BugsMQ.Transport.MassTransit/
+COPY src/BugsMQ.Transport.Brighter/BugsMQ.Transport.Brighter.csproj src/BugsMQ.Transport.Brighter/
 COPY samples/BugsMQ.Samples.OrderProcessing.Contracts/BugsMQ.Samples.OrderProcessing.Contracts.csproj samples/BugsMQ.Samples.OrderProcessing.Contracts/
 COPY samples/BugsMQ.Samples.OrderProcessing/BugsMQ.Samples.OrderProcessing.csproj samples/BugsMQ.Samples.OrderProcessing/
 RUN dotnet restore samples/BugsMQ.Samples.OrderProcessing/BugsMQ.Samples.OrderProcessing.csproj

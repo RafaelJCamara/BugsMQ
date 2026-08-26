@@ -5,6 +5,9 @@ using BugsMQ.Persistence.EFCore;
 using BugsMQ.Samples.OrderProcessing;
 using BugsMQ.Samples.OrderProcessing.Participants;
 using BugsMQ.Transport.RabbitMQ;
+using BugsMQ.Transport.MassTransit;
+using BugsMQ.Transport.Brighter;
+using BugsMQ.Transport.Wolverine;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -31,6 +34,18 @@ switch (builder.Configuration["Transport:Provider"] ?? "RabbitMq")
 {
     case "RabbitMq":
         builder.Services.AddBugsMqRabbitMq(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+        break;
+    case "Wolverine":
+        builder.Services.AddBugsMqWolverine(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
+        break;
+    case "MassTransit":
+        builder.Services.AddBugsMqMassTransit(o => builder.Configuration.GetSection("MassTransit").Bind(o));
+        break;
+    case "Brighter":
+        // Binds from the same "RabbitMq" section RabbitMqOptions uses — BrighterOptions mirrors
+        // RabbitMqOptions' shape closely enough that this is the least-surprising way to keep the two
+        // adapters config-swappable; docker-compose.brighter.yml only overrides Transport:Provider.
+        builder.Services.AddBugsMqBrighter(o => builder.Configuration.GetSection("RabbitMq").Bind(o));
         break;
     default:
         throw new InvalidOperationException($"Unknown Transport:Provider '{builder.Configuration["Transport:Provider"]}'.");
