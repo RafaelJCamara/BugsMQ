@@ -55,6 +55,9 @@ public sealed class InMemoryMessageTransport : IMessageTransport
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         DispatchAsync(message: null, messageTypeName, body, envelope, destination: null, cancellationToken);
 
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        DispatchAsync(message: null, messageTypeName, body, envelope, destination, cancellationToken);
+
     public Task<IDisposable> SubscribeAsync(TransportSubscription subscription, Func<ReceivedMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();

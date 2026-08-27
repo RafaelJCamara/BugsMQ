@@ -19,6 +19,12 @@ public sealed class TopologyRecordingTransport(IMessageTransport inner, Func<Tra
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         inner.PublishRawAsync(messageTypeName, body, envelope, cancellationToken);
 
+    // Explicit override rather than relying on the interface's default fallback: the DIM exists for
+    // external implementers who predate this method, not for this repo's own decorators — falling
+    // through here would silently downgrade every addressed send to a broadcast.
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        inner.SendRawAsync(destination, messageTypeName, body, envelope, cancellationToken);
+
     public async Task<IDisposable> SubscribeAsync(TransportSubscription subscription, Func<ReceivedMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
     {
         await onSubscribed(subscription, cancellationToken);

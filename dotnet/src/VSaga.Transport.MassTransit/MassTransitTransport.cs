@@ -42,6 +42,9 @@ public sealed class MassTransitTransport(
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         PublishInternalAsync(messageTypeName, body.ToArray(), envelope, cancellationToken);
 
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        SendInternalAsync(destination, messageTypeName, body.ToArray(), envelope, cancellationToken);
+
     private async Task PublishInternalAsync(string messageTypeName, byte[] body, MessageEnvelope envelope, CancellationToken cancellationToken)
     {
         var envelopeMessage = new VSagaEnvelopeMessage(messageTypeName, body);

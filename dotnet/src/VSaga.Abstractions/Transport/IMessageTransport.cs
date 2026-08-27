@@ -23,6 +23,21 @@ public interface IMessageTransport
     Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The <see cref="SendAsync{TMessage}"/> analogue of <see cref="PublishRawAsync"/> — sends a
+    /// pre-serialized message by type name directly to <paramref name="destination"/> rather than
+    /// broadcasting it, for the same callers that know a message's stored JSON and type name but
+    /// aren't compiled against the saga assembly that defines it.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation falls back to <see cref="PublishRawAsync"/> with
+    /// <paramref name="destination"/> ignored (a broadcast instead of an addressed send). It exists
+    /// only so an <see cref="IMessageTransport"/> implementation written before this method existed
+    /// keeps compiling; every adapter shipped in this repo overrides it with a real addressed send.
+    /// </remarks>
+    Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        PublishRawAsync(messageTypeName, body, envelope, cancellationToken);
+
+    /// <summary>
     /// Registers a handler for the message types declared in <paramref name="subscription"/>.
     /// Returns a disposable that stops the subscription. Async because real broker adapters (e.g.
     /// RabbitMQ.Client's modern API) need to declare exchanges/queues/bindings and start consuming

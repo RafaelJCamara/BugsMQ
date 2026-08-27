@@ -91,6 +91,30 @@ public sealed class WolverineTransportTests : IAsyncLifetime
         Assert.Equal(correlationId, (await tcs.Task).CorrelationId);
     }
 
+    [Fact]
+    public async Task SendRaw_DeliversDirectlyToNamedQueueWithoutExchange()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer3", [typeof(PingMessage)], "vsaga.wolverine.test.direct-raw-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        var body = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new PingMessage("raw-direct"));
+        await _transport.SendRawAsync("vsaga.wolverine.test.direct-raw-queue", nameof(PingMessage), body, MessageEnvelope.New(correlationId));
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(correlationId, received.CorrelationId);
+        Assert.Equal(nameof(PingMessage), received.MessageTypeName);
+    }
+
     /// <summary>
     /// RabbitMqTransportTests' sibling test of the same name asserts that publishing to a routing key with
     /// no bound queue throws MessageTransportPublishException, because RabbitMqTransport turns on

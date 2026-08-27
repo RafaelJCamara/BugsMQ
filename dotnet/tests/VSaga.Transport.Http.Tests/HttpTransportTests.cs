@@ -81,6 +81,32 @@ public sealed class HttpTransportTests
     }
 
     [Fact]
+    public async Task SendRaw_DeliversDirectlyToNamedQueueWithoutExchange()
+    {
+        var registry = new NodeRegistry();
+        await using var receiver = await HttpTestNode.StartAsync("receiver.test", registry, _ => { });
+        await using var sender = await HttpTestNode.StartAsync("sender.test", registry, o =>
+            o.Endpoints["receiver"] = "http://receiver.test");
+
+        var receiverTransport = receiver.GetRequiredService<HttpMessageTransport>();
+        var senderTransport = sender.GetRequiredService<HttpMessageTransport>();
+
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await receiverTransport.SubscribeAsync(new TransportSubscription("TestConsumer4", [typeof(PingMessage)], "receiver-direct-raw-queue"),
+            (received, _) => { tcs.TrySetResult(received); return Task.CompletedTask; });
+
+        // No Routes entry for PingMessage at all -- SendRawAsync resolves "receiver" as an endpoint name
+        // directly, exactly like SendAsync above, just carrying pre-serialized bytes instead of a typed message.
+        var correlationId = Guid.NewGuid();
+        var body = JsonSerializer.SerializeToUtf8Bytes(new PingMessage("raw-direct"));
+        await senderTransport.SendRawAsync("receiver", nameof(PingMessage), body, MessageEnvelope.New(correlationId));
+
+        var received = await tcs.Task.WaitAsync(Timeout);
+        Assert.Equal(correlationId, received.CorrelationId);
+        Assert.Equal(nameof(PingMessage), received.MessageTypeName);
+    }
+
+    [Fact]
     public async Task Publish_ToUnroutedMessageType_ThrowsUnroutablePublishException()
     {
         var registry = new NodeRegistry();

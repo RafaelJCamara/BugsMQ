@@ -51,6 +51,9 @@ public sealed class RabbitMqTransport(
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         PublishInternalAsync(messageTypeName, body, envelope, destinationQueue: null, cancellationToken);
 
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        PublishInternalAsync(messageTypeName, body, envelope, destinationQueue: destination, cancellationToken);
+
     private async Task PublishInternalAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, string? destinationQueue, CancellationToken cancellationToken)
     {
         var connection = await connectionManager.GetConnectionAsync(cancellationToken);

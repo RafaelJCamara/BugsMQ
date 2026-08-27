@@ -74,6 +74,30 @@ public sealed class BrighterTransportTests : IAsyncLifetime
         Assert.Equal(correlationId, (await tcs.Task).CorrelationId);
     }
 
+    [Fact]
+    public async Task SendRaw_DeliversDirectlyToNamedQueueWithoutExchange()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer3", [typeof(PingMessage)], "vsaga.brighter.test.direct-raw-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        var body = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new PingMessage("raw-direct"));
+        await _transport.SendRawAsync("vsaga.brighter.test.direct-raw-queue", nameof(PingMessage), body, MessageEnvelope.New(correlationId));
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(correlationId, received.CorrelationId);
+        Assert.Equal(nameof(PingMessage), received.MessageTypeName);
+    }
+
     // Deviation from the RabbitMQ transport's equivalent test (see deviationsOrIssues in the build
     // report and docs/readme-section-brighter.md): Paramore.Brighter.MessagingGateway.RMQ.Async's
     // RmqMessageProducer never sets AMQP's "mandatory" flag when publishing. Confirmed both by reading

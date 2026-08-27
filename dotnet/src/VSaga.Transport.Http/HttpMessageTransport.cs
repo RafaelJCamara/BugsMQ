@@ -47,6 +47,9 @@ public sealed class HttpMessageTransport(
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         PublishInternalAsync(messageTypeName, body, envelope, explicitDestination: null, cancellationToken);
 
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        PublishInternalAsync(messageTypeName, body, envelope, explicitDestination: destination, cancellationToken);
+
     public Task<IDisposable> SubscribeAsync(TransportSubscription subscription, Func<ReceivedMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default) =>
         dispatcher.SubscribeAsync(subscription, handler, cancellationToken);
 

@@ -44,6 +44,9 @@ public sealed class WolverineTransport(
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         PublishInternalAsync(messageTypeName, body.ToArray(), envelope, RabbitMqEndpointUri.Topic(options.ExchangeName, messageTypeName), cancellationToken);
 
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        PublishInternalAsync(messageTypeName, body.ToArray(), envelope, RabbitMqEndpointUri.Queue(destination), cancellationToken);
+
     private async Task PublishInternalAsync(string messageTypeName, byte[] body, MessageEnvelope envelope, Uri destination, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

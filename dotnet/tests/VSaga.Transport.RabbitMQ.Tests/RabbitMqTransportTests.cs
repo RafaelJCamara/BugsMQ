@@ -82,6 +82,30 @@ public sealed class RabbitMqTransportTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SendRaw_DeliversDirectlyToNamedQueueWithoutExchange()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer3", [typeof(PingMessage)], "vsaga.test.direct-raw-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        var body = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new PingMessage("raw-direct"));
+        await _transport.SendRawAsync("vsaga.test.direct-raw-queue", nameof(PingMessage), body, MessageEnvelope.New(correlationId));
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(correlationId, received.CorrelationId);
+        Assert.Equal(nameof(PingMessage), received.MessageTypeName);
+    }
+
+    [Fact]
     public async Task Publish_ToUnboundRoutingKey_ThrowsUnroutablePublishException()
     {
         // No subscriber has ever bound a queue for this message type, so with publisher confirms +

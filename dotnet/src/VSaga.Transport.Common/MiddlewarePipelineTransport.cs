@@ -41,6 +41,11 @@ public sealed class MiddlewarePipelineTransport(
     public Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
         inner.PublishRawAsync(messageTypeName, body, envelope, cancellationToken);
 
+    // Same bypass as PublishRawAsync above, and likewise an explicit override rather than the
+    // interface's default fallback, which would silently drop the destination.
+    public Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken cancellationToken = default) =>
+        inner.SendRawAsync(destination, messageTypeName, body, envelope, cancellationToken);
+
     private Task RunOutboundAsync(OutboundMessageContext context, Func<OutboundMessageContext, Task> terminal)
     {
         var pipeline = terminal;
