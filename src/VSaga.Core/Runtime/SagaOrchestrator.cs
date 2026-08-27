@@ -504,7 +504,7 @@ public sealed class SagaOrchestrator<TState>(
         {
             try
             {
-                await publish();
+                await publish.SendAsync();
             }
             catch (Exception ex)
             {

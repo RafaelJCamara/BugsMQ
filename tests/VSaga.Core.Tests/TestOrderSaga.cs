@@ -33,6 +33,8 @@ public sealed record PaymentFailed;
 public sealed record ReleaseInventory(Guid CorrelationId);
 #pragma warning disable S2094
 public sealed record FlakyStep;
+public sealed record FlakyWithLoopback;
+public sealed record LoopbackAck;
 #pragma warning restore S2094
 
 public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaState>
@@ -50,6 +52,9 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
     public int FlakyWithPolicyAttempts { get; set; }
 
     public int AlwaysFailsWithPolicyAttempts { get; set; }
+
+    /// <summary>docs/mixed-sagas.md §3.2's dedupe fix: counts real attempts of the step below, distinct from how many times its queued loopback actually gets published.</summary>
+    public int FlakyWithLoopbackAttempts { get; set; }
 
     public TestOrderSaga()
     {
@@ -72,7 +77,29 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                 .TransitionTo(AwaitingPayment)
             .When<InventoryReservationFailed>()
                 .TransitionTo(Failed)
-                .Finalize(SagaStatus.Failed)
+                .Finalize(SagaStatus.Failed);
+
+        ConfigureRetryFixtures();
+
+        During(AwaitingPayment)
+            .When<PaymentCharged>()
+                .TransitionTo(Completed)
+                .Finalize(SagaStatus.Completed)
+            .When<PaymentFailed>()
+                .Compensate()
+                .TransitionTo(Failed)
+                .Finalize(SagaStatus.Failed);
+
+        Compensate(AwaitingInventory, (ctx, ct) => ctx.PublishAsync(new ReleaseInventory(ctx.CorrelationId), ct));
+        Compensate(AwaitingPayment, (_, _) => throw new InvalidOperationException("simulated compensation failure"));
+
+        WithTimeout(AwaitingPayment, TimeSpan.FromMinutes(5), t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
+    }
+
+    /// <summary>The manual-retry and step-level-RetryPolicy fixture steps, all registered under AwaitingInventory -- split out of the constructor purely for length.</summary>
+    private void ConfigureRetryFixtures()
+    {
+        During(AwaitingInventory)
             .When<FlakyStep>()
                 .Then((_, _) =>
                 {
@@ -97,20 +124,20 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                     throw new InvalidOperationException("always fails");
                 })
                 .Retry(RetryPolicy.Exponential(maxAttempts: 2, baseDelay: TimeSpan.FromMilliseconds(1)))
+                .TransitionTo(AwaitingPayment)
+            // docs/mixed-sagas.md §3.2: a loopback queued via PublishAfterCommitAsync, then a throw --
+            // exactly the shape a .CallHttp-then-.Publish step under .Retry would have. Without
+            // StepExecutor clearing the queue on retry, the replayed attempt would queue a second
+            // LoopbackAck (a fresh MessageId each time) and the drain would publish both.
+            .When<FlakyWithLoopback>()
+                .Then(async (ctx, _) =>
+                {
+                    await ctx.PublishAfterCommitAsync(new LoopbackAck(), ctx.CancellationToken);
+                    FlakyWithLoopbackAttempts++;
+                    if (FlakyWithLoopbackAttempts < 2)
+                        throw new InvalidOperationException("transient failure, should be retried in-process");
+                })
+                .Retry(RetryPolicy.Exponential(maxAttempts: 2, baseDelay: TimeSpan.FromMilliseconds(1)))
                 .TransitionTo(AwaitingPayment);
-
-        During(AwaitingPayment)
-            .When<PaymentCharged>()
-                .TransitionTo(Completed)
-                .Finalize(SagaStatus.Completed)
-            .When<PaymentFailed>()
-                .Compensate()
-                .TransitionTo(Failed)
-                .Finalize(SagaStatus.Failed);
-
-        Compensate(AwaitingInventory, (ctx, ct) => ctx.PublishAsync(new ReleaseInventory(ctx.CorrelationId), ct));
-        Compensate(AwaitingPayment, (_, _) => throw new InvalidOperationException("simulated compensation failure"));
-
-        WithTimeout(AwaitingPayment, TimeSpan.FromMinutes(5), t => t.Compensate().TransitionTo(Failed).Finalize(SagaStatus.TimedOut));
     }
 }

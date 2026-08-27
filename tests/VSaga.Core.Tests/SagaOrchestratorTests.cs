@@ -206,6 +206,32 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
         Assert.Contains(timeline, e => e.EntryType == SagaEntryType.StepFailed && string.Equals(e.MessageType, nameof(AlwaysFailsWithPolicy), StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// docs/mixed-sagas.md §3.2: a step queues a loopback (ctx.PublishAfterCommitAsync) then throws on
+    /// its first attempt. Without StepExecutor clearing the queue before the retry replays the step from
+    /// index 0, the second attempt would queue a second LoopbackAck with a fresh MessageId -- invisible
+    /// to IsDuplicateAsync's MessageId-keyed dedupe -- and the drain would publish both.
+    /// </summary>
+    [Fact]
+    public async Task StepLevelRetryPolicy_QueuedLoopbackPublishesExactlyOnceDespiteARetriedAttempt()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await _transport.PublishAsync(new OrderSubmitted("ORD-9", 15m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new FlakyWithLoopback(), MessageEnvelope.New(correlationId));
+
+        Assert.Equal(2, _saga.FlakyWithLoopbackAttempts); // failed once, succeeded on retry
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(_saga.AwaitingPayment.Name, state.CurrentState);
+        Assert.Equal(SagaStatus.Running, state.Status);
+
+        var loopbackCount = _transport.GetPublished().Count(p => p.Message is LoopbackAck);
+        Assert.Equal(1, loopbackCount); // not 2 -- the first attempt's queued publish was cleared, not carried into the drain
+    }
+
     [Fact]
     public async Task DuplicateMessageId_IsSkippedAndDoesNotReprocess()
     {
