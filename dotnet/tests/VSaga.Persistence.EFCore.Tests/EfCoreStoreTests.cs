@@ -331,6 +331,61 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Outbox_EnqueueRoundTripsEveryFieldAndClaimNeverReturnsItTwice()
+    {
+        var correlationId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal) { ["x-vsaga-source-service"] = "OrderSaga" };
+        var body = "{\"OrderId\":\"ORD-1\"}"u8.ToArray();
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaOutboxStore(db);
+            await store.EnqueueAsync("OrderSaga", correlationId, "m1", "InventoryReserved", body, destination: null, headers, now.AddMinutes(-1));
+        }
+
+        await using (var db2 = NewContext())
+        {
+            var store2 = new EfCoreSagaOutboxStore(db2);
+            var claimed = Assert.Single(await store2.ClaimPendingAsync(now, batchSize: 10));
+
+            Assert.Equal(correlationId, claimed.CorrelationId);
+            Assert.Equal("OrderSaga", claimed.SagaType);
+            Assert.Equal("m1", claimed.MessageId);
+            Assert.Equal("InventoryReserved", claimed.MessageTypeName);
+            Assert.Equal(body, claimed.Body.ToArray());
+            Assert.Null(claimed.Destination);
+            Assert.Equal("OrderSaga", claimed.Headers["x-vsaga-source-service"]);
+            Assert.Equal(SagaOutboxStatus.Dispatched, claimed.Status);
+
+            Assert.Empty(await store2.ClaimPendingAsync(now, batchSize: 10)); // already dispatched, shouldn't be claimed twice
+        }
+    }
+
+    [Fact]
+    public async Task Outbox_MarkDispatchedDirectly_ExcludesItFromTheRecoveryClaim()
+    {
+        var now = DateTimeOffset.UtcNow;
+        long id;
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaOutboxStore(db);
+            await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), "m2", "ChargePayment", "{}"u8.ToArray(),
+                destination: "payments", new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
+            id = Assert.Single(db.SagaOutboxMessages).Id;
+        }
+
+        // The inline drain's path: mark dispatched directly by id, right after sending it synchronously.
+        // It never goes through ClaimPendingAsync at all.
+        await using (var db2 = NewContext())
+            await new EfCoreSagaOutboxStore(db2).MarkDispatchedAsync(id);
+
+        await using var db3 = NewContext();
+        Assert.Empty(await new EfCoreSagaOutboxStore(db3).ClaimPendingAsync(now, batchSize: 10));
+    }
+
+    [Fact]
     public async Task SummaryReader_ListsWithFiltering()
     {
         await using (var db = NewContext())

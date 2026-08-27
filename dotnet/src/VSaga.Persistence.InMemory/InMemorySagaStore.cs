@@ -10,21 +10,24 @@ namespace VSaga.Persistence.InMemory;
 /// <summary>
 /// Single backing store shared by <see cref="InMemorySagaSnapshotStore{TState}"/> (one instance per
 /// saga TState, all delegating here), <see cref="ISagaSummaryReader"/>, <see cref="ISagaEventLogStore"/>,
-/// <see cref="ISagaTimeoutStore"/>, and <see cref="ISagaAdminStore"/> — mirrors how the EF Core
-/// provider's single DbContext backs the same contracts. Registered as a singleton. Not a toy: it
-/// round-trips state through JSON on every read/write, exactly like a real persistence provider, so
-/// tests exercise real snapshot isolation instead of accidentally sharing object references with the orchestrator.
+/// <see cref="ISagaTimeoutStore"/>, <see cref="ISagaOutboxStore"/>, and <see cref="ISagaAdminStore"/> —
+/// mirrors how the EF Core provider's single DbContext backs the same contracts. Registered as a
+/// singleton. Not a toy: it round-trips state through JSON on every read/write, exactly like a real
+/// persistence provider, so tests exercise real snapshot isolation instead of accidentally sharing
+/// object references with the orchestrator.
 /// </summary>
-public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, ISagaTimeoutStore, ISagaAdminStore, IServiceTopologyStore
+public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, ISagaTimeoutStore, ISagaOutboxStore, ISagaAdminStore, IServiceTopologyStore
 {
     // Keyed by (SagaType, CorrelationId), mirroring the EF provider's composite primary key: a
     // correlation id alone does not identify an instance once two saga types may track the same one.
     private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), StoredSnapshot> _snapshots = new();
     private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), ImmutableList<SagaLogEntry>> _timelines = new();
     private readonly ConcurrentDictionary<long, SagaTimeout> _timeouts = new();
+    private readonly ConcurrentDictionary<long, SagaOutboxMessage> _outboxMessages = new();
     private readonly ConcurrentDictionary<(string ServiceName, string MessageType), ServiceTopologyEntry> _topology = new();
     private long _sequence;
     private long _timeoutId;
+    private long _outboxMessageId;
 
     private sealed record StoredSnapshot(string Json, string SagaType, SagaKind Kind, string CurrentState, SagaStatus Status, int Version,
         string? ParentSagaType, Guid? ParentCorrelationId, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
@@ -259,6 +262,44 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         }
 
         return Task.FromResult<IReadOnlyList<SagaTimeout>>(claimed);
+    }
+
+    public Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+        ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
+        DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default)
+    {
+        var id = Interlocked.Increment(ref _outboxMessageId);
+        _outboxMessages[id] = new SagaOutboxMessage(id, correlationId, sagaType, messageId, messageTypeName,
+            body, destination, headers, SagaOutboxStatus.Pending, createdAtUtc);
+        return Task.CompletedTask;
+    }
+
+    public Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default)
+    {
+        if (_outboxMessages.TryGetValue(id, out var message))
+            _outboxMessages.TryUpdate(id, message with { Status = SagaOutboxStatus.Dispatched }, message);
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<SagaOutboxMessage>> ClaimPendingAsync(DateTimeOffset olderThan, int batchSize, CancellationToken cancellationToken = default)
+    {
+        var claimed = new List<SagaOutboxMessage>();
+
+        foreach (var (id, message) in _outboxMessages)
+        {
+            if (claimed.Count >= batchSize)
+                break;
+
+            if (message.Status != SagaOutboxStatus.Pending || message.CreatedAtUtc > olderThan)
+                continue;
+
+            var dispatched = message with { Status = SagaOutboxStatus.Dispatched };
+            if (_outboxMessages.TryUpdate(id, dispatched, message))
+                claimed.Add(dispatched);
+        }
+
+        return Task.FromResult<IReadOnlyList<SagaOutboxMessage>>(claimed);
     }
 
     public Task RecordAsync(string serviceName, string messageType, string queueName, DateTimeOffset seenAtUtc, CancellationToken cancellationToken = default)

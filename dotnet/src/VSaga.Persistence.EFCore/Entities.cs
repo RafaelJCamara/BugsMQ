@@ -89,6 +89,30 @@ public sealed class SagaTimeoutEntity
     public SagaTimeoutStatus Status { get; set; }
 }
 
+public sealed class SagaOutboxMessageEntity
+{
+    public long Id { get; set; }
+
+    public Guid CorrelationId { get; set; }
+
+    public string SagaType { get; set; } = string.Empty;
+
+    public string MessageId { get; set; } = string.Empty;
+
+    public string MessageTypeName { get; set; } = string.Empty;
+
+    public byte[] Body { get; set; } = [];
+
+    public string? Destination { get; set; }
+
+    /// <summary>Serialized <c>IReadOnlyDictionary&lt;string, string&gt;</c> envelope headers -- an open dictionary, so a JSON blob rather than a relational shape, same reasoning as <see cref="SagaInstanceEntity.DataJson"/>.</summary>
+    public string HeadersJson { get; set; } = "{}";
+
+    public SagaOutboxStatus Status { get; set; }
+
+    public DateTimeOffset CreatedAtUtc { get; set; }
+}
+
 /// <summary>One (service, message type) consumer binding, learned from a real SubscribeAsync call. Composite key gives upsert idempotency for free.</summary>
 public sealed class SagaConsumerRegistrationEntity
 {

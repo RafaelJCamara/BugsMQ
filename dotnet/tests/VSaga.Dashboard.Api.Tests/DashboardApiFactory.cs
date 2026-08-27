@@ -42,6 +42,7 @@ public sealed class DashboardApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<ISagaSummaryReader>();
             services.RemoveAll<ISagaEventLogStore>();
             services.RemoveAll<ISagaTimeoutStore>();
+            services.RemoveAll<ISagaOutboxStore>();
             services.RemoveAll<ISagaAdminStore>();
             services.RemoveAll<IServiceTopologyStore>();
             services.RemoveAll<EfCoreSagaSummaryReader>();

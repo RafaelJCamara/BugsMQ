@@ -10,6 +10,8 @@ public sealed class VSagaDbContext(DbContextOptions<VSagaDbContext> options) : D
 
     public DbSet<SagaTimeoutEntity> SagaTimeouts => Set<SagaTimeoutEntity>();
 
+    public DbSet<SagaOutboxMessageEntity> SagaOutboxMessages => Set<SagaOutboxMessageEntity>();
+
     public DbSet<SagaConsumerRegistrationEntity> SagaConsumerRegistrations => Set<SagaConsumerRegistrationEntity>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
@@ -49,6 +51,20 @@ public sealed class VSagaDbContext(DbContextOptions<VSagaDbContext> options) : D
             b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
             b.Property(x => x.ForState).HasMaxLength(200).IsRequired();
             b.HasIndex(x => new { x.Status, x.DueAtUtc });
+        });
+
+        modelBuilder.Entity<SagaOutboxMessageEntity>(b =>
+        {
+            b.ToTable("SagaOutboxMessages");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.SagaType).HasMaxLength(200).IsRequired();
+            b.Property(x => x.MessageId).HasMaxLength(200).IsRequired();
+            b.Property(x => x.MessageTypeName).HasMaxLength(400).IsRequired();
+            b.Property(x => x.Destination).HasMaxLength(400);
+            b.Property(x => x.Body).IsRequired();
+            b.Property(x => x.HeadersJson).IsRequired();
+            // Claim index, matching SagaTimeouts' (Status, DueAtUtc) shape above.
+            b.HasIndex(x => new { x.Status, x.CreatedAtUtc });
         });
 
         modelBuilder.Entity<SagaConsumerRegistrationEntity>(b =>

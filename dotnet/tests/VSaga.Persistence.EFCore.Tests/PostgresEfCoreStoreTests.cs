@@ -173,6 +173,59 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ClaimPendingAsync_OrdersByCreatedAtAgainstRealPostgres()
+    {
+        var early = Guid.NewGuid();
+        var late = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaOutboxStore(db);
+            await store.EnqueueAsync("OrderSaga", late, "m-late", "InventoryReserved", "{}"u8.ToArray(), null,
+                new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-1));
+            await store.EnqueueAsync("OrderSaga", early, "m-early", "InventoryReserved", "{}"u8.ToArray(), null,
+                new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-5));
+        }
+
+        await using var db2 = NewContext();
+        var claimed = await new EfCoreSagaOutboxStore(db2).ClaimPendingAsync(now, batchSize: 10);
+
+        Assert.Equal(2, claimed.Count);
+        Assert.Equal(early, claimed[0].CorrelationId); // earliest created first
+        Assert.Equal(late, claimed[1].CorrelationId);
+    }
+
+    [Fact]
+    public async Task ClaimPendingAsync_ConcurrentCallsNeverClaimTheSameMessageTwice()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaOutboxStore(db);
+            for (var i = 0; i < 20; i++)
+            {
+                await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), $"m{i}", "InventoryReserved", "{}"u8.ToArray(),
+                    null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-1));
+            }
+        }
+
+        // Two dispatcher instances (separate DbContexts/connections) racing on the same 20 stale rows --
+        // FOR UPDATE SKIP LOCKED must partition them with no overlap, proving the atomic claim actually
+        // works under concurrency rather than just compiling.
+        await using var dbA = NewContext();
+        await using var dbB = NewContext();
+        var claimA = new EfCoreSagaOutboxStore(dbA).ClaimPendingAsync(now, batchSize: 20);
+        var claimB = new EfCoreSagaOutboxStore(dbB).ClaimPendingAsync(now, batchSize: 20);
+        var results = await Task.WhenAll(claimA, claimB);
+
+        var claimedIds = results.SelectMany(r => r).Select(m => m.Id).ToList();
+        Assert.Equal(20, claimedIds.Count);
+        Assert.Equal(claimedIds.Count, claimedIds.Distinct().Count());
+    }
+
+    [Fact]
     public async Task ServiceTopologyStore_GetAllAsync_TranslatesAgainstRealPostgres()
     {
         await using (var db = NewContext())
