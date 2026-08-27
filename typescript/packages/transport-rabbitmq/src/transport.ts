@@ -50,6 +50,7 @@ class RabbitMqTransport implements MessageTransport {
   readonly #connection: ChannelModel;
   readonly #options: ResolvedRabbitMqOptions;
   readonly #consumerChannels: Channel[] = [];
+  readonly #pendingPublishes = new Map<string, (error: MessageTransportPublishError) => void>();
 
   #publishChannel: ConfirmChannel | undefined;
 
@@ -90,6 +91,10 @@ class RabbitMqTransport implements MessageTransport {
     if (destinationQueue === undefined) await this.#ensureExchange(channel);
 
     await new Promise<void>((resolve, reject) => {
+      // Keyed by messageId so the 'return' listener (below) can reject *this* publish specifically
+      // rather than every publish in flight on the shared channel.
+      this.#pendingPublishes.set(envelope.messageId, reject);
+
       channel.publish(
         exchange,
         routingKey,
@@ -107,6 +112,11 @@ class RabbitMqTransport implements MessageTransport {
           headers,
         },
         (error) => {
+          // Already settled by the 'return' listener: an unroutable mandatory publish is still
+          // confirmed after being returned, so this callback still fires and must not resolve a
+          // promise that's already been rejected.
+          if (!this.#pendingPublishes.delete(envelope.messageId)) return;
+
           if (error) {
             reject(
               new MessageTransportPublishError(messageTypeName, envelope.correlationId, false, {
@@ -268,8 +278,20 @@ class RabbitMqTransport implements MessageTransport {
         returnedHeaders[MESSAGE_TYPE_HEADER] ?? returned.fields.routingKey ?? 'unknown';
       const correlationId =
         (returned.properties.correlationId as string | undefined) ?? EMPTY_CORRELATION_ID;
+      const error = new MessageTransportPublishError(messageTypeName, correlationId, true);
 
-      channel.emit('error', new MessageTransportPublishError(messageTypeName, correlationId, true));
+      // Reject the specific pending publish this return belongs to. If none is pending (the
+      // messageId is missing, or its confirm callback already ran), there is no promise left to
+      // reject onto, so surface it as a channel error instead of leaving it silent.
+      const messageId = returned.properties.messageId as string | undefined;
+      const reject = messageId ? this.#pendingPublishes.get(messageId) : undefined;
+
+      if (reject) {
+        this.#pendingPublishes.delete(messageId as string);
+        reject(error);
+      } else {
+        channel.emit('error', error);
+      }
     });
 
     channel.on('close', () => {

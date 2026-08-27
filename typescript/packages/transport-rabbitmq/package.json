@@ -26,6 +26,8 @@
     "amqplib": "^0.10.9"
   },
   "devDependencies": {
-    "@types/amqplib": "^0.10.7"
+    "@testcontainers/rabbitmq": "^12.1.0",
+    "@types/amqplib": "^0.10.7",
+    "testcontainers": "^12.1.0"
   }
 }
