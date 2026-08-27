@@ -12,6 +12,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
+    <!-- MassTransit v9 is commercially licensed; bounded below 9.0.0 so a consumer's own restore can
+         never silently resolve past the last Apache-2.0 8.x release. -->
+    <PackageVersion Include="MassTransit.RabbitMQ" Version="[8.5.8,9.0.0)" />
     <PackageVersion Include="Meziantou.Analyzer" Version="3.0.177">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -36,6 +39,11 @@
     <PackageVersion Include="MinVer" Version="7.0.0" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <!-- Bounded the same way as the other two bus SDKs in this file: a consumer's own restore should
+         never silently float onto an untested next-major release. RMQ.Async is the async-native gateway
+         package built on RabbitMQ.Client v7, matching this repo's own RabbitMQ.Client 7.2.2 pin below. -->
+    <PackageVersion Include="Paramore.Brighter" Version="[10.7.0,11.0.0)" />
+    <PackageVersion Include="Paramore.Brighter.MessagingGateway.RMQ.Async" Version="[10.7.0,11.0.0)" />
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.33.0.1635">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -43,6 +51,11 @@
     </PackageVersion>
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />
     <PackageVersion Include="Testcontainers.RabbitMq" Version="4.14.0" />
+    <!-- Bounded the same way as the other two bus SDKs in this file: a consumer's own restore should
+         never silently float onto an untested next-major release. -->
+    <PackageVersion Include="WolverineFx" Version="[6.30.0,7.0.0)" />
+    <PackageVersion Include="WolverineFx.RabbitMQ" Version="[6.30.0,7.0.0)" />
+    <PackageVersion Include="WolverineFx.RuntimeCompilation" Version="[6.30.0,7.0.0)" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

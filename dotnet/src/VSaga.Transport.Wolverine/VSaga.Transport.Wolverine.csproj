@@ -9,9 +9,9 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="WolverineFx" VersionOverride="6.30.0" />
-    <PackageReference Include="WolverineFx.RabbitMQ" VersionOverride="6.30.0" />
-    <PackageReference Include="WolverineFx.RuntimeCompilation" VersionOverride="6.30.0" />
+    <PackageReference Include="WolverineFx" />
+    <PackageReference Include="WolverineFx.RabbitMQ" />
+    <PackageReference Include="WolverineFx.RuntimeCompilation" />
   </ItemGroup>
 
   <PropertyGroup>
