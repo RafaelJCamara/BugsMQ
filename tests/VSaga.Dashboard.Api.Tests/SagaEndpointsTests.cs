@@ -495,6 +495,36 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         Assert.Null(map.FailureEventIndex); // no StepFailed/TimeoutFired/DeliveryExhausted entry exists for this failure shape
     }
 
+    /// <summary>
+    /// docs/mixed-sagas.md §6: a compensating REST call's reply is an inbound entry (MessageReceived),
+    /// and before this fix ProcessInboundEntry hardcoded IsCompensation: false for every inbound edge --
+    /// invisible until now because no compensation in this repo produced an inbound timeline entry (a
+    /// broker participant never replies to a compensating command in the existing sample).
+    /// </summary>
+    [Fact]
+    public async Task GetMap_CompensatingReplyLoggedAfterCompensationStarted_RendersTheInboundEdgeAsCompensation()
+    {
+        var (sagaType, correlationId) = await SeedSagaAsync("OrderSaga", "Failed", SagaStatus.Failed);
+
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaStarted,
+            toState: "Submitted", messageType: "OrderSubmitted", messageId: "m0", payloadJson: "{}"));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.CompensationStarted));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.MessagePublished,
+            messageType: "POST /payments/void", messageId: "out-void-1", sourceService: "OrderSaga", destinationService: "PaymentGateway"));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.MessageReceived,
+            messageType: "PaymentVoided", messageId: "in-void-1", sourceService: "PaymentGateway", causationId: "out-void-1"));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.CompensationStepSucceeded, fromState: "AwaitingInventory"));
+        await AppendLogAsync(SagaLogEntry.Create(correlationId, "OrderSaga", SagaEntryType.SagaCompleted, toState: "Failed"));
+
+        var map = await _client.GetFromJsonAsync<SagaMap>($"/api/sagas/{sagaType}/{correlationId}/map", JsonOptions);
+
+        var outboundEdge = Assert.Single(map!.Edges, e => string.Equals(e.MessageType, "POST /payments/void", StringComparison.Ordinal));
+        Assert.True(outboundEdge.IsCompensation);
+
+        var inboundEdge = Assert.Single(map.Edges, e => string.Equals(e.MessageType, "PaymentVoided", StringComparison.Ordinal));
+        Assert.True(inboundEdge.IsCompensation); // the fix: previously hardcoded false for every inbound edge
+    }
+
     [Fact]
     public async Task GetMap_UnstitchedDestinationWithNoTopologyEntry_RendersAsUnresolvedPlaceholder()
     {

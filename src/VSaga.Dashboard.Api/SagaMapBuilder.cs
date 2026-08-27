@@ -133,7 +133,7 @@ public static class SagaMapBuilder
                 EnsureNode(from, KindFor(from));
                 var failed = entry.MessageId is not null && _failedMessageIds.Contains(entry.MessageId);
                 var edge = new SagaMapEdge($"e{entry.SequenceNumber}", from, _orchestratorId,
-                    entry.MessageType ?? string.Empty, entry.MessageId, IsCompensation: false, Failed: failed, Unanswered: false, entry.OccurredAtUtc);
+                    entry.MessageType ?? string.Empty, entry.MessageId, IsCompensation: _compensating, Failed: failed, Unanswered: false, entry.OccurredAtUtc);
                 AddEdge(edge, from, _orchestratorId);
                 edgeId = edge.Id;
             }
