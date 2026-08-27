@@ -410,7 +410,7 @@ public sealed class SagaOrchestrator<TState>(
         {
             stopwatch.Stop();
             VSagaDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
-            await HandleStepFailureAsync(state, ex, correlationId, fromState, message, messageTypeName, messageId, isNew, expectedVersion, activity, cancellationToken);
+            await HandleStepFailureAsync(state, ex, correlationId, fromState, message, messageTypeName, messageId, isNew, expectedVersion, activity, context, cancellationToken);
             return;
         }
 
@@ -422,7 +422,7 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     private async Task HandleStepFailureAsync(TState state, Exception ex, Guid correlationId, string fromState, object message,
-        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, CancellationToken cancellationToken)
+        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
     {
         state.Status = SagaStatus.Failed;
         var payloadJson = JsonSerializer.Serialize(message, message.GetType());
@@ -434,6 +434,12 @@ public sealed class SagaOrchestrator<TState>(
 
         await PersistAsync(state, isNew, expectedVersion, cancellationToken);
         VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+
+        // Anything queued via ctx.PublishAfterCommitAsync before the throw belongs to a transition that
+        // was never reached -- the persist just above records Failed, not the outcome those publishes
+        // assumed. Discarding (not draining) matches DiscardDeferredPublishesAsync's other caller, the
+        // timeout-race path: publishing now would announce a transition nobody recorded.
+        await DiscardDeferredPublishesAsync(correlationId, context, fromState, cancellationToken);
 
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
 

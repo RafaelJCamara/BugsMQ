@@ -35,6 +35,7 @@ public sealed record ReleaseInventory(Guid CorrelationId);
 public sealed record FlakyStep;
 public sealed record FlakyWithLoopback;
 public sealed record LoopbackAck;
+public sealed record AlwaysFailsWithLoopback;
 #pragma warning restore S2094
 
 public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaState>
@@ -138,6 +139,15 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                         throw new InvalidOperationException("transient failure, should be retried in-process");
                 })
                 .Retry(RetryPolicy.Exponential(maxAttempts: 2, baseDelay: TimeSpan.FromMilliseconds(1)))
+                .TransitionTo(AwaitingPayment)
+            // §4.5: no .Retry() here, so this throws straight out to HandleStepFailureAsync on its one
+            // and only attempt, with a publish already queued -- the shape that fix discards.
+            .When<AlwaysFailsWithLoopback>()
+                .Then(async (ctx, _) =>
+                {
+                    await ctx.PublishAfterCommitAsync(new LoopbackAck(), ctx.CancellationToken);
+                    throw new InvalidOperationException("unrecoverable failure, with a publish already queued");
+                })
                 .TransitionTo(AwaitingPayment);
     }
 }

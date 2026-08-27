@@ -207,6 +207,33 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// §4.5: before this fix, a deferred publish queued via ctx.PublishAfterCommitAsync before a step
+    /// throws was silently abandoned -- never sent, but also no timeline entry recorded why. It must
+    /// still never be sent (the transition that queued it was never reached), but now discarding it is
+    /// visible on the timeline, the same DeliveryExhausted entry the timeout-race discard path records.
+    /// </summary>
+    [Fact]
+    public async Task StepThatThrows_DiscardsItsQueuedDeferredPublishInsteadOfAbandoningItSilently()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await _transport.PublishAsync(new OrderSubmitted("ORD-13", 12m), MessageEnvelope.New(correlationId));
+        await _transport.PublishAsync(new AlwaysFailsWithLoopback(), MessageEnvelope.New(correlationId));
+
+        Assert.DoesNotContain(_transport.GetPublished(), p => p.Message is LoopbackAck);
+
+        var snapshotStore = _provider.GetRequiredService<ISagaSnapshotStore<TestOrderSagaState>>();
+        var state = await snapshotStore.FindAsync(_saga.SagaType, correlationId);
+        Assert.NotNull(state);
+        Assert.Equal(SagaStatus.Failed, state.Status);
+
+        var eventLog = _provider.GetRequiredService<ISagaEventLogStore>();
+        var timeline = await eventLog.GetTimelineAsync(_saga.SagaType, correlationId);
+        var exhausted = Assert.Single(timeline, e => e.EntryType == SagaEntryType.DeliveryExhausted);
+        Assert.Equal(nameof(LoopbackAck), exhausted.MessageType);
+    }
+
+    /// <summary>
     /// docs/mixed-sagas.md §3.2: a step queues a loopback (ctx.PublishAfterCommitAsync) then throws on
     /// its first attempt. Without StepExecutor clearing the queue before the retry replays the step from
     /// index 0, the second attempt would queue a second LoopbackAck with a fresh MessageId -- invisible
