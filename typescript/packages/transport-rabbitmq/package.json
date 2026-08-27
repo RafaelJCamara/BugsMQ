@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "description": "amqplib-backed vSaga MessageTransport, wire-compatible with VSaga.Transport.RabbitMQ.",
   "license": "MIT",
+  "author": "Rafael Camara",
+  "homepage": "https://github.com/RafaelJCamara/vSaga/tree/main/typescript/packages/transport-rabbitmq#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RafaelJCamara/vSaga.git",
+    "directory": "typescript/packages/transport-rabbitmq"
+  },
+  "keywords": [
+    "vsaga",
+    "saga",
+    "message-transport",
+    "rabbitmq",
+    "amqp"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -17,6 +31,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "clean": "rimraf dist *.tsbuildinfo"

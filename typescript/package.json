@@ -8,8 +8,7 @@
     "node": ">=22"
   },
   "workspaces": [
-    "packages/*",
-    "samples/*"
+    "packages/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -19,7 +18,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,js,mjs,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,mjs,json,md}\"",
-    "clean": "rimraf packages/*/dist samples/*/dist packages/*/*.tsbuildinfo"
+    "clean": "rimraf packages/*/dist packages/*/*.tsbuildinfo"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
