@@ -15,7 +15,7 @@ import {
 import { createHttpTransport, type HttpTransport } from '@vsaga/transport-http';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { VSagaHttpModule } from './module.js';
+import { VSagaHttpModule } from '../src/module.js';
 
 /** TaskCompletionSource-alike: lets a test observe both "has it settled yet" and await the eventual value. */
 interface Deferred<T> {
@@ -41,7 +41,9 @@ function deferred<T>(): Deferred<T> {
 }
 
 /** Boots a real Nest (Express platform) app on an ephemeral port with VSagaHttpModule mounted, `rawBody: true` wired through. */
-async function startApp(transport: HttpTransport): Promise<{ app: INestApplication; baseUrl: string }> {
+async function startApp(
+  transport: HttpTransport,
+): Promise<{ app: INestApplication; baseUrl: string }> {
   const moduleRef = await Test.createTestingModule({
     imports: [VSagaHttpModule.forRoot({ transport })],
   }).compile();
@@ -61,14 +63,18 @@ describe('VSagaHttpModule', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('delivers a well-formed inbound request to the bound transport\'s local subscriber and responds 202', async () => {
+  it("delivers a well-formed inbound request to the bound transport's local subscriber and responds 202", async () => {
     const transport = createHttpTransport();
     const { app, baseUrl } = await startApp(transport);
     apps.push(app);
 
     const received = deferred<ReceivedMessage>();
     await transport.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'ping-queue' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'ping-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -109,7 +115,7 @@ describe('VSagaHttpModule', () => {
     expect(response.status).toBe(400);
   });
 
-  it('a handler publishing an unroutable reply produces a synchronous 200 with the reply\'s headers and body', async () => {
+  it("a handler publishing an unroutable reply produces a synchronous 200 with the reply's headers and body", async () => {
     const transport = createHttpTransport();
     const { app, baseUrl } = await startApp(transport);
     apps.push(app);

@@ -73,7 +73,11 @@ describe('createHttpTransport', () => {
 
     const received = deferred<ReceivedMessage>();
     await receiver.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'receiver-ping-queue' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'receiver-ping-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -99,7 +103,11 @@ describe('createHttpTransport', () => {
 
     const received = deferred<ReceivedMessage>();
     await receiver.subscribe(
-      { consumerName: 'TestConsumer2', messageTypeNames: ['PingMessage'], queueNameHint: 'receiver-direct-queue' },
+      {
+        consumerName: 'TestConsumer2',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'receiver-direct-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -137,7 +145,11 @@ describe('createHttpTransport', () => {
 
     const received = deferred<ReceivedMessage>();
     await receiver.subscribe(
-      { consumerName: 'TestConsumer3', messageTypeNames: ['PingMessage'], queueNameHint: 'receiver-headers-queue' },
+      {
+        consumerName: 'TestConsumer3',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'receiver-headers-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -159,7 +171,9 @@ describe('createHttpTransport', () => {
     expect(message.headers[SOURCE_SERVICE_HEADER]).toBe('orders-service');
     expect(message.headers[CAUSATION_ID_HEADER]).toBe(headers[CAUSATION_ID_HEADER]);
     expect(message.headers[PARENT_SAGA_TYPE_HEADER]).toBe('PostShipmentChoreography');
-    expect(message.headers[PARENT_CORRELATION_ID_HEADER]).toBe(headers[PARENT_CORRELATION_ID_HEADER]);
+    expect(message.headers[PARENT_CORRELATION_ID_HEADER]).toBe(
+      headers[PARENT_CORRELATION_ID_HEADER],
+    );
   });
 
   /**
@@ -180,7 +194,11 @@ describe('createHttpTransport', () => {
     // Reply has no route/local subscriber on the receiver side -- unroutable, so it's captured as
     // this handler's own synchronous reply to the inbound Command it's currently handling.
     await receiver.subscribe(
-      { consumerName: 'Receiver', messageTypeNames: ['Command'], queueNameHint: 'receiver-command-queue' },
+      {
+        consumerName: 'Receiver',
+        messageTypeNames: ['Command'],
+        queueNameHint: 'receiver-command-queue',
+      },
       async (message) => {
         await receiver.publish(
           'Reply',
@@ -192,12 +210,20 @@ describe('createHttpTransport', () => {
 
     const replyReceived = deferred<ReceivedMessage>();
     await sender.subscribe(
-      { consumerName: 'ReplyListener', messageTypeNames: ['Reply'], queueNameHint: 'sender-reply-queue' },
+      {
+        consumerName: 'ReplyListener',
+        messageTypeNames: ['Reply'],
+        queueNameHint: 'sender-reply-queue',
+      },
       async (message) => replyReceived.resolve(message),
     );
 
     const correlationId = newCorrelationId();
-    await sender.publish('Command', Buffer.from(JSON.stringify({ text: 'charge' })), newEnvelope(correlationId));
+    await sender.publish(
+      'Command',
+      Buffer.from(JSON.stringify({ text: 'charge' })),
+      newEnvelope(correlationId),
+    );
 
     const reply = await replyReceived.promise;
     expect(reply.messageTypeName).toBe('Reply');
@@ -224,7 +250,11 @@ describe('createHttpTransport', () => {
     });
 
     await receiver.subscribe(
-      { consumerName: 'Receiver', messageTypeNames: ['Command'], queueNameHint: 'receiver-command-queue' },
+      {
+        consumerName: 'Receiver',
+        messageTypeNames: ['Command'],
+        queueNameHint: 'receiver-command-queue',
+      },
       async (message) => {
         await receiver.publish(
           'Reply',
@@ -236,7 +266,11 @@ describe('createHttpTransport', () => {
 
     const replySeen = deferred<boolean>();
     await sender.subscribe(
-      { consumerName: 'ReplyListener', messageTypeNames: ['Reply'], queueNameHint: 'sender-reply-queue' },
+      {
+        consumerName: 'ReplyListener',
+        messageTypeNames: ['Reply'],
+        queueNameHint: 'sender-reply-queue',
+      },
       async () => replySeen.resolve(true),
     );
 
@@ -244,7 +278,11 @@ describe('createHttpTransport', () => {
     const commandRoundTripDone = deferred<void>();
 
     await sender.subscribe(
-      { consumerName: 'TriggerListener', messageTypeNames: ['Trigger'], queueNameHint: 'sender-trigger-queue' },
+      {
+        consumerName: 'TriggerListener',
+        messageTypeNames: ['Trigger'],
+        queueNameHint: 'sender-trigger-queue',
+      },
       async (message) => {
         await sender.publish('Command', Buffer.from('{}'), newEnvelope(message.correlationId));
         commandRoundTripDone.resolve();
@@ -271,7 +309,11 @@ describe('createHttpTransport', () => {
 
     const received = deferred<ReceivedMessage>();
     await solo.subscribe(
-      { consumerName: 'SelfConsumer', messageTypeNames: ['RedeliverableCommand'], queueNameHint: 'solo-redeliver-queue' },
+      {
+        consumerName: 'SelfConsumer',
+        messageTypeNames: ['RedeliverableCommand'],
+        queueNameHint: 'solo-redeliver-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -302,7 +344,11 @@ describe('createHttpTransport', () => {
 
     const received = deferred<ReceivedMessage>();
     await receiver.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'receiver-attempt-queue' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'receiver-attempt-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -324,7 +370,7 @@ describe('createHttpTransport', () => {
    * as a normal POST, never be swallowed as the currently-in-flight inbound request's own
    * synchronous reply, even though both are published from inside the very same inline dispatch.
    */
-  it('a routed publish from inside a handler is not captured as that handler\'s own sync reply', async () => {
+  it("a routed publish from inside a handler is not captured as that handler's own sync reply", async () => {
     const receiverNode = await node();
     const senderNode = await node();
 
@@ -338,15 +384,27 @@ describe('createHttpTransport', () => {
     });
 
     await receiver.subscribe(
-      { consumerName: 'Receiver', messageTypeNames: ['Trigger'], queueNameHint: 'receiver-trigger-queue' },
+      {
+        consumerName: 'Receiver',
+        messageTypeNames: ['Trigger'],
+        queueNameHint: 'receiver-trigger-queue',
+      },
       async (message) => {
-        await receiver.publish('RoutedSideEffect', Buffer.from('{}'), newEnvelope(message.correlationId));
+        await receiver.publish(
+          'RoutedSideEffect',
+          Buffer.from('{}'),
+          newEnvelope(message.correlationId),
+        );
       },
     );
 
     const sideEffectReceived = deferred<ReceivedMessage>();
     await sender.subscribe(
-      { consumerName: 'SideEffectListener', messageTypeNames: ['RoutedSideEffect'], queueNameHint: 'sender-sideeffect-queue' },
+      {
+        consumerName: 'SideEffectListener',
+        messageTypeNames: ['RoutedSideEffect'],
+        queueNameHint: 'sender-sideeffect-queue',
+      },
       async (message) => sideEffectReceived.resolve(message),
     );
 
@@ -372,30 +430,46 @@ describe('createHttpTransport', () => {
    * a handler, followed by further awaited work) would then be able to hijack an unrelated,
    * concurrently in-flight inbound request's reply slot.
    */
-  it('a background dispatch spawned from inside an active inbound dispatch does not inherit that request\'s sync-reply collector', async () => {
+  it("a background dispatch spawned from inside an active inbound dispatch does not inherit that request's sync-reply collector", async () => {
     const testNode = await node();
     const transport = testNode.bind();
 
     await transport.subscribe(
-      { consumerName: 'TriggerHandler', messageTypeNames: ['Trigger'], queueNameHint: 'trigger-queue' },
+      {
+        consumerName: 'TriggerHandler',
+        messageTypeNames: ['Trigger'],
+        queueNameHint: 'trigger-queue',
+      },
       async (message) => {
         // Ordinary usage, not an anti-pattern: a same-process publish to a locally-subscribed
         // type, then more awaited work before this handler (and hence its own inline dispatch)
         // finishes.
-        await transport.publish('ChildStart', Buffer.from('{}'), newEnvelope(message.correlationId));
+        await transport.publish(
+          'ChildStart',
+          Buffer.from('{}'),
+          newEnvelope(message.correlationId),
+        );
         await delay(50);
       },
     );
 
     const childOutcome = deferred<boolean>();
     await transport.subscribe(
-      { consumerName: 'ChildStartHandler', messageTypeNames: ['ChildStart'], queueNameHint: 'child-queue' },
+      {
+        consumerName: 'ChildStartHandler',
+        messageTypeNames: ['ChildStart'],
+        queueNameHint: 'child-queue',
+      },
       async (message) => {
         // Unroutable: no route, no local subscriber. If this wrongly captured Trigger's
         // still-open collector, it would surface as Trigger's inbound HTTP response instead of
         // throwing here.
         try {
-          await transport.publish('ChildUnroutable', Buffer.from('{}'), newEnvelope(message.correlationId));
+          await transport.publish(
+            'ChildUnroutable',
+            Buffer.from('{}'),
+            newEnvelope(message.correlationId),
+          );
           childOutcome.resolve(false);
         } catch {
           childOutcome.resolve(true);

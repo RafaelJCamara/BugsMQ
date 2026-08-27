@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // jsdom setup that has nothing to do with the SDK packages.
 export default defineConfig({
   test: {
-    include: ['packages/*/src/**/*.test.ts', 'samples/*/src/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'samples/*/test/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', 'dashboard-web/**'],
     environment: 'node',
   },

@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "tsc -b --pretty",
+    "typecheck": "tsc -b --pretty && tsc -p tsconfig.test.json --pretty",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",

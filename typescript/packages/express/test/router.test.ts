@@ -13,7 +13,7 @@ import {
 } from '@vsaga/protocol';
 import { type HttpTransport, createHttpTransport } from '@vsaga/transport-http';
 
-import { type CreateVSagaRouterOptions, createVSagaRouter } from './router.js';
+import { type CreateVSagaRouterOptions, createVSagaRouter } from '../src/router.js';
 
 /** TaskCompletionSource-alike: lets a test observe both "has it settled yet" and await the eventual value. */
 interface Deferred<T> {
@@ -67,7 +67,9 @@ async function startApp(
 describe('createVSagaRouter (Express)', () => {
   const apps: Array<{ close: () => Promise<void> }> = [];
 
-  async function app(routerOptions?: CreateVSagaRouterOptions): Promise<Awaited<ReturnType<typeof startApp>>> {
+  async function app(
+    routerOptions?: CreateVSagaRouterOptions,
+  ): Promise<Awaited<ReturnType<typeof startApp>>> {
     const started = await startApp(routerOptions);
     apps.push(started);
     return started;
@@ -82,7 +84,11 @@ describe('createVSagaRouter (Express)', () => {
 
     const received = deferred<ReceivedMessage>();
     await transport.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'ping-queue' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'ping-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -151,12 +157,16 @@ describe('createVSagaRouter (Express)', () => {
    * way to raise it. Confirms the new default (5mb) accepts a body well over 100kb, and that the
    * `limit` option is actually wired through to express.raw().
    */
-  it('accepts a body over express.raw()\'s 100kb default, and honors a configured limit', async () => {
+  it("accepts a body over express.raw()'s 100kb default, and honors a configured limit", async () => {
     const { transport, baseUrl } = await app();
 
     const received = deferred<ReceivedMessage>();
     await transport.subscribe(
-      { consumerName: 'BigConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'big-queue' },
+      {
+        consumerName: 'BigConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'big-queue',
+      },
       async (message) => received.resolve(message),
     );
 

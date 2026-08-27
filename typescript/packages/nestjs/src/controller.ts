@@ -29,16 +29,16 @@ export function createVSagaHttpController(transport: HttpTransport): Type<object
   @Controller()
   class VSagaHttpController {
     @Post(transport.inboundPath)
-    async handleInbound(
-      @Req() req: RawBodyRequest<Request>,
-      @Res() res: Response,
-    ): Promise<void> {
+    async handleInbound(@Req() req: RawBodyRequest<Request>, @Res() res: Response): Promise<void> {
       if (req.rawBody === undefined) {
         res.status(400).end();
         return;
       }
 
-      const result = await transport.handleInboundRequest({ headers: req.headers, body: req.rawBody });
+      const result = await transport.handleInboundRequest({
+        headers: req.headers,
+        body: req.rawBody,
+      });
 
       res.status(result.status);
       if (result.headers) {

@@ -19,7 +19,7 @@ import {
   newMessageId,
   normalizeHeaders,
   toRoutingKey,
-} from './index.js';
+} from '../src/index.js';
 
 const CORRELATION = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
 

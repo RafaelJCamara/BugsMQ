@@ -15,7 +15,11 @@ import {
   normalizeHeaders,
 } from '@vsaga/protocol';
 
-import { HttpInboundDispatcher, NO_OP_ACK_CONTEXT, currentSyncReplyCollector } from './dispatcher.js';
+import {
+  HttpInboundDispatcher,
+  NO_OP_ACK_CONTEXT,
+  currentSyncReplyCollector,
+} from './dispatcher.js';
 import {
   type HttpTransportOptions,
   type ResolvedHttpTransportOptions,
@@ -282,7 +286,12 @@ class HttpMessageTransportImpl implements HttpTransport {
     const replyMessageId = headers[MESSAGE_ID_HEADER];
     const replyCorrelationId = headers[CORRELATION_ID_HEADER];
 
-    if (!replyTypeName || !replyMessageId || !replyCorrelationId || !isDashedGuid(replyCorrelationId)) {
+    if (
+      !replyTypeName ||
+      !replyMessageId ||
+      !replyCorrelationId ||
+      !isDashedGuid(replyCorrelationId)
+    ) {
       throw new MessageTransportPublishError(originalMessageType, originalCorrelationId, false, {
         cause: new Error(
           'HTTP 200 reply is missing one of the required x-vsaga- headers (message-type/correlation-id/message-id).',

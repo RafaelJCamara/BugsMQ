@@ -27,7 +27,11 @@ export function createVSagaPlugin(transport: HttpTransport): FastifyPluginAsync 
     // override, plus '*' for everything else, to make every content-type hand back the raw
     // Buffer, matching Express's `raw({ type: () => true })` here, since handleInboundRequest
     // parses the wire format itself regardless of what the sender labeled it as.
-    const rawBufferParser = (_request: unknown, body: Buffer, done: (err: null, body: Buffer) => void): void => {
+    const rawBufferParser = (
+      _request: unknown,
+      body: Buffer,
+      done: (err: null, body: Buffer) => void,
+    ): void => {
       done(null, body);
     };
     fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, rawBufferParser);

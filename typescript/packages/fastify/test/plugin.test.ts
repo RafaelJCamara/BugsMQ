@@ -12,7 +12,7 @@ import {
 } from '@vsaga/protocol';
 import { type HttpTransport, createHttpTransport } from '@vsaga/transport-http';
 
-import { createVSagaPlugin } from './plugin.js';
+import { createVSagaPlugin } from '../src/plugin.js';
 
 /** TaskCompletionSource-alike, matching transport-http's own test style. */
 interface Deferred<T> {
@@ -33,7 +33,9 @@ function deferred<T>(): Deferred<T> {
  * mirroring transport-http's own test-node.ts style (real sockets, global fetch) rather than
  * Fastify's inject().
  */
-async function startApp(transport: HttpTransport): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function startApp(
+  transport: HttpTransport,
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const app = Fastify();
   await app.register(createVSagaPlugin(transport));
   const baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
@@ -54,7 +56,11 @@ describe('createVSagaPlugin', () => {
 
     const received = deferred<ReceivedMessage>();
     await transport.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'ping-queue' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'ping-queue',
+      },
       async (message) => received.resolve(message),
     );
 
@@ -138,7 +144,11 @@ describe('createVSagaPlugin', () => {
 
     const received = deferred<ReceivedMessage>();
     await transport.subscribe(
-      { consumerName: 'TestConsumer', messageTypeNames: ['PingMessage'], queueNameHint: 'ping-queue-2' },
+      {
+        consumerName: 'TestConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'ping-queue-2',
+      },
       async (message) => received.resolve(message),
     );
 

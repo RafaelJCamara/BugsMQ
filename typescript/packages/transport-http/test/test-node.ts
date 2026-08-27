@@ -1,8 +1,8 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import type { HttpTransportOptions } from './options.js';
-import { type HttpTransport, createHttpTransport } from './transport.js';
+import type { HttpTransportOptions } from '../src/options.js';
+import { type HttpTransport, createHttpTransport } from '../src/transport.js';
 
 /**
  * A real localhost HTTP server wired to one HttpTransport's handleInboundRequest -- the TS

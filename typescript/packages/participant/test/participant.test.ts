@@ -8,8 +8,8 @@ import {
   newMessageId,
 } from '@vsaga/protocol';
 
-import { InMemoryIdempotencyStore } from './idempotency.js';
-import { type Handler, createParticipant } from './participant.js';
+import { InMemoryIdempotencyStore } from '../src/idempotency.js';
+import { type Handler, createParticipant } from '../src/participant.js';
 import { FakeTransport } from './test-transport.js';
 
 interface ShipOrderBody {
