@@ -8,26 +8,30 @@ using Microsoft.Extensions.DependencyInjection;
 namespace VSaga.Http;
 
 /// <summary>
-/// The immutable, built form of one <c>.CallHttp(...)</c> configuration -- everything
-/// <see cref="HttpCallBuilder{TState,TMessage}"/> collected, executed once per step invocation.
-/// Transport-agnostic and independent of whichever <c>IMessageTransport</c> the host saga is wired to:
-/// this makes a real outbound REST call over its own <see cref="HttpClient"/>, then feeds the result
-/// back through <see cref="ISagaContext{TState}"/> exactly like any other step action.
+/// The shared execution engine behind both <c>.CallHttp(...)</c> and <c>ctx.CallHttpAsync(...)</c>:
+/// everything from the URL down to the retry policy, minus whatever supplies the request body. Message-
+/// type-agnostic on purpose -- the declarative form has a <typeparamref name="TState"/>/message-typed
+/// body factory to adapt into <see cref="Func{TResult}"/>, and the imperative form's body is already a
+/// plain captured value, so this is the one piece both can share without either depending on the other.
 /// </summary>
-internal sealed class HttpCallDefinition<TState, TMessage>(
+internal sealed class HttpCallExecutor<TState>(
     string url,
-    Func<ISagaContext<TState>, TMessage, object>? bodyFactory,
     IReadOnlyDictionary<int, IHttpOutcomeAction<TState>> statusActions,
     IHttpOutcomeAction<TState>? successAction,
     IHttpOutcomeAction<TState>? failureAction,
     int maxAttempts,
     TimeSpan retryDelay)
     where TState : SagaState, new()
-    where TMessage : notnull
 {
     private readonly string _host = new Uri(url, UriKind.Absolute).Host;
 
-    public async Task ExecuteAsync(ISagaContext<TState> context, TMessage message, CancellationToken cancellationToken)
+    /// <param name="body">
+    /// Null means no <c>.Body(...)</c> was configured at all (no request content, matching the
+    /// pre-refactor <c>bodyFactory is null</c> check). Non-null is invoked once per retry attempt --
+    /// see <c>ctx.CallHttpAsync</c>'s own remarks on why an eagerly-captured value passed as a
+    /// <see cref="Func{TResult}"/> here still preserves per-attempt invocation semantics literally.
+    /// </param>
+    public async Task ExecuteAsync(ISagaContext<TState> context, Func<object?>? body, CancellationToken cancellationToken)
     {
         var httpClient = context.Services.GetRequiredService<IHttpClientFactory>().CreateClient(ServiceCollectionExtensions.ClientName);
         var log = (ISagaContextLogSink)context;
@@ -40,28 +44,28 @@ internal sealed class HttpCallDefinition<TState, TMessage>(
         await log.LogAsync(SagaLogEntry.Create(context.CorrelationId, sagaType, SagaEntryType.MessagePublished,
             messageType: $"POST {url}", messageId: callId, sourceService: sagaType, destinationService: _host), cancellationToken);
 
-        var (statusCode, body, transportError) = await SendWithRetryAsync(httpClient, context, message, cancellationToken);
+        var (statusCode, responseBody, transportError) = await SendWithRetryAsync(httpClient, body, cancellationToken);
         var action = ResolveAction(statusCode);
 
         await log.LogAsync(SagaLogEntry.Create(context.CorrelationId, sagaType, SagaEntryType.MessageReceived,
             messageType: action.DescribeReply(), messageId: Guid.NewGuid().ToString("N"),
             sourceService: _host, causationId: callId, errorMessage: transportError?.Message), cancellationToken);
 
-        await action.ApplyAsync(context, body, cancellationToken);
+        await action.ApplyAsync(context, responseBody, cancellationToken);
     }
 
     private async Task<(int? StatusCode, ReadOnlyMemory<byte> Body, Exception? TransportError)> SendWithRetryAsync(
-        HttpClient httpClient, ISagaContext<TState> context, TMessage message, CancellationToken cancellationToken)
+        HttpClient httpClient, Func<object?>? body, CancellationToken cancellationToken)
     {
         Exception? lastError = null;
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
-            if (bodyFactory is not null)
+            if (body is not null)
             {
-                var body = bodyFactory(context, message);
-                request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(body, body.GetType()));
+                var value = body();
+                request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(value, value!.GetType()));
                 request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             }
 
@@ -98,4 +102,29 @@ internal sealed class HttpCallDefinition<TState, TMessage>(
             ? $".CallHttp to '{url}' received status {failedStatus} but no .OnFailure(...) was configured."
             : $".CallHttp to '{url}' failed (network error or timeout) but no .OnFailure(...) was configured.");
     }
+}
+
+/// <summary>
+/// The immutable, built form of one <c>.CallHttp(...)</c> configuration -- everything
+/// <see cref="HttpCallBuilder{TState,TMessage}"/> collected, executed once per step invocation. A thin,
+/// message-typed adapter over <see cref="HttpCallExecutor{TState}"/>: its only job is turning the eager
+/// <c>bodyFactory(context, message)</c> shape into the shared executor's <see cref="Func{TResult}"/>, re-
+/// closing over <paramref name="message"/> fresh on every call so the factory still runs once per retry
+/// attempt exactly as it always has.
+/// </summary>
+internal sealed class HttpCallDefinition<TState, TMessage>(
+    string url,
+    Func<ISagaContext<TState>, TMessage, object>? bodyFactory,
+    IReadOnlyDictionary<int, IHttpOutcomeAction<TState>> statusActions,
+    IHttpOutcomeAction<TState>? successAction,
+    IHttpOutcomeAction<TState>? failureAction,
+    int maxAttempts,
+    TimeSpan retryDelay)
+    where TState : SagaState, new()
+    where TMessage : notnull
+{
+    private readonly HttpCallExecutor<TState> _executor = new(url, statusActions, successAction, failureAction, maxAttempts, retryDelay);
+
+    public Task ExecuteAsync(ISagaContext<TState> context, TMessage message, CancellationToken cancellationToken) =>
+        _executor.ExecuteAsync(context, bodyFactory is null ? null : () => bodyFactory(context, message), cancellationToken);
 }

@@ -118,3 +118,109 @@ public sealed class HttpStatusBuilder<TState, TMessage>(HttpCallBuilder<TState, 
         return parent;
     }
 }
+
+/// <summary>
+/// Fluent configuration for one <c>ctx.CallHttpAsync(...)</c> call -- the context-only counterpart to
+/// <see cref="HttpCallBuilder{TState,TMessage}"/>, for use from a <c>Compensate(state, ...)</c> delegate
+/// or a <see cref="VSaga.Core.Dsl.TimeoutBuilder{TState}"/> step rather than an <c>EventBuilder</c>. Same
+/// surface minus whatever depended on an inbound <c>TMessage</c>: <c>.Body(...)</c> takes a plain value
+/// here instead of a factory, since the caller's own lambda has already closed over <c>ctx</c> (and
+/// anything else it needs) by the time it's written -- see <c>SagaContextHttpExtensions.CallHttpAsync</c>'s
+/// own remarks on why capturing it eagerly is still correct.
+/// </summary>
+public sealed class HttpCallBuilder<TState>
+    where TState : SagaState, new()
+{
+    private string? _url;
+    private Func<object?>? _body;
+    private readonly Dictionary<int, IHttpOutcomeAction<TState>> _statusActions = [];
+    private IHttpOutcomeAction<TState>? _successAction;
+    private IHttpOutcomeAction<TState>? _failureAction;
+    private int _maxAttempts = 1;
+    private TimeSpan _retryDelay = TimeSpan.Zero;
+
+    internal Func<object?>? BodyFactory => _body;
+
+    public HttpCallBuilder<TState> Post(string url)
+    {
+        _url = url;
+        return this;
+    }
+
+    public HttpCallBuilder<TState> Body(object value)
+    {
+        _body = () => value;
+        return this;
+    }
+
+    /// <summary>Message loopback for any 2xx not covered by a more specific <see cref="OnStatus"/>. See <see cref="LoopbackOutcomeAction{TState,TOut}"/>.</summary>
+    public HttpCallBuilder<TState> OnSuccess<TOut>() where TOut : notnull
+    {
+        _successAction = new LoopbackOutcomeAction<TState, TOut>();
+        return this;
+    }
+
+    /// <summary>Inline result shape for any 2xx not covered by a more specific <see cref="OnStatus"/>: mutates <typeparamref name="TState"/> directly, synchronously.</summary>
+    public HttpCallBuilder<TState> OnSuccess(Action<TState> mutate)
+    {
+        _successAction = new InlineOutcomeAction<TState>(mutate);
+        return this;
+    }
+
+    /// <summary>Message loopback for anything else — see <see cref="HttpCallBuilder{TState,TMessage}.OnFailure{TOut}"/>'s remarks on when this fires and what <typeparamref name="TOut"/> must tolerate.</summary>
+    public HttpCallBuilder<TState> OnFailure<TOut>() where TOut : notnull
+    {
+        _failureAction = new LoopbackOutcomeAction<TState, TOut>();
+        return this;
+    }
+
+    /// <summary>Inline result shape for anything else — see the loopback overload's remarks on when this fires.</summary>
+    public HttpCallBuilder<TState> OnFailure(Action<TState> mutate)
+    {
+        _failureAction = new InlineOutcomeAction<TState>(mutate);
+        return this;
+    }
+
+    /// <summary>An exact status code, taking priority over the 2xx/everything-else buckets above.</summary>
+    public HttpStatusBuilder<TState> OnStatus(int statusCode) => new(this, statusCode);
+
+    internal void SetStatusAction(int statusCode, IHttpOutcomeAction<TState> action) => _statusActions[statusCode] = action;
+
+    /// <summary>This call's own bounded retry for a transient network-level failure — see <see cref="HttpCallBuilder{TState,TMessage}.WithRetry"/>'s remarks. Defaults to a single attempt (no retry).</summary>
+    public HttpCallBuilder<TState> WithRetry(int maxAttempts, TimeSpan delay)
+    {
+        if (maxAttempts < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxAttempts), "At least one attempt is required.");
+
+        _maxAttempts = maxAttempts;
+        _retryDelay = delay;
+        return this;
+    }
+
+    internal HttpCallExecutor<TState> Build()
+    {
+        if (_url is null)
+            throw new InvalidOperationException("A ctx.CallHttpAsync(...) configuration needs a target URL -- call .Post(url) first.");
+
+        return new HttpCallExecutor<TState>(_url, _statusActions, _successAction, _failureAction, _maxAttempts, _retryDelay);
+    }
+}
+
+/// <summary>The context-only half of the DSL scoped to one exact status code, returned by <see cref="HttpCallBuilder{TState}.OnStatus"/>.</summary>
+public sealed class HttpStatusBuilder<TState>(HttpCallBuilder<TState> parent, int statusCode)
+    where TState : SagaState, new()
+{
+    /// <summary>Message loopback for this exact status — see <see cref="LoopbackOutcomeAction{TState,TOut}"/>.</summary>
+    public HttpCallBuilder<TState> As<TOut>() where TOut : notnull
+    {
+        parent.SetStatusAction(statusCode, new LoopbackOutcomeAction<TState, TOut>());
+        return parent;
+    }
+
+    /// <summary>Inline result shape for this exact status: mutates <typeparamref name="TState"/> directly, synchronously.</summary>
+    public HttpCallBuilder<TState> Then(Action<TState> mutate)
+    {
+        parent.SetStatusAction(statusCode, new InlineOutcomeAction<TState>(mutate));
+        return parent;
+    }
+}
