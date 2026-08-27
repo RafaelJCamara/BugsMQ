@@ -3,6 +3,10 @@
   "references": [
     { "path": "./packages/protocol" },
     { "path": "./packages/participant" },
-    { "path": "./packages/transport-rabbitmq" }
+    { "path": "./packages/transport-rabbitmq" },
+    { "path": "./packages/transport-http" },
+    { "path": "./packages/express" },
+    { "path": "./packages/fastify" },
+    { "path": "./packages/nestjs" }
   ]
 }
