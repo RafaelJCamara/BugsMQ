@@ -76,13 +76,19 @@ does *not* exist yet live under `docs/` instead, so the two are never confused.
 [`docs/http-based-sagas.md`](docs/http-based-sagas.md) covers HTTP-based sagas, in two independent
 halves — an `IMessageTransport` adapter that moves messages between vSaga services over HTTP with no
 broker at all, and a transport-agnostic `.CallHttp(...)` step that lets any saga call a plain REST API
-and map its response into a saga message. The first half is built and live-verified; see "Transport
-adapter: HTTP" below. The second remains an open proposal. Its §3 is the part to read first: three
-constraints found by tracing the engine, two of which killed an earlier draft of the design outright —
-including a third instance of this repo's recurring "header the orchestrator never actually reads back"
-scar, which here would cause infinite redelivery rather than a merely wrong dashboard. Live verification
-of the first half found a fourth instance of that same scar-class: a cross-process deadlock no unit test
-caught.
+and map its response into a saga message. Both halves are now built and live-verified; see "Transport
+adapter: HTTP" and "Outbound REST calls from a saga step: `.CallHttp`" below. Its §3 is the part to read
+first: three constraints found by tracing the engine, two of which killed an earlier draft of the design
+outright — including a third instance of this repo's recurring "header the orchestrator never actually
+reads back" scar, which here would cause infinite redelivery rather than a merely wrong dashboard. Live
+verification of the first half found a fourth instance of that same scar-class: a cross-process deadlock
+no unit test caught.
+
+[`docs/mixed-sagas.md`](docs/mixed-sagas.md) covers mixed sagas — one saga that both publishes/sends
+RabbitMQ messages and makes outbound REST calls via `.CallHttp`, with compensation that unwinds both kinds
+of hop. Designed, not built. Its own adversarial second pass found a fifth instance of the scar above in
+a different shape: a compensating REST call's loopback reply can resurrect an already-terminated saga
+unless the state it flows into is designed not to finalize until that reply actually arrives.
 
 [`docs/sub-saga-composition.md`](docs/sub-saga-composition.md) covered the whole of sub-saga
 composition and has no open work left: its last piece — whether a parent's compensation cascades into

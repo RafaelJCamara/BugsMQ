@@ -571,3 +571,8 @@ State these in the README when the work ships, rather than discovering them live
    2a/2b races, which is the one genuine argument for it.
 6. **Auth on the receive endpoint — deliberately not vSaga's opinion.** `MapVSagaHttp` returns the
    `RouteHandlerBuilder`; callers chain `.RequireAuthorization()`.
+7. **Mixed sagas — a saga that also drives RabbitMQ participants alongside `.CallHttp` — are a separate
+   design**, not this document's "natural third phase" (item 3, async webhook delivery, is still that
+   slot). See [`docs/mixed-sagas.md`](mixed-sagas.md): it needs its own engine change (draining
+   `PublishAfterCommitAsync` on the timeout path, currently missing) and its own DSL addition
+   (`ctx.CallHttpAsync`, for compensation delegates and timeout steps, where `.CallHttp` cannot reach).
