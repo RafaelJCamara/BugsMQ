@@ -31,12 +31,15 @@ public sealed record SagaOutboxMessage(
 public interface ISagaOutboxStore
 {
     /// <summary>
-    /// Durably records one queued publish. <paramref name="messageId"/> and <paramref name="createdAtUtc"/>
-    /// are supplied by the caller rather than minted here — the row must describe the exact same message
-    /// identity as the in-memory dispatch closure it backs, and the caller's own <c>TimeProvider</c> is
-    /// what every other timestamp in a saga's timeline already goes through.
+    /// Durably records one queued publish and returns its row id, so a caller that enqueues inline (the
+    /// orchestrator's own pre-persist write, per production-readiness.md §4.1 step 2) can pass it
+    /// straight to <see cref="MarkDispatchedAsync"/> once the matching send succeeds. <paramref
+    /// name="messageId"/> and <paramref name="createdAtUtc"/> are supplied by the caller rather than
+    /// minted here — the row must describe the exact same message identity as the in-memory dispatch
+    /// closure it backs, and the caller's own <c>TimeProvider</c> is what every other timestamp in a
+    /// saga's timeline already goes through.
     /// </summary>
-    Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default);
 

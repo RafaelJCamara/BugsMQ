@@ -1,3 +1,4 @@
+using System.Text.Json;
 using VSaga.Abstractions.Persistence;
 using VSaga.Abstractions.Sagas;
 using VSaga.Abstractions.Transport;
@@ -17,8 +18,19 @@ internal interface ISagaContextLogSink
 /// <summary>
 /// One queued ctx.PublishAfterCommitAsync call, named by its message type so a drain or a discard (see
 /// SagaOrchestrator.DiscardDeferredPublishesAsync) can log what it's handling rather than just count it.
+/// Carries both the durability copy (production-readiness.md §4.3's outbox row shape -- everything
+/// ISagaOutboxStore.EnqueueAsync needs) and the strongly-typed <see cref="SendAsync"/> closure the
+/// inline drain still calls, per §4.1's constraint that the inline path cannot go through
+/// PublishRawAsync without breaking TimeoutDrainTests.cs:75's typed-Message assertion. Destination is
+/// not carried: PublishAfterCommitAsync has no destination-taking overload, so every row this produces
+/// is always a broadcast publish.
 /// </summary>
-internal readonly record struct DeferredPublish(string MessageType, Func<Task> SendAsync);
+internal readonly record struct DeferredPublish(
+    string MessageType,
+    string MessageId,
+    ReadOnlyMemory<byte> Body,
+    IReadOnlyDictionary<string, string> Headers,
+    Func<Task> SendAsync);
 
 /// <summary>
 /// Lets SagaOrchestrator.HandleStepSuccessAsync drain a step's ctx.PublishAfterCommitAsync queue once
@@ -115,7 +127,9 @@ internal sealed class SagaContext<TState>(
     public Task PublishAfterCommitAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
     {
         var envelope = MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId);
-        _deferredPublishes.Add(new DeferredPublish(typeof(TMessage).Name, () => PublishInternalAsync(message, destination: null, envelope, cancellationToken)));
+        var body = JsonSerializer.SerializeToUtf8Bytes(message);
+        _deferredPublishes.Add(new DeferredPublish(typeof(TMessage).Name, envelope.MessageId, body, envelope.Headers!,
+            () => PublishInternalAsync(message, destination: null, envelope, cancellationToken)));
         return Task.CompletedTask;
     }
 

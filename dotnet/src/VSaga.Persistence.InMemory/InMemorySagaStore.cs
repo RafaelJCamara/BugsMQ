@@ -264,14 +264,14 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         return Task.FromResult<IReadOnlyList<SagaTimeout>>(claimed);
     }
 
-    public Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    public Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default)
     {
         var id = Interlocked.Increment(ref _outboxMessageId);
         _outboxMessages[id] = new SagaOutboxMessage(id, correlationId, sagaType, messageId, messageTypeName,
             body, destination, headers, SagaOutboxStatus.Pending, createdAtUtc);
-        return Task.CompletedTask;
+        return Task.FromResult(id);
     }
 
     public Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default)

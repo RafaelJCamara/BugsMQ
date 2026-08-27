@@ -6,11 +6,11 @@ namespace VSaga.Persistence.EFCore;
 
 public sealed class EfCoreSagaOutboxStore(VSagaDbContext db) : ISagaOutboxStore
 {
-    public Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    public async Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default)
     {
-        db.SagaOutboxMessages.Add(new SagaOutboxMessageEntity
+        var entity = new SagaOutboxMessageEntity
         {
             CorrelationId = correlationId,
             SagaType = sagaType,
@@ -21,9 +21,11 @@ public sealed class EfCoreSagaOutboxStore(VSagaDbContext db) : ISagaOutboxStore
             HeadersJson = JsonSerializer.Serialize(headers),
             Status = SagaOutboxStatus.Pending,
             CreatedAtUtc = createdAtUtc,
-        });
+        };
 
-        return db.SaveChangesAsync(cancellationToken);
+        db.SagaOutboxMessages.Add(entity);
+        await db.SaveChangesAsync(cancellationToken);
+        return entity.Id;
     }
 
     public async Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default)

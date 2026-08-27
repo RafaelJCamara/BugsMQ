@@ -5,9 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace VSaga.Core.Tests;
 
 /// <summary>
-/// Direct coverage of <see cref="ISagaOutboxStore"/>'s in-memory implementation -- not wired to
-/// anything in the engine yet (production-readiness §8.6), so unlike every other store contract here
-/// there's no full-saga integration test that would exercise it incidentally.
+/// Direct coverage of <see cref="ISagaOutboxStore"/>'s in-memory implementation, independent of
+/// SagaOrchestrator's own use of it (production-readiness §8.8) -- these exercise the store contract's
+/// full id/claim/dispatch shape on its own rather than only incidentally through a saga run.
 /// </summary>
 public sealed class InMemoryOutboxStoreTests
 {
