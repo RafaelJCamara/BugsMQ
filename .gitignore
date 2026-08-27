@@ -15,10 +15,12 @@ coverage/
 .idea/
 .vscode/
 
-## Angular / Node
-dashboard-web/node_modules/
-dashboard-web/dist/
-dashboard-web/.angular/
+## Node / TypeScript
+typescript/**/node_modules/
+typescript/**/dist/
+typescript/**/coverage/
+typescript/**/*.tsbuildinfo
+typescript/dashboard-web/.angular/
 npm-debug.log*
 
 ## Docker

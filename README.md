@@ -12,29 +12,35 @@ made during that pass.
 
 ## Repository layout
 
+The repo is split by ecosystem: everything .NET lives under `dotnet/`, everything Node/TypeScript
+under `typescript/`. Shared assets (docs, compose files, CI) stay at the root.
+
 ```
-src/
-  VSaga.Abstractions             Contracts only: saga/transport/persistence interfaces, no implementation deps
-  VSaga.Chaos                    Opt-in fault-injection transport middleware (delay/drop/duplicate)
-  VSaga.Core                     The saga engine: fluent DSL + orchestrator runtime
-  VSaga.Observability            OpenTelemetry hosting extensions
-  VSaga.Persistence.EFCore       EF Core store implementations (provider-agnostic)
-  VSaga.Persistence.EFCore.Postgres   Postgres-specific EF Core migrations (see "EF Core migrations" below)
-  VSaga.Persistence.InMemory     In-memory store implementations (dev/test)
-  VSaga.Testing                  SagaTestHarness for unit-testing saga definitions
-  VSaga.Transport.Common         Shared IMessageTransport decorator (MiddlewarePipelineTransport)
-  VSaga.Transport.Http           IMessageTransport over plain HTTP, no broker (docs/http-based-sagas.md)
-  VSaga.Transport.InMemory       In-memory IMessageTransport (dev/test)
-  VSaga.Transport.RabbitMQ       Real IMessageTransport over RabbitMQ.Client
-  VSaga.Transport.Wolverine      IMessageTransport over WolverineFx.RabbitMQ
-  VSaga.Transport.MassTransit    IMessageTransport over MassTransit 8.x + RabbitMQ
-  VSaga.Transport.Brighter       IMessageTransport over Paramore.Brighter's RabbitMQ gateway
-  VSaga.Dashboard.Api            ASP.NET Core API + SignalR hub for the ops dashboard
-dashboard-web/                    Angular 21 SPA for the dashboard (list/detail, live updates)
-samples/
-  VSaga.Samples.OrderProcessing(.Contracts)   End-to-end reference saga + participants
-tests/                            One test project per major src/ project
-docs/                             Design sketches for work not yet built (see "Proposed work" below)
+dotnet/                           .NET 10 solution: VSaga.slnx, Directory.*.props, global.json, .editorconfig
+  src/
+    VSaga.Abstractions             Contracts only: saga/transport/persistence interfaces, no implementation deps
+    VSaga.Chaos                    Opt-in fault-injection transport middleware (delay/drop/duplicate)
+    VSaga.Core                     The saga engine: fluent DSL + orchestrator runtime
+    VSaga.Observability            OpenTelemetry hosting extensions
+    VSaga.Persistence.EFCore       EF Core store implementations (provider-agnostic)
+    VSaga.Persistence.EFCore.Postgres   Postgres-specific EF Core migrations (see "EF Core migrations" below)
+    VSaga.Persistence.InMemory     In-memory store implementations (dev/test)
+    VSaga.Testing                  SagaTestHarness for unit-testing saga definitions
+    VSaga.Transport.Common         Shared IMessageTransport decorator (MiddlewarePipelineTransport)
+    VSaga.Transport.Http           IMessageTransport over plain HTTP, no broker (docs/http-based-sagas.md)
+    VSaga.Transport.InMemory       In-memory IMessageTransport (dev/test)
+    VSaga.Transport.RabbitMQ       Real IMessageTransport over RabbitMQ.Client
+    VSaga.Transport.Wolverine      IMessageTransport over WolverineFx.RabbitMQ
+    VSaga.Transport.MassTransit    IMessageTransport over MassTransit 8.x + RabbitMQ
+    VSaga.Transport.Brighter       IMessageTransport over Paramore.Brighter's RabbitMQ gateway
+    VSaga.Dashboard.Api            ASP.NET Core API + SignalR hub for the ops dashboard
+  samples/
+    VSaga.Samples.OrderProcessing(.Contracts)   End-to-end reference saga + participants
+  tests/                           One test project per major dotnet/src/ project
+  tools/BackfillStrandedTimeouts   One-off maintenance tool
+typescript/                       Node 22+ / TypeScript
+  dashboard-web/                   Angular 21 SPA for the dashboard (list/detail, live updates)
+docs/                             Design sketches + shipped-feature design records
 docker-compose.yml                Postgres + RabbitMQ + dashboard-api + the OrderProcessing sample
 ```
 
@@ -55,7 +61,7 @@ the `VSaga.Testing` harness. The OrderProcessing sample runs both saga kinds sid
 Postgres/RabbitMQ via `docker-compose.yml` — `OrderSaga` (orchestrated: compensation, timeouts) and
 `PostShipmentChoreography` (choreographed: an independent fan-out tracked under the same correlation
 id) — see "Choreography in the OrderProcessing sample" below. Its transport is config-switchable
-(`Transport:Provider`, see `samples/VSaga.Samples.OrderProcessing/Program.cs`) to run against any of
+(`Transport:Provider`, see `dotnet/samples/VSaga.Samples.OrderProcessing/Program.cs`) to run against any of
 the four adapters via a dedicated docker-compose overlay per adapter (`docker-compose.wolverine.yml`,
 `.masstransit.yml`, `.brighter.yml` — RabbitMQ needs none, it's the default).
 
@@ -114,7 +120,7 @@ applied cleanly, auth and health checks exercised over HTTP):
 
 - **Dashboard API authentication** — a shared API key (`Dashboard:ApiKey` config), chosen over
   JWT/OIDC or basic auth as the right fit for a v1 internal ops dashboard with no existing identity
-  infrastructure. `src/VSaga.Dashboard.Api/Auth/ApiKeyAuthenticationHandler.cs` checks the
+  infrastructure. `dotnet/src/VSaga.Dashboard.Api/Auth/ApiKeyAuthenticationHandler.cs` checks the
   `X-Api-Key` header, then an `Authorization: Bearer` header, then falls back to the
   `?access_token=` query string. The SignalR JS client sends its `accessTokenFactory` token as an
   `Authorization: Bearer` header on the negotiate HTTP call, and only as the `?access_token=` query
@@ -122,13 +128,13 @@ applied cleanly, auth and health checks exercised over HTTP):
   all three to authenticate both legs of a hub connection. It **fails closed**: an unconfigured key
   denies every request rather than silently disabling auth. `/health` stays unauthenticated, per
   infra-probe convention. The Angular client sends the key via an `HttpInterceptorFn`
-  (`dashboard-web/src/app/interceptors/api-key.interceptor.ts`) and the hub connection's
+  (`typescript/dashboard-web/src/app/interceptors/api-key.interceptor.ts`) and the hub connection's
   `accessTokenFactory`. **Known limitation, accepted as part of this choice:** a key embedded in a
   compiled SPA bundle is visible via devtools — this closes off unauthenticated direct API access,
   it is not per-user auth.
 
 - **Real `/health` check** — replaced the hardcoded `{ "status": "healthy" }` response with actual
-  Postgres/RabbitMQ connectivity checks (`src/VSaga.Dashboard.Api/HealthChecks/`), returning `503`
+  Postgres/RabbitMQ connectivity checks (`dotnet/src/VSaga.Dashboard.Api/HealthChecks/`), returning `503`
   with a per-check breakdown when either is unreachable. Both checks resolve their dependency
   lazily via `IServiceScopeFactory` rather than a direct constructor dependency, so they degrade to
   "not configured" instead of failing to construct when a test host swaps out the real providers.
@@ -176,7 +182,7 @@ A third tab ("Map", alongside Timeline/Data) on the saga detail page renders an 
 service graph for that saga: nodes are the services involved (Initiator, Orchestrator, Participant,
 or Unresolved), edges are the messages that flowed between them, plus a scrubber/replay animation
 that steps through the saga's timeline at adjustable speed. `SagaMapBuilder`
-(`src/VSaga.Dashboard.Api/SagaMapBuilder.cs`) is a pure, unit-testable function from a saga's raw
+(`dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs`) is a pure, unit-testable function from a saga's raw
 event log + a topology registry to nodes/edges/a replay script — no dependency on any specific saga
 definition, consistent with the dashboard's saga-type-agnostic design.
 
@@ -289,7 +295,7 @@ Running — which chaos testing usefully surfaces as a real, pre-existing gap in
 coverage rather than something `VSaga.Chaos` should paper over. **Closed in a later pass** — see
 "Timeout coverage for every awaiting state" below; all three awaiting states now carry a timeout.
 
-**Wiring.** `samples/VSaga.Samples.OrderProcessing` calls `AddVSagaChaos` only when
+**Wiring.** `dotnet/samples/VSaga.Samples.OrderProcessing` calls `AddVSagaChaos` only when
 `Chaos:Enabled` is `true` (`appsettings.json` defaults it to `false`, so plain `docker compose up`
 is unaffected). `docker-compose.chaos.yml` is an overlay that turns all three faults on with sample
 tuned probabilities:
@@ -353,7 +359,7 @@ instead of real waits.
 ## Timeout/message race fix
 
 Closes the race the chaos-testing pass above found but deliberately left unfixed. In
-`SagaOrchestrator<TState>.HandleTimeoutAsync` (`src/VSaga.Core/Runtime/SagaOrchestrator.cs`), a due
+`SagaOrchestrator<TState>.HandleTimeoutAsync` (`dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs`), a due
 timeout used to call straight into the saga definition — which is what runs `.Compensate()`/`.Publish()`
 side effects — *before* persisting anything. If a normal message read the same snapshot version
 concurrently (the exact "reply landed mere seconds before the timeout" scenario above), the timeout's
@@ -375,7 +381,7 @@ What changed for that narrower case: it's now caught and logged distinctly
 propagating an uncaught `SagaConcurrencyException` out to `SagaTimeoutDispatcherHostedService`'s
 generic catch-and-log, which is what happened before this fix for *any* race, wide or narrow.
 
-`tests/VSaga.Core.Tests/SagaOrchestratorTimeoutRaceTests.cs` covers both windows deterministically —
+`dotnet/tests/VSaga.Core.Tests/SagaOrchestratorTimeoutRaceTests.cs` covers both windows deterministically —
 same controlled-fake technique as `SagaOrchestratorInfrastructureFailureTests`, decorating the
 snapshot store to inject a concurrent reply synchronously at the exact call site that matters, rather
 than relying on real timing. One test proves the pre-claim race no longer publishes any compensation
@@ -398,7 +404,7 @@ Two secondary gaps the original chaos pass also flagged got picked up here:
   command (or a genuine broker at-least-once redelivery) ran its business side effect twice, as the
   `Duplicate`+`Drop`/`Delay` finding above shows for `ReserveInventory`. Fixed with a small, bounded,
   process-local `MessageId` dedup guard added once to the shared `ParticipantService` base
-  (`samples/VSaga.Samples.OrderProcessing/Participants/ParticipantService.cs`), covering all three
+  (`dotnet/samples/VSaga.Samples.OrderProcessing/Participants/ParticipantService.cs`), covering all three
   participants — not durable across restarts, which is an honest limitation of its own, but enough to
   absorb the near-immediate redelivery chaos testing (and a real broker) actually produces.
 - **`AwaitingInventory`/`AwaitingShipment` have no `WithTimeout`.** Left as-is, deliberately: the
@@ -459,7 +465,7 @@ both DSLs' `WithTimeout(...)`. The two DSLs' public fluent builders (`EventBuild
 abstraction — the state-gated chaining `During(...).When<T>()` needs is orchestration-specific, and
 forcing it into a shared shape would have leaked that gating concept into choreography's builder.
 
-**Test coverage:** `tests/VSaga.Core.Tests/TestShippingChoreography.cs` (a fixture) and
+**Test coverage:** `dotnet/tests/VSaga.Core.Tests/TestShippingChoreography.cs` (a fixture) and
 `ChoreographedSagaTests.cs` (7 tests) run the new DSL through the real `SagaOrchestrator<TState>` and
 in-memory transport/persistence, the same way `SagaOrchestratorTests.cs` covers the orchestrated DSL.
 Beyond the compensate/timeout/retry parity checks, two tests specifically target what makes a
@@ -630,8 +636,8 @@ whenever the saga transitions away, so a single `WithTimeout(AwaitingFulfilment,
 cancelled by the first branch to report and could only ever catch an order where *nothing* came back —
 leaving a saga stalled at two-of-three to hang forever.
 
-**Not unit-tested at the sample level, by existing convention:** `tests/` holds one project per `src/`
-project and none for `samples/`, so the sample's own wiring is verified live rather than in xUnit. What
+**Not unit-tested at the sample level, by existing convention:** `dotnet/tests/` holds one project per `dotnet/src/`
+project and none for `dotnet/samples/`, so the sample's own wiring is verified live rather than in xUnit. What
 *is* unit-tested is the engine capability behind it, via a reduced fixture (`TestFanOutChoreography`)
 with the same shape.
 
@@ -746,7 +752,7 @@ backfill — deliberately not smuggled into this pass.
 
 ## Backfilling the 60 stranded sagas
 
-The separate backfill the section above deferred. `tools/BackfillStrandedTimeouts` is a small one-time
+The separate backfill the section above deferred. `dotnet/tools/BackfillStrandedTimeouts` is a small one-time
 console tool, not a new engine capability or dashboard endpoint — this is a known, bounded fix for two
 known states on one known saga type, not a general problem worth new public surface. It reaches directly
 into `VSagaDbContext` (ops code against the one concrete provider actually deployed here, not pluggable
@@ -860,7 +866,7 @@ state that fans out `ReserveInventory` and `ChargePayment` together and joins on
 the "obvious demonstration" this section named above. The actual blast radius turned out narrow: no
 engine or dashboard test is coupled to the sample's real state names (the closest lookalike,
 `TestOrderSaga` in `VSaga.Core.Tests`, is a fully independent fixture with its own duplicate contract
-types), so this is `samples/VSaga.Samples.OrderProcessing/OrderSaga.cs` plus this section and the
+types), so this is `dotnet/samples/VSaga.Samples.OrderProcessing/OrderSaga.cs` plus this section and the
 "Timeout coverage for every awaiting state" note above pointing at it.
 
 **A real behavioural change, not just a rename.** Charging the card no longer waits on inventory being
@@ -1109,7 +1115,7 @@ parent, inserted a row at all. `SagaOrchestrator.HandleCoreAsync` finds no exist
 the message isn't among the parent's initiating types, and logs `UnexpectedEvent` — no exception, so no
 redelivery either, and the notification is silently gone. Pinned by
 `NotifyParentAsync_FromAChildsOwnInitiatingStep_CanRaceAheadOfTheParentsUnpersistedTransition`
-(`tests/VSaga.Core.Tests/NotifyParentAsyncTests.cs`) rather than quietly avoided. Not fixed: a real fix
+(`dotnet/tests/VSaga.Core.Tests/NotifyParentAsyncTests.cs`) rather than quietly avoided. Not fixed: a real fix
 would mean reordering this engine's "run step actions, then persist" sequence throughout, well beyond
 this pass. Real transports decouple a child's dispatch from the publisher's call stack rather than
 nesting it, and every real child in this repo has genuine I/O between the two calls (a participant
@@ -1275,7 +1281,7 @@ for this slice.
 
 ## Transport adapter: Wolverine
 
-`IMessageTransport`'s own doc comment (`src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`) names
+`IMessageTransport`'s own doc comment (`dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`) names
 Wolverine as a future adapter alongside MassTransit, on the same terms as RabbitMqTransport: use the
 target bus's own raw send/receive primitives, never its native saga/state-machine or handler-discovery
 machinery. `VSaga.Transport.Wolverine` is that adapter, built on WolverineFx 6.30.0 / WolverineFx.RabbitMQ
@@ -1289,12 +1295,12 @@ scanning at startup. vSaga's `SubscribeAsync` is the opposite shape — a runtim
 `(TransportSubscription, Func<ReceivedMessage, CancellationToken, Task>)` pair, created dynamically,
 often several times, well after the host has already started. Routing a real saga message type through
 Wolverine's own discovery would mean Wolverine owning dispatch to business logic, which is exactly what
-the doc comment forbids. `RawEnvelope` (`src/VSaga.Transport.Wolverine/RawEnvelope.cs`) is the fix: every
+the doc comment forbids. `RawEnvelope` (`dotnet/src/VSaga.Transport.Wolverine/RawEnvelope.cs`) is the fix: every
 single piece of vSaga traffic — regardless of its real message type — is sent and received as this one
 empty marker type, so Wolverine's handler discovery only ever has to know about one static
 `RawEnvelopeHandler.Handle` method (`RawEnvelope.cs`), never a saga-specific type. The four vSaga headers,
 the real message type name, the correlation id, and the message id all travel inside a small
-self-describing JSON payload (`WireEnvelope`, `src/VSaga.Transport.Wolverine/WireEnvelope.cs`) carried
+self-describing JSON payload (`WireEnvelope`, `dotnet/src/VSaga.Transport.Wolverine/WireEnvelope.cs`) carried
 verbatim as `Envelope.Data` — deliberately *not* relying on Wolverine's own `Envelope.Headers`-to-AMQP-property
 mapping, so the header round trip is provably correct independent of whatever that mapping does.
 
@@ -1329,8 +1335,8 @@ directly from this adapter.
 **Ack/nack, without Wolverine's own retry fighting Core's.** Wolverine's model is implicit: return from
 `Handle` and it acks; throw and its own error-handling policy decides what happens next. vSaga's model is
 explicit: the caller of `SubscribeAsync`'s handler always calls `received.Ack.AckAsync`/`NackAsync` itself
-before returning (see `SagaOrchestrator.HandleAsync`, `src/VSaga.Core/Runtime/SagaOrchestrator.cs:39-50`).
-`WolverineAckContext` (`src/VSaga.Transport.Wolverine/WolverineAckContext.cs`) bridges the two: by the
+before returning (see `SagaOrchestrator.HandleAsync`, `dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:39-50`).
+`WolverineAckContext` (`dotnet/src/VSaga.Transport.Wolverine/WolverineAckContext.cs`) bridges the two: by the
 time `RawDispatchRegistry.DispatchAsync` resumes after awaiting the downstream handler, one of Ack/Nack has
 always already run, and a Nack is turned into a thrown exception so Wolverine's own `Handle` faults.
 `ServiceCollectionExtensions.cs:46` configures `opts.OnException<Exception>().MoveToErrorQueue()` —
@@ -1349,7 +1355,7 @@ exposes publisher-confirm *settings* (`WolverineRabbitMqChannelOptions.Publisher
 handling anywhere — checked by scanning `Wolverine.RabbitMQ.dll` itself for `mandatory`/`Unroutable`/
 `BasicReturn`: zero matches, and the shipped XML docs are equally silent. A message published to a routing
 key nobody is bound to is therefore silently discarded by the broker. `Publish_ToUnboundRoutingKey_CompletesWithoutThrowing_NoWolverineUnroutableSignal`
-(`tests/VSaga.Transport.Wolverine.Tests/WolverineTransportTests.cs`) asserts that actual, verified
+(`dotnet/tests/VSaga.Transport.Wolverine.Tests/WolverineTransportTests.cs`) asserts that actual, verified
 behavior instead of faking the RabbitMQ adapter's exception.
 
 **Tests: 4/4 against a real broker, one new.** `WolverineTransportTests` mirrors
@@ -1410,11 +1416,11 @@ reference with no behavioral change.
 
 ## Transport adapter: MassTransit
 
-`VSaga.Transport.MassTransit` (`src/VSaga.Transport.MassTransit/`) is the second real
+`VSaga.Transport.MassTransit` (`dotnet/src/VSaga.Transport.MassTransit/`) is the second real
 `IMessageTransport` adapter, alongside `VSaga.Transport.RabbitMQ`. Same contract
-(`src/VSaga.Abstractions/Transport/IMessageTransport.cs:8-32`), same four methods, same
+(`dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:8-32`), same four methods, same
 `MiddlewarePipelineTransport` wrapper — a different wire underneath. Pinned to **MassTransit
-8.5.8** (`src/VSaga.Transport.MassTransit/VSaga.Transport.MassTransit.csproj`), the latest 8.x
+8.5.8** (`dotnet/src/VSaga.Transport.MassTransit/VSaga.Transport.MassTransit.csproj`), the latest 8.x
 release confirmed on NuGet at the time of writing: MassTransit v9 is transitioning to a commercial
 license, v8 remains Apache-2.0, and this adapter is built on it deliberately rather than on
 whatever happened to be cached in training data.
@@ -1422,27 +1428,27 @@ whatever happened to be cached in training data.
 **Built on MassTransit's transport, not its saga features — same boundary the doc comment already
 states.** `IMessageTransport`'s own doc comment says concrete adapters "never use another bus's
 native saga/state-machine features, only its transport"
-(`src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`). `MassTransitTransport` is built
+(`dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`). `MassTransitTransport` is built
 entirely on `IBus`/`IPublishEndpoint`/`ISendEndpointProvider` for outbound and
 `IConsumer<T>`/`ConsumeContext<T>` for inbound, over MassTransit's RabbitMQ transport — never
 Courier (routing slips) and never Automatonymous/its own saga persistence. `SagaOrchestrator`
-still owns every bit of retry, redelivery, and dedup (`src/VSaga.Core/Runtime/SagaOrchestrator.cs:52-90`);
+still owns every bit of retry, redelivery, and dedup (`dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:52-90`);
 this adapter only moves bytes.
 
 **One MassTransit contract for every vSaga message, not one per type.** MassTransit's own pub/sub
 topology is built around compile-time generics (`Publish<T>`, `IConsumer<T>`), but
 `TransportSubscription.MessageTypes` only ever hands `SubscribeAsync` a list of runtime `Type`
 instances — the same mismatch `RabbitMqTransport` sidesteps by treating the RabbitMQ.Client body as
-opaque JSON bytes. `VSagaEnvelopeMessage` (`src/VSaga.Transport.MassTransit/VSagaEnvelopeMessage.cs`)
+opaque JSON bytes. `VSagaEnvelopeMessage` (`dotnet/src/VSaga.Transport.MassTransit/VSagaEnvelopeMessage.cs`)
 is the one fixed record every vSaga message actually travels as: `MessageTypeName` plus an
 already-`System.Text.Json`-serialized body. `AddVSagaMassTransit`
-(`src/VSaga.Transport.MassTransit/ServiceCollectionExtensions.cs`) forces it onto one durable
+(`dotnet/src/VSaga.Transport.MassTransit/ServiceCollectionExtensions.cs`) forces it onto one durable
 topic exchange (`cfg.Message<VSagaEnvelopeMessage>(m => m.SetEntityName(...))`,
 `cfg.Publish<VSagaEnvelopeMessage>(p => p.ExchangeType = "topic")`) and reads the routing key back
 off the message itself (`cfg.Send<VSagaEnvelopeMessage>(s => s.UseRoutingKeyFormatter(ctx =>
 ctx.Message.MessageTypeName))`) — the same shared-topic-exchange-plus-per-type-routing-key shape
 `RabbitMqTransport` gets natively, reconstructed one layer up. `SubscribeAsync`
-(`src/VSaga.Transport.MassTransit/MassTransitTransport.cs`) turns off MassTransit's default
+(`dotnet/src/VSaga.Transport.MassTransit/MassTransitTransport.cs`) turns off MassTransit's default
 auto-bind-on-consume (`e.ConfigureConsumeTopology = false`) — left on, every subscriber's queue
 would receive every vSaga message ever published, since they all share one contract — and instead
 binds one `IRabbitMqReceiveEndpointConfigurator.Bind<VSagaEnvelopeMessage>` per declared message
@@ -1466,19 +1472,19 @@ turns a recorded nack — or no decision at all — into a thrown exception once
 completes. Every receive endpoint is configured `UseMessageRetry(r => r.None())`, so a fault lands
 straight in `{queue}_error` rather than being retried by MassTransit itself against
 `SagaOrchestrator`'s own bounded-redelivery wishes (`HandleInfrastructureFailureAsync`,
-`src/VSaga.Core/Runtime/SagaOrchestrator.cs:61-90`, never relies on broker-native requeue). No
+`dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:61-90`, never relies on broker-native requeue). No
 poison-queue/DLX topology is replicated from `RabbitMqTransport` — the scope note calling that
 defense-in-depth specific to that adapter, not a contract requirement, held up under actual
 implementation.
 
 **Unroutable publish.** MassTransit surfaces RabbitMQ's mandatory-publish-plus-return semantics as
 `MessageReturnedException` (confirmed against MassTransit's own test suite,
-`tests/MassTransit.RabbitMqTransport.Tests/Mandatory_Specs.cs`) when `PublishContext.Mandatory` is
+`dotnet/tests/MassTransit.RabbitMqTransport.Tests/Mandatory_Specs.cs`) when `PublishContext.Mandatory` is
 set and no queue is bound for the routing key. `MassTransitTransport` sets it on every publish and
 wraps the exception into the same provider-agnostic `MessageTransportPublishException` RabbitMQ's
 own adapter throws, `IsUnroutable` included.
 
-**Tests: 4 against a real broker, no mocks** (`tests/VSaga.Transport.MassTransit.Tests/`,
+**Tests: 4 against a real broker, no mocks** (`dotnet/tests/VSaga.Transport.MassTransit.Tests/`,
 Testcontainers `rabbitmq:4-management`, mirroring `RabbitMqTransportTests`' own IAsyncLifetime
 shape): publish-and-subscribe with correlation id and type preserved; direct send to a named queue
 bypassing the exchange; unroutable publish throwing `MessageTransportPublishException`; and the new
@@ -1554,12 +1560,12 @@ transport-level primitives — `RmqMessageProducer`'s `IAmAMessageProducerAsync.
 `RmqMessageConsumer`'s `IAmAMessageConsumerAsync` to receive/ack/reject — never Brighter's
 `CommandProcessor` dispatch pipeline, its Outbox/Inbox, its request-handler routing, or any
 workflow/scheduler feature. Same rule this repo already applies to RabbitMQ.Client directly
-(`src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`): vSaga never uses another bus's own
+(`dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:4-6`): vSaga never uses another bus's own
 saga/state-machine machinery, only its wire-level publish/consume primitives.
-`src/VSaga.Transport.Brighter/BrighterTransport.cs:78-146` (publish) and `:148-232` (subscribe/consume)
+`dotnet/src/VSaga.Transport.Brighter/BrighterTransport.cs:78-146` (publish) and `:148-232` (subscribe/consume)
 are the whole adapter; `ServiceCollectionExtensions.AddVSagaBrighter` wraps it in the same
 `MiddlewarePipelineTransport` every other adapter shares, so chaos/topology-recording middleware work
-unchanged (`src/VSaga.Transport.Brighter/ServiceCollectionExtensions.cs`).
+unchanged (`dotnet/src/VSaga.Transport.Brighter/ServiceCollectionExtensions.cs`).
 
 **Constructed directly, not through Brighter's usual DI story.** Brighter is normally wired via
 `services.AddBrighter(...).UseExternalBus(...)` plus a producer registry keyed by topic — but that helper
@@ -1577,7 +1583,7 @@ exposes, not a design preference:**
   "default/nameless exchange" concept exposed anywhere in the package (confirmed by reflecting over
   `RmqMessagingGatewayConnection`, `RmqPublication`, and `RmqMessageProducer`'s constructors: none expose
   it). `RabbitMqTransport.SendAsync` targets AMQP's default exchange directly
-  (`src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:70-74`); that path doesn't exist here. Instead,
+  (`dotnet/src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:70-74`); that path doesn't exist here. Instead,
   `SubscribeAsync` binds the queue's own name as an *extra* routing key on the same topic exchange
   (`BrighterTransport.cs:160-164`), so a direct send just publishes with that routing key — one queue
   reached, mechanically different route, functionally identical outcome. `Send_DeliversDirectlyToNamedQueueWithoutExchange` passes either way.
@@ -1603,7 +1609,7 @@ bindings don't exist yet, because `RmqMessageConsumer.EnsureChannelAsync` declar
 `ReceiveAsync` itself, not in the constructor. `IMessageTransport.SubscribeAsync`'s contract requires
 topology to exist *before* the method returns (RabbitMqTransport's own doc comment says so explicitly:
 "need to declare exchanges/queues/bindings ... before returning" —
-`src/VSaga.Abstractions/Transport/IMessageTransport.cs:26-30`). `SubscribeAsync` forces that eagerly with
+`dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:26-30`). `SubscribeAsync` forces that eagerly with
 a 50ms warm-up receive before starting the consume loop (`BrighterTransport.cs:173-178`). Skipping it
 reproduces the exact bug the sub-saga headers are supposed to prove don't exist: a header nobody actually
 reads because the message carrying it was silently dropped before a real receive path ever touched it.
@@ -1611,7 +1617,7 @@ reads because the message carrying it was silently dropped before a real receive
 **Known gap: no unroutable-publish detection.** `RabbitMqTransport` publishes with `mandatory: true`
 plus RabbitMQ.Client's native publisher-confirm tracking, so an unroutable message throws
 `MessageTransportPublishException` deterministically
-(`src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:79-88`). `Paramore.Brighter.MessagingGateway.RMQ.Async`
+(`dotnet/src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:79-88`). `Paramore.Brighter.MessagingGateway.RMQ.Async`
 10.7.0's `RmqMessageProducer` never sets that flag — confirmed both by inspecting its publish path
 (`RmqMessageProducer`/`RmqMessagePublisher`'s constructors and properties expose no such option anywhere:
 not on `RmqPublication`, not on `RmqMessagingGatewayConnection`) and by direct testing against a live
@@ -1623,7 +1629,7 @@ and provides no way to request. `BrighterTransport.SendWithConfirmationAsync`
 and throws `MessageTransportPublishException` on `Success = false` — the one failure mode this package's
 confirmation event can actually surface (a genuine broker-side nack, e.g. a queue at its length limit) —
 but that is a strictly smaller net than RabbitMQ's mandatory-plus-confirms combination catches.
-`tests/VSaga.Transport.Brighter.Tests/BrighterTransportTests.cs`'s
+`dotnet/tests/VSaga.Transport.Brighter.Tests/BrighterTransportTests.cs`'s
 `Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway` documents this
 verified behavior directly rather than asserting a throw that cannot occur.
 
@@ -1638,7 +1644,7 @@ prefix on the way in (`BrighterTransport.cs:270`) rather than passed through unf
 echoes of core header fields on receipt (`CorrelationId`, `Topic`, `HandledCount`, `cloudEvents_id`, ...)
 that raw AMQP headers never have, and letting those round-trip forward through redelivery
 (`SagaOrchestrator.HandleInfrastructureFailureAsync` rebuilds `envelope.Headers` from
-`received.Headers` — `src/VSaga.Core/Runtime/SagaOrchestrator.cs:70-74`) would carry Brighter-internal
+`received.Headers` — `dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:70-74`) would carry Brighter-internal
 noise as bogus outbound headers on every redelivered message. Every real vSaga header in this codebase
 is `x-vsaga-`-prefixed with no exception, so the filter drops nothing that matters.
 
@@ -1685,7 +1691,7 @@ RabbitMQ.Client limitation that a message delivered-but-unacked immediately befo
 connection/channel recovery cannot be acked afterward against the recovered channel's restarted delivery
 tag numbering — `RabbitMqConnectionManager` enables the same `AutomaticRecoveryEnabled`/
 `TopologyRecoveryEnabled` flags for `RabbitMqTransport`
-(`src/VSaga.Transport.RabbitMQ/RabbitMqConnectionManager.cs:26-27`), so this class of issue isn't unique
+(`dotnet/src/VSaga.Transport.RabbitMQ/RabbitMqConnectionManager.cs:26-27`), so this class of issue isn't unique
 to Brighter's gateway, just more likely to surface on a queue idle enough that a long-lived consumer
 channel goes a while between real deliveries. `PollBatchAsync`'s existing catch-log-retry loop
 (`BrighterTransport.cs:217-231`) already recovers from it automatically and no message was lost in this
@@ -1708,7 +1714,7 @@ constraints an obvious implementation would have gotten wrong, and whose live-ve
 fourth. `PublishAsync`/`SendAsync` POST a header-based wire format (`x-vsaga-message-type`,
 `-correlation-id`, `-message-id`, plus the four `MessageEnvelope` headers) to configured peer endpoints;
 a `200` response with that same header set *is* the reply, fed back into whichever local subscriber its
-own type resolves to. `src/VSaga.Transport.Http/HttpMessageTransport.cs` and `HttpInboundDispatcher.cs`
+own type resolves to. `dotnet/src/VSaga.Transport.Http/HttpMessageTransport.cs` and `HttpInboundDispatcher.cs`
 are the whole adapter; `ServiceCollectionExtensions.AddVSagaHttp` wraps it in the same
 `MiddlewarePipelineTransport` every other adapter shares.
 
@@ -1808,7 +1814,7 @@ publish that fails has nowhere safe to go, so a drain failure is caught, logged,
 `DeliveryExhausted` timeline entry rather than thrown, leaving the saga `Running` for its own state
 timeout to rescue.
 
-**`src/VSaga.Http`** adds `.CallHttp(h => h.Post(url).Body(...)...)` as an extension method on
+**`dotnet/src/VSaga.Http`** adds `.CallHttp(h => h.Post(url).Body(...)...)` as an extension method on
 `EventBuilder`, reached through the same public `Then(...)` seam every outside assembly is limited to —
 no change to `VSaga.Core`'s DSL. Two result shapes: *inline* (`.OnSuccess(Action<TState>)`, no loopback,
 no race, no map problem — the step's own existing computed `.TransitionTo`/`.Finalize` selectors decide
@@ -1917,10 +1923,10 @@ on the HTTP-transport overlay:
 **Build and test:**
 
 ```bash
-dotnet build VSaga.slnx
-dotnet test VSaga.slnx          # unit + Testcontainers-backed Postgres/RabbitMQ tests (needs Docker)
+dotnet build dotnet/VSaga.slnx
+dotnet test dotnet/VSaga.slnx          # unit + Testcontainers-backed Postgres/RabbitMQ tests (needs Docker)
 
-cd dashboard-web && npm install && npx ng test --watch=false && npx ng build
+cd typescript/dashboard-web && npm install && npx ng test --watch=false && npx ng build
 ```
 
 **Run it.** Bring the backend up first — the dashboard is a pure client of the API and has nothing to
@@ -1937,7 +1943,7 @@ nothing in the compose stack serves the SPA, so `ng build` alone gets you a bund
 nothing is hosting.
 
 ```bash
-cd dashboard-web && npx ng serve     # http://localhost:4200
+cd typescript/dashboard-web && npx ng serve     # http://localhost:4200
 ```
 
 Port 4200 is not incidental — it is the origin `docker-compose.yml` grants CORS access via

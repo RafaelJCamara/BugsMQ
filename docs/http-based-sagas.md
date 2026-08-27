@@ -1,8 +1,8 @@
 # Design: HTTP-based sagas
 
 **Status: both phases are built and live-verified.** Phase 1 (§4, `VSaga.Transport.Http`) and Phase 2
-(§5.1's `ISagaContext.PublishAfterCommitAsync`, §5.2's `src/VSaga.Http`/`.CallHttp(...)`, §5.3's Saga Map
-fix, §5.4's `tests/VSaga.Http.Tests` including the mutation-tested ordering proof) are all built, tested,
+(§5.1's `ISagaContext.PublishAfterCommitAsync`, §5.2's `dotnet/src/VSaga.Http`/`.CallHttp(...)`, §5.3's Saga Map
+fix, §5.4's `dotnet/tests/VSaga.Http.Tests` including the mutation-tested ordering proof) are all built, tested,
 and live-verified — §5.1 in isolation on the existing RabbitMQ stack per its own instruction, then §5.2/
 §5.3 together via a new `LoyaltyLookupSaga` calling a real, no-vSaga-awareness REST endpoint added to the
 sample. See the README's "Transport adapter: HTTP" and "Outbound REST calls from a saga step: `.CallHttp`"
@@ -23,7 +23,7 @@ earlier draft of this design outright. The rest of the document only makes sense
 ## 1. What it is, and the two shapes it has to cover
 
 vSaga can only move saga messages over a broker today. All five transport adapters
-(`src/VSaga.Transport.RabbitMQ`, `.InMemory`, `.Wolverine`, `.MassTransit`, `.Brighter`) either *are*
+(`dotnet/src/VSaga.Transport.RabbitMQ`, `.InMemory`, `.Wolverine`, `.MassTransit`, `.Brighter`) either *are*
 RabbitMQ or sit on top of it, so every saga in the repo assumes a durable queue, topic routing, and
 fire-and-forget publish with the reply arriving later as its own message.
 
@@ -47,7 +47,7 @@ Asked and answered before this was written, so treat them as settled rather than
   fed back into the saga; status codes map to success/failure events. (The async-webhook alternative —
   participant returns `202`, then POSTs its reply back later — was considered and deferred; see §7.)
 - **Participants: vSaga-aware first, then arbitrary REST.** That is the §4-then-§5 order.
-- **Sample hosting: convert `samples/VSaga.Samples.OrderProcessing` to a web host**, rather than build
+- **Sample hosting: convert `dotnet/samples/VSaga.Samples.OrderProcessing` to a web host**, rather than build
   a second sample alongside it. §4.6 extends this with a `Role` switch, and says why it has to.
 - **The engine change is opt-in**, not a change to what every existing publish does. §5.1 argues that
   at length, because default-for-all is superficially the better idea.
@@ -61,14 +61,14 @@ ones.
 
 | Capability | Where | Why it matters here |
 |---|---|---|
-| The single transport seam | `src/VSaga.Abstractions/Transport/IMessageTransport.cs:8-32` | Four methods. A new adapter implements exactly these; Core never learns HTTP exists |
-| Middleware decorator | `src/VSaga.Transport.Common/MiddlewarePipelineTransport.cs:13-71` | Wrapping in it is what keeps `VSaga.Chaos` working over any new transport unchanged |
-| Canonical adapter registration | `src/VSaga.Transport.RabbitMQ/ServiceCollectionExtensions.cs:16-31` | The factory-lambda shape every adapter copies — and it is mandatory, see §3.3 |
-| Topology recording | `src/VSaga.Abstractions/Transport/TopologyRecordingTransport.cs:11-27` | Observes `SubscribeAsync` only, so it keeps working over HTTP for free — with one deployment trap, §4.6 |
-| Local-dispatch registry | `src/VSaga.Transport.InMemory/InMemoryMessageTransport.cs:58-87` | The subscriber-matching logic an HTTP adapter needs for its own local half |
-| Public DSL extension point | `src/VSaga.Core/Dsl/EventBuilder.cs:54-58` | `Then(Func<…, Task>)` is the only seam an outside assembly can attach a step action through, §5.2 |
-| Envelope headers | `src/VSaga.Abstractions/Transport/MessageEnvelope.cs:10-24` | Four well-known headers every adapter must round-trip byte-for-byte |
-| Saga Map edge stitching | `src/VSaga.Dashboard.Api/SagaMapBuilder.cs:151,286-287` | `outbound.MessageId → inbound.CausationId`. §5.3 is entirely about not breaking this |
+| The single transport seam | `dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs:8-32` | Four methods. A new adapter implements exactly these; Core never learns HTTP exists |
+| Middleware decorator | `dotnet/src/VSaga.Transport.Common/MiddlewarePipelineTransport.cs:13-71` | Wrapping in it is what keeps `VSaga.Chaos` working over any new transport unchanged |
+| Canonical adapter registration | `dotnet/src/VSaga.Transport.RabbitMQ/ServiceCollectionExtensions.cs:16-31` | The factory-lambda shape every adapter copies — and it is mandatory, see §3.3 |
+| Topology recording | `dotnet/src/VSaga.Abstractions/Transport/TopologyRecordingTransport.cs:11-27` | Observes `SubscribeAsync` only, so it keeps working over HTTP for free — with one deployment trap, §4.6 |
+| Local-dispatch registry | `dotnet/src/VSaga.Transport.InMemory/InMemoryMessageTransport.cs:58-87` | The subscriber-matching logic an HTTP adapter needs for its own local half |
+| Public DSL extension point | `dotnet/src/VSaga.Core/Dsl/EventBuilder.cs:54-58` | `Then(Func<…, Task>)` is the only seam an outside assembly can attach a step action through, §5.2 |
+| Envelope headers | `dotnet/src/VSaga.Abstractions/Transport/MessageEnvelope.cs:10-24` | Four well-known headers every adapter must round-trip byte-for-byte |
+| Saga Map edge stitching | `dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs:151,286-287` | `outbound.MessageId → inbound.CausationId`. §5.3 is entirely about not breaking this |
 
 ---
 
@@ -76,7 +76,7 @@ ones.
 
 ### 3.1 A reply must never re-enter a saga while its own step is still running
 
-`SagaOrchestrator.RunStepAsync` (`src/VSaga.Core/Runtime/SagaOrchestrator.cs:371-418`) runs every step
+`SagaOrchestrator.RunStepAsync` (`dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:371-418`) runs every step
 action — including every `ctx.PublishAsync` — and only *then* persists, with an optimistic-concurrency
 check against the version captured before the step ran:
 
@@ -105,7 +105,7 @@ Concretely, per loser:
   `.Finalize(...)` in the step, a `SagaCompleted` entry (`:469`) is committed while the row stays
   `Running` — permanently inconsistent in the dashboard.
 - **Reply loses** — it is dropped, and the saga sits until its state timeout. In `OrderSaga` that
-  means `Compensate()` firing `RefundPayment` (`samples/…/OrderSaga.cs:142-143`) for a payment that
+  means `Compensate()` firing `RefundPayment` (`dotnet/samples/…/OrderSaga.cs:142-143`) for a payment that
   actually succeeded. The money-shaped outcome, on roughly half of all calls.
 
 (Orphaned/duplicated `SagaTimeouts` rows also result, since `ScheduleAsync` appends rather than
@@ -124,14 +124,14 @@ per-correlation dispatch gate and needs no engine change. §5 cannot — it loop
 ### 3.2 Sync-reply capture must key on routing, not on correlation id
 
 For a `200` body to *be* the reply, `ParticipantService.ReplyAsync`'s ordinary
-`transport.PublishAsync` (`samples/…/Participants/ParticipantService.cs:78-79`) has to be intercepted
+`transport.PublishAsync` (`dotnet/samples/…/Participants/ParticipantService.cs:78-79`) has to be intercepted
 while its inbound request is still in flight. `IMessageTransport.PublishAsync` has no context
 parameter and `ReceivedMessage` has no reply affordance, so an ambient (`AsyncLocal`) collector
 installed by the receive endpoint is the only available seam. That part is forced, not chosen.
 
 What is chosen is the predicate for "is this the reply?", and the obvious one is **wrong**. Keying on
 "shares the in-flight request's correlation id" is broken by this repo's own sample:
-`samples/…/OrderSaga.cs:94` and `:102` publish `ShipOrder` **under the saga's own correlation id**,
+`dotnet/samples/…/OrderSaga.cs:94` and `:102` publish `ShipOrder` **under the saga's own correlation id**,
 from inside the `InventoryReserved` / `PaymentCharged` handlers. Correlation-based capture returns
 `ShipOrder` as the response body to the *payment service*, which has no idea what it is. Shipping
 never hears about it, and the order hangs to its 30s timeout and then compensates a successful
@@ -145,7 +145,7 @@ Key on **"this message resolves to no destination"** instead. Every case then fa
 | handler publishes nothing (the deliberately hung gateway in `PaymentParticipant`) | `202`; the saga waits for its own timeout — behaviour preserved exactly |
 | a second unroutable message | throws `MessageTransportPublishException(isUnroutable: true)` → the participant's own catch → nack. Loud, not silently swallowed |
 | `ShipOrder` (has a route) | normal outbound POST |
-| `StartChildAsync` | fresh correlation id (`src/VSaga.Core/Runtime/SagaContext.cs:61`) *and* a routed type — correct on both counts |
+| `StartChildAsync` | fresh correlation id (`dotnet/src/VSaga.Core/Runtime/SagaContext.cs:61`) *and* a routed type — correct on both counts |
 | `NotifyParentAsync`, engine-published `ChildSagaFinished` | parent's correlation id, routed type → normal POST |
 
 The collector must be an **instance** field, never `static`, and must be **sealed** once the response
@@ -160,7 +160,7 @@ Two ways an HTTP adapter can look correct and quietly break the engine.
 `transport.PublishRawAsync(received.MessageTypeName, …)` (`SagaOrchestrator.cs:80`) — republishing an
 *inbound* type such as `PaymentCharged`, which nobody ever publishes deliberately. On RabbitMQ that
 works because the saga's own queue is bound to that routing key
-(`src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:130-134`): **local subscriptions are part of
+(`dotnet/src/VSaga.Transport.RabbitMQ/RabbitMqTransport.cs:130-134`): **local subscriptions are part of
 RabbitMQ's routing table.** An HTTP route table built only from config has no entry, a "no route ⇒
 unroutable" rule fires, and that exception is *designed to propagate* (`SagaOrchestrator.cs:56-59`)
 into a dispatch-level catch — which RabbitMQ has (`RabbitMqTransport.cs:156-163`, log + nack without
@@ -189,7 +189,7 @@ put anything into. RabbitMQ does not care; HTTP header injection does. Reject CR
 
 ---
 
-## 4. Phase 1 — `src/VSaga.Transport.Http`
+## 4. Phase 1 — `dotnet/src/VSaga.Transport.Http`
 
 The vSaga-aware, symmetric half. Follows the five-part shape every existing adapter uses, referencing
 **`VSaga.Abstractions` + `VSaga.Transport.Common` only** — never a sibling adapter, per the rationale
@@ -302,14 +302,14 @@ interface with one logging implementation is ceremony; add it when a second impl
 The channel is **in-process and not durable**, and the README must say so rather than implying
 at-least-once: a crash between an HTTP response and its dispatch loses that reply, and the saga's
 state timeout is what covers it — the same safety net that already covers a lost broker message
-(`samples/…/OrderSaga.cs:151-171`). A durable inbox is a deliberate non-goal.
+(`dotnet/samples/…/OrderSaga.cs:151-171`). A durable inbox is a deliberate non-goal.
 
 ### 4.5 Registration
 
-Copy `src/VSaga.Transport.RabbitMQ/ServiceCollectionExtensions.cs:16-31`. Registering
+Copy `dotnet/src/VSaga.Transport.RabbitMQ/ServiceCollectionExtensions.cs:16-31`. Registering
 `IMessageTransport` via a **factory lambda** is mandatory rather than stylistic:
 `AddVSagaTopologyRecording` throws when the last `IMessageTransport` descriptor has a null
-`ImplementationFactory` (`src/VSaga.Core/TopologyRecordingServiceCollectionExtensions.cs:23-31`).
+`ImplementationFactory` (`dotnet/src/VSaga.Core/TopologyRecordingServiceCollectionExtensions.cs:23-31`).
 Wrapping in `MiddlewarePipelineTransport` is what keeps `VSaga.Chaos` working unchanged.
 
 ### 4.6 Sample, infrastructure, dashboard
@@ -319,7 +319,7 @@ Wrapping in `MiddlewarePipelineTransport` is what keeps `VSaga.Chaos` working un
 `app.MapVSagaHttp()`; `case "Http":` added to the provider switch (`Program.cs:33-52`). Everything
 else — chaos, topology recording, OpenTelemetry, `AddVSagaEngine`, the participant hosted services —
 untouched, and the other four transports keep behaving exactly as today. The runtime image is already
-`mcr.microsoft.com/dotnet/aspnet:10.0` (`samples/…/Dockerfile:23`), so the Dockerfile needs only the
+`mcr.microsoft.com/dotnet/aspnet:10.0` (`dotnet/samples/…/Dockerfile:23`), so the Dockerfile needs only the
 new `.csproj` COPY line — miss it and `docker compose up` fails with `NETSDK1004`. Set
 `ASPNETCORE_URLS: http://+:8080` in compose, matching `dashboard-api`; **do not** add host `ports:` to
 `order-processing` in the base file, since the `!override` convention
@@ -345,7 +345,7 @@ delete a key. Keep the rabbitmq container in the HTTP stack — it costs nothing
 `dashboard-api`'s health check green, and the point is proven by *traffic*, not by absence (§6). Use
 `ports: !override [...]` on fresh host ports; the existing overlays hold 5443/5444/5445.
 
-**Dashboard manual retry, fixed in the same pass.** `src/VSaga.Dashboard.Api/Program.cs:46` hardcodes
+**Dashboard manual retry, fixed in the same pass.** `dotnet/src/VSaga.Dashboard.Api/Program.cs:46` hardcodes
 `AddVSagaRabbitMq` and its csproj references only that adapter, so `/retry`'s `PublishRawAsync`
 (`Endpoints/SagaEndpoints.cs:157`) publishes into a RabbitMQ nobody is consuming: `200 OK`, nothing
 happens. This is a *pre-existing* gap — it already misbehaves on Wolverine and MassTransit, whose wire
@@ -353,10 +353,10 @@ formats differ — but HTTP is the first configuration where it is silently wron
 live-verifies. Roughly fifteen lines: the same `Transport:Provider` switch, the HTTP adapter
 reference, a route pointing at the saga host, and a health check that is not unconditionally RabbitMQ.
 
-**`VSaga.slnx`**: add both `src/VSaga.Transport.Http` and `tests/VSaga.Transport.Http.Tests`. CI runs
-`dotnet test VSaga.slnx` unfiltered (`.github/workflows/ci.yml:28`) and picks them up automatically.
+**`dotnet/VSaga.slnx`**: add both `dotnet/src/VSaga.Transport.Http` and `dotnet/tests/VSaga.Transport.Http.Tests`. CI runs
+`dotnet test dotnet/VSaga.slnx` unfiltered (`.github/workflows/ci.yml:28`) and picks them up automatically.
 
-### 4.7 Tests — `tests/VSaga.Transport.Http.Tests`
+### 4.7 Tests — `dotnet/tests/VSaga.Transport.Http.Tests`
 
 No Testcontainers: `Microsoft.AspNetCore.Mvc.Testing` is already pinned at 10.0.11 in
 `Directory.Packages.props`, making this the fastest transport suite in the repo. Keep the four
@@ -390,7 +390,7 @@ body is `PublishAsync(…)`; `SagaContext` overrides it to queue; `SagaOrchestra
 `HandleStepSuccessAsync` drains **after** `PersistAsync` (`:471`), **sequentially** — never
 `Task.WhenAll`, per the `DbContext` scar documented in the README's fan-out section — reaching the
 queue through an internal cast exactly like the existing `ISagaContextLogSink` precedent
-(`src/VSaga.Core/Runtime/SagaContext.cs:12,85`). `SagaContext` is the only implementer of
+(`dotnet/src/VSaga.Core/Runtime/SagaContext.cs:12,85`). `SagaContext` is the only implementer of
 `ISagaContext<>` in the repo, so the default body exists purely for external compatibility.
 
 **Opt-in, not default-for-all.** Default-for-all is superficially better — it would retire both
@@ -400,12 +400,12 @@ failing `ctx.PublishAsync` throws inside `definition.HandleAsync` → `HandleSte
 (`:409,420-440`) → saga `Failed`, `StepFailed` with `payloadJson`, dashboard can redrive. Deferred,
 the step has already succeeded and persisted, so a drain failure lands in `HandleAsync`'s catch →
 redelivery → **suppressed as duplicate** (§3.1) → message permanently lost. Applied to every publish,
-that includes `Compensate()`'s `RefundPayment`/`ReleaseInventory` (`samples/…/OrderSaga.cs:140-149`),
+that includes `Compensate()`'s `RefundPayment`/`ReleaseInventory` (`dotnet/samples/…/OrderSaga.cs:140-149`),
 and losing a compensating refund after the saga is already persisted `Failed` is strictly worse than
 today's behaviour.
 
 Secondary reasons, any one of which would want its own verification pass: `.Retry(policy)` silently
-stops covering publish failures (`src/VSaga.Core/Dsl/StepExecutor.cs:24-33`); and
+stops covering publish failures (`dotnet/src/VSaga.Core/Dsl/StepExecutor.cs:24-33`); and
 `SagaContext.cs:96-99` logs the timeline entry only *after* the transport call succeeds, so deferral
 reorders every `MessagePublished` after its `StepSucceeded`, which perturbs `SagaMapBuilder`'s
 order-sensitive `ResolveFailedMessageIds` heuristic (`:267-271`) and `_failureEventIndex`
@@ -416,10 +416,10 @@ Make the drain-failure policy explicit rather than implicit: catch, `LogError`, 
 instead of pretending it cannot happen.
 
 Regression proof: the whole existing suite, and specifically the two pinned race tests
-(`NotifyParentAsyncTests`, `ChildSagaFinishedTests` in `tests/VSaga.Core.Tests/`) must be unchanged
+(`NotifyParentAsyncTests`, `ChildSagaFinishedTests` in `dotnet/tests/VSaga.Core.Tests/`) must be unchanged
 and green. The change is opt-in, so nothing existing may move.
 
-### 5.2 Step 2b — `src/VSaga.Http`, and how it attaches to the DSL
+### 5.2 Step 2b — `dotnet/src/VSaga.Http`, and how it attaches to the DSL
 
 Target shape:
 
@@ -436,16 +436,16 @@ During(Gathering)
 ```
 
 `EventBuilder<TState,TMessage>` is `public sealed` with a `private` `_step`
-(`src/VSaga.Core/Dsl/EventBuilder.cs:12,16`); `StepDefinition<TState>` and `SagaDefinitionModel<TState>`
+(`dotnet/src/VSaga.Core/Dsl/EventBuilder.cs:12,16`); `StepDefinition<TState>` and `SagaDefinitionModel<TState>`
 are `internal sealed`; and `StateBuilder.Model` is `private protected` with an `internal` constructor
-(`src/VSaga.Core/Dsl/StateBuilder.cs:8-11`) — so an outside assembly can neither subclass the builder
+(`dotnet/src/VSaga.Core/Dsl/StateBuilder.cs:8-11`) — so an outside assembly can neither subclass the builder
 nor reach the model. The only route in is an **extension method delegating to the public
 `Then(Func<ISagaContext<TState>, TMessage, Task>)`** (`EventBuilder.cs:54-58`). Two consequences:
 
 - It is **transport-agnostic** and needs no change to `VSaga.Core`'s DSL, keeping Core free of an
   `HttpClient` dependency. A RabbitMQ-hosted saga gets `.CallHttp` for free.
 - It needs `<InternalsVisibleTo Include="VSaga.Http" />` in `VSaga.Core.csproj` for §5.3. There is
-  precedent (`src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj:7`), so this is repo-consistent
+  precedent (`dotnet/src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj:7`), so this is repo-consistent
   rather than a novelty.
 
 `VSaga.Http` needs a real `Microsoft.Extensions.Http` `PackageVersion` in `Directory.Packages.props` —
@@ -469,7 +469,7 @@ own internal retry knob and a loud note that `.Retry()` is not the right tool.
 ### 5.3 The Saga Map needs an explicit fix, and this is what `InternalsVisibleTo` is for
 
 `SagaMapBuilder` stitches an outbound entry to its reply by `outbound.MessageId → inbound.CausationId`
-(`src/VSaga.Dashboard.Api/SagaMapBuilder.cs:151`, index built at `:286-287`). A naive loopback via
+(`dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs:151`, index built at `:286-287`). A naive loopback via
 `ctx.PublishAsync` stamps `causationId = inboundMessageId` (`SagaContext.cs:106-108`) — the id of the
 message that triggered the step, **not** the outbound publish's own MessageId. So:
 
@@ -491,7 +491,7 @@ correct `causationId` on the reply — which needs the internal `ISagaContextLog
   timeout / `HttpRequestException` → failure message.
 - The reply reaches the saga and drives the expected transition, through `VSaga.Testing`'s harness.
   Note this works *only because of* `PublishAfterCommitAsync`: `SagaTestHarness` runs on
-  `InMemoryMessageTransport` (`src/VSaga.Testing/SagaTestHarness.cs:53`), which dispatches
+  `InMemoryMessageTransport` (`dotnet/src/VSaga.Testing/SagaTestHarness.cs:53`), which dispatches
   synchronously and re-entrantly (`InMemoryMessageTransport.cs:85`), so a plain `PublishAsync`
   loopback re-enters the saga mid-step on every single test.
 - Saga Map: a `.CallHttp` step produces a node for the remote host and a stitched request→reply edge,
@@ -505,9 +505,9 @@ correct `causationId` on the reply — which needs the internal `ISagaContextLog
 ## 6. Verification
 
 ```
-dotnet build VSaga.slnx
-dotnet test VSaga.slnx --filter "FullyQualifiedName~Transport.Http"
-dotnet test VSaga.slnx        # full suite green at every phase boundary
+dotnet build dotnet/VSaga.slnx
+dotnet test dotnet/VSaga.slnx --filter "FullyQualifiedName~Transport.Http"
+dotnet test dotnet/VSaga.slnx        # full suite green at every phase boundary
 ```
 
 Live verification is **not optional in this repo**. Two separate passes have shipped envelope-header
@@ -547,14 +547,14 @@ Then, against the running stack rather than test doubles:
 
 State these in the README when the work ships, rather than discovering them live.
 
-1. **Sync request/response serializes the parallel fan-out.** `samples/…/OrderSaga.cs:58-59` publishes
+1. **Sync request/response serializes the parallel fan-out.** `dotnet/samples/…/OrderSaga.cs:58-59` publishes
    `ReserveInventory` then `ChargePayment` as two sequential actions in one step. Over RabbitMQ those
    are two fire-and-forget publishes; over sync HTTP they become two **blocking** round-trips, each
    including the participant's 150–500ms simulated work. The sample's headline "parallel fan-out"
    demo is strictly sequential on the HTTP track, and its own doc comment (`OrderSaga.cs:20-26`) needs
    a caveat. Inherent to the chosen delivery model, not a bug.
 2. **`ParticipantService`'s dedupe changes meaning.** `TryClaim`
-   (`samples/…/Participants/ParticipantService.cs:55-60,83-93`) acks a repeated MessageId *without*
+   (`dotnet/samples/…/Participants/ParticipantService.cs:55-60,83-93`) acks a repeated MessageId *without*
    invoking the handler. Over RabbitMQ that is right — the original reply was already published. Over
    sync HTTP a redelivered request returns `202` with no body and the caller gets nothing until its
    timeout. Recommendation: accept it (redeliveries are rare) and document it, rather than having

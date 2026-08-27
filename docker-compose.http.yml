@@ -69,7 +69,7 @@ services:
 
   order-processing-participants:
     build:
-      context: .
+      context: ./dotnet
       dockerfile: samples/VSaga.Samples.OrderProcessing/Dockerfile
     environment:
       ASPNETCORE_URLS: "http://+:8080"

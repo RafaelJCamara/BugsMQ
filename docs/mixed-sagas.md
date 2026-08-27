@@ -24,11 +24,11 @@ restored a fully green suite each time. Two implementation notes worth recording
   any counter stored on saga state between the write that captured it and the read that would inspect it.
   The test instead reads the raw bytes the stub `HttpMessageHandler` actually received on each attempt,
   from a payload whose serialized value increments on every serialization
-  (`tests/VSaga.Http.Tests/CallHttpAsyncFixtures.cs`'s `CountingPayload`) — proving the shared executor's
+  (`dotnet/tests/VSaga.Http.Tests/CallHttpAsyncFixtures.cs`'s `CountingPayload`) — proving the shared executor's
   `body()` call happens once per attempt without relying on saga-state persistence at all.
 - **Forcing the timeout's final-persist race to lose needed a way to bump the saga's `Version` without
   cancelling its pending timeout.** A self-transition (`During(Waiting).When<NudgeVersion>().TransitionTo(Waiting)`,
-  `tests/VSaga.Core.Tests/TimeoutDrainTests.cs`) does both: `HandleStepSuccessAsync` persists
+  `dotnet/tests/VSaga.Core.Tests/TimeoutDrainTests.cs`) does both: `HandleStepSuccessAsync` persists
   unconditionally regardless of whether the state actually changed, but a self-transition is "no
   transition" to the timeout-scheduling logic, so the pending timeout survives untouched — the same
   behaviour `EventBuilder.TransitionTo(Func<TState,State<TState>>)`'s own remarks document for a
@@ -45,9 +45,9 @@ Written to be picked up cold in a later session: every claim about the current c
 `docs/http-based-sagas.md` §1 splits vSaga's HTTP surface into two things that "share the word HTTP and
 nothing else":
 
-1. `src/VSaga.Transport.Http` — an `IMessageTransport` adapter so two vSaga services can talk without a
+1. `dotnet/src/VSaga.Transport.Http` — an `IMessageTransport` adapter so two vSaga services can talk without a
    broker. Not involved here.
-2. `src/VSaga.Http` — the `.CallHttp(...)` DSL, a saga step that calls an ordinary REST API that knows
+2. `dotnet/src/VSaga.Http` — the `.CallHttp(...)` DSL, a saga step that calls an ordinary REST API that knows
    nothing about vSaga. Transport-agnostic; depends only on `VSaga.Core`. This is the one that matters.
 
 The second shipped in Phase 2 (`ee8e108`, `e6b7704`, `d95fb5b`): `LoyaltyLookupSaga` reacts to a RabbitMQ
@@ -59,24 +59,24 @@ compensation has to unwind both kinds of hop. That is not expressible today. The
 `NotSupportedException`, no "HTTP-only saga" base type anywhere in the repo — it fails by omission, in
 three separate places:
 
-1. **`.CallHttp` is reachable only from `EventBuilder`** — `src/VSaga.Http/EventBuilderHttpExtensions.cs:
+1. **`.CallHttp` is reachable only from `EventBuilder`** — `dotnet/src/VSaga.Http/EventBuilderHttpExtensions.cs:
    15-26` is the only entry point, and it delegates to `EventBuilder.Then(Func<…,Task>)`
-   (`src/VSaga.Core/Dsl/EventBuilder.cs:54-58`). Not from a `Compensate(state, ...)` delegate
-   (`src/VSaga.Core/Dsl/OrchestratedSagaDefinition.cs:61-62` takes a raw
+   (`dotnet/src/VSaga.Core/Dsl/EventBuilder.cs:54-58`). Not from a `Compensate(state, ...)` delegate
+   (`dotnet/src/VSaga.Core/Dsl/OrchestratedSagaDefinition.cs:61-62` takes a raw
    `Func<ISagaContext<TState>, CancellationToken, Task>`), and not from a `TimeoutBuilder` step
-   (`src/VSaga.Core/Dsl/TimeoutBuilder.cs:17-26` has only a synchronous `Then`). A compensating REST call
+   (`dotnet/src/VSaga.Core/Dsl/TimeoutBuilder.cs:17-26` has only a synchronous `Then`). A compensating REST call
    must be hand-written against a raw `HttpClient`, which writes **no timeline entries** and therefore
    **never appears on the Saga Map** — the exact defect class §5.3 of `http-based-sagas.md` was written
    to fix.
 2. **`SagaOrchestrator.HandleTimeoutAsync` never drains deferred publishes.**
-   `HandleStepSuccessAsync` persists at `src/VSaga.Core/Runtime/SagaOrchestrator.cs:471` and drains at
+   `HandleStepSuccessAsync` persists at `dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs:471` and drains at
    `:473`. The timeout path (`:187-239`) does the analogous two-phase persist (`:205`, `:235`) but never
    drains. Anything queued via `ISagaContext.PublishAfterCommitAsync` on that path — which is exactly how
-   `.CallHttp`'s loopback outcome publishes (`src/VSaga.Http/HttpOutcomeAction.cs:45`) — is silently
+   `.CallHttp`'s loopback outcome publishes (`dotnet/src/VSaga.Http/HttpOutcomeAction.cs:45`) — is silently
    dropped. `docs/http-based-sagas.md:412` already named this ("`HandleTimeoutAsync` would also need its
    own parallel drain after `:235`") when it designed the engine change and it was never built.
 3. **`SagaMapBuilder.ProcessInboundEntry` hardcodes `IsCompensation: false`**
-   (`src/VSaga.Dashboard.Api/SagaMapBuilder.cs:136`), while outbound `MakeEdge` honours the `_compensating`
+   (`dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs:136`), while outbound `MakeEdge` honours the `_compensating`
    flag (`:175`). Invisible today because no compensation currently produces an inbound timeline entry —
    broker participants never reply to a compensating command in this repo's sample. A compensating REST
    call produces the first one.
@@ -93,7 +93,7 @@ Asked and answered before this was written, so treat them as settled rather than
 - **Mixed means broker messaging + outbound REST in one saga.** The other reading — per-message-type
   transport routing via a composite `IMessageTransport`, so some message types ride RabbitMQ and others
   ride `VSaga.Transport.Http` — was offered and explicitly **not** chosen. Out of scope for this design.
-- **Demo vehicle: a new saga inside `samples/VSaga.Samples.OrderProcessing`**, alongside `OrderSaga` and
+- **Demo vehicle: a new saga inside `dotnet/samples/VSaga.Samples.OrderProcessing`**, alongside `OrderSaga` and
   `LoyaltyLookupSaga`, matching this repo's established "one sample, converted" pattern
   (`docs/http-based-sagas.md` §1's decision 3). Not a new sample project; `OrderSaga` is not modified.
 
@@ -103,13 +103,13 @@ Asked and answered before this was written, so treat them as settled rather than
 
 | Capability | Where | Why it matters here |
 |---|---|---|
-| `.CallHttp`'s execution body | `src/VSaga.Http/HttpCallDefinition.cs:30-100` | The logic §4 shares between the declarative and imperative forms |
-| Loopback vs. inline outcomes | `src/VSaga.Http/HttpOutcomeAction.cs` | Unchanged by this design; both forms reuse it as-is |
-| `PublishAfterCommitAsync` | `src/VSaga.Core/Runtime/SagaContext.cs:103-108` | The mechanism §3's timeout drain is missing for |
-| The deferred-publish queue | `src/VSaga.Core/Runtime/SagaContext.cs:22-25, 40` | What §3.2's retry fix and §3.1's drain both touch |
-| Compensation ordering | `src/VSaga.Core/Dsl/CompensationRunner.cs` | Unchanged; a mixed saga's compensation is an ordinary `Compensate(state, ...)` delegate |
-| The Saga Map's compensation flag | `src/VSaga.Dashboard.Api/SagaMapBuilder.cs:106-107, 175` | What §5 extends to inbound entries |
-| `InternalsVisibleTo` already granted | `src/VSaga.Core/VSaga.Core.csproj`, `src/VSaga.Http/VSaga.Http.csproj` | §4's `ctx.CallHttpAsync` needs none beyond what already exists |
+| `.CallHttp`'s execution body | `dotnet/src/VSaga.Http/HttpCallDefinition.cs:30-100` | The logic §4 shares between the declarative and imperative forms |
+| Loopback vs. inline outcomes | `dotnet/src/VSaga.Http/HttpOutcomeAction.cs` | Unchanged by this design; both forms reuse it as-is |
+| `PublishAfterCommitAsync` | `dotnet/src/VSaga.Core/Runtime/SagaContext.cs:103-108` | The mechanism §3's timeout drain is missing for |
+| The deferred-publish queue | `dotnet/src/VSaga.Core/Runtime/SagaContext.cs:22-25, 40` | What §3.2's retry fix and §3.1's drain both touch |
+| Compensation ordering | `dotnet/src/VSaga.Core/Dsl/CompensationRunner.cs` | Unchanged; a mixed saga's compensation is an ordinary `Compensate(state, ...)` delegate |
+| The Saga Map's compensation flag | `dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs:106-107, 175` | What §5 extends to inbound entries |
+| `InternalsVisibleTo` already granted | `dotnet/src/VSaga.Core/VSaga.Core.csproj`, `dotnet/src/VSaga.Http/VSaga.Http.csproj` | §4's `ctx.CallHttpAsync` needs none beyond what already exists |
 
 ---
 
@@ -133,7 +133,7 @@ Independent of the timeout path, and the sharper of the two:
 
 - `SagaOrchestrator.RunStepAsync` builds the `SagaContext` **once**, at `SagaOrchestrator.cs:390`, before
   calling `definition.HandleAsync`.
-- `StepExecutor.RunAsync` (`src/VSaga.Core/Dsl/StepExecutor.cs:18-34`) replays **every action from index
+- `StepExecutor.RunAsync` (`dotnet/src/VSaga.Core/Dsl/StepExecutor.cs:18-34`) replays **every action from index
   0** on retry, reusing that same context.
 - `SagaContext._deferredPublishes` (`SagaContext.cs:40`) is a plain list that is appended to and **never
   cleared** between replays.
@@ -180,7 +180,7 @@ behaviour is preserved *literally*, not merely "unobservably so." `ctx.CallHttpA
 delegate: the caller's own lambda has already closed over `ctx` by the time `.Body(new {
 ctx.Saga.AuthorizationId })` is written, so there is nothing to defer.
 
-**Refactor `src/VSaga.Http/HttpCallDefinition.cs`** so execution is shared, not duplicated: extract the
+**Refactor `dotnet/src/VSaga.Http/HttpCallDefinition.cs`** so execution is shared, not duplicated: extract the
 body (log outbound `MessagePublished` with `messageId: callId` → `SendWithRetryAsync` → log inbound
 `MessageReceived` with `causationId: callId, sourceService: _host` → `ResolveAction(status).ApplyAsync`)
 into an internal executor taking `Func<object?> body`. The existing declarative form supplies
@@ -189,14 +189,14 @@ into an internal executor taking `Func<object?> body`. The existing declarative 
 
 **The existing `.CallHttp` public API and wire behaviour must stay bit-for-bit unchanged** — same headers,
 same `PropertyNameCaseInsensitive` deserialization, same empty-body-`{}` handling, same `callId` stitch,
-same per-attempt body-factory call count. `tests/VSaga.Http.Tests`'s six existing tests are the regression
+same per-attempt body-factory call count. `dotnet/tests/VSaga.Http.Tests`'s six existing tests are the regression
 proof and must not be edited.
 
 ---
 
 ## 5. Engine change: draining the timeout path, and a discard path for the race it can't avoid
 
-**`src/VSaga.Core/Runtime/SagaContext.cs`** — widen the internal deferred-publish queue so both the drain
+**`dotnet/src/VSaga.Core/Runtime/SagaContext.cs`** — widen the internal deferred-publish queue so both the drain
 and a new discard path can name what they're handling, not just count it:
 
 ```csharp
@@ -209,7 +209,7 @@ internal interface ISagaContextDeferredPublisher
 }
 ```
 
-**`src/VSaga.Core/Dsl/StepExecutor.cs`** — clear in the catch, before the backoff delay, so a step being
+**`dotnet/src/VSaga.Core/Dsl/StepExecutor.cs`** — clear in the catch, before the backoff delay, so a step being
 replayed from index 0 also discards the side effects it queued but never committed:
 
 ```csharp
@@ -225,7 +225,7 @@ catch when (attempt < step.RetryPolicy.MaxAttempts)
 Pattern-match (`is`), not a hard cast: `ISagaContext<TState>` is public and an external implementation
 will not implement the internal interface.
 
-**`src/VSaga.Core/Dsl/TimeoutBuilder.cs`** — an additive async overload mirroring `EventBuilder`'s
+**`dotnet/src/VSaga.Core/Dsl/TimeoutBuilder.cs`** — an additive async overload mirroring `EventBuilder`'s
 existing `Then(Action<...>)` / `Then(Func<..., Task>)` pair (`EventBuilder.cs:43-58`):
 
 ```csharp
@@ -241,7 +241,7 @@ public TimeoutBuilder<TState> Then(Func<ISagaContext<TState>, Task> action)
 case of a timeout step calling REST directly. (`ChoreographyEventBuilder` already has the async `Then` it
 would need — `ChoreographyEventBuilder.cs:69-73` — so this gap exists only on `TimeoutBuilder`.)
 
-**`src/VSaga.Core/Runtime/SagaOrchestrator.cs`** — drain on the timeout path. `HandleTimeoutAsync` already
+**`dotnet/src/VSaga.Core/Runtime/SagaOrchestrator.cs`** — drain on the timeout path. `HandleTimeoutAsync` already
 builds a concrete `SagaContext<TState>` at `:211`. Place the drain **after** the second,
 side-effects-ran persist at `:235` — that persist is the actual commit, matching
 `HandleStepSuccessAsync`'s persist-then-drain ordering at `:471-473` — and **before**
@@ -273,7 +273,7 @@ failure class this repo has been bitten by three times (`docs/http-based-sagas.m
 
 ## 6. The Saga Map: compensating replies should render as compensation edges
 
-**`src/VSaga.Dashboard.Api/SagaMapBuilder.cs`** — thread `_compensating` into `ProcessInboundEntry`'s edge
+**`dotnet/src/VSaga.Dashboard.Api/SagaMapBuilder.cs`** — thread `_compensating` into `ProcessInboundEntry`'s edge
 (`:136`) so a compensating call's reply leg renders as a compensation edge like its request leg already
 does:
 
@@ -286,11 +286,11 @@ which merged its DSL addition with its own Map fix. This change affects edge ren
 the repo, not only HTTP ones, and deserves its own green-suite-plus-mutation gate rather than riding
 along.
 
-No Angular change is needed: `dashboard-web/src/app/components/saga-map/saga-map.ts:44` already carries
+No Angular change is needed: `typescript/dashboard-web/src/app/components/saga-map/saga-map.ts:44` already carries
 `isCompensation` through, `saga-map.html:16` already binds `.edge--compensation`, and `saga-map.scss:41`
 already styles it as a dotted edge with a legend entry — the API-side fix alone lights it up.
 
-Existing tests are unaffected — `tests/VSaga.Dashboard.Api.Tests/SagaEndpointsTests.cs`'s only existing
+Existing tests are unaffected — `dotnet/tests/VSaga.Dashboard.Api.Tests/SagaEndpointsTests.cs`'s only existing
 `IsCompensation` assertion is on an *outbound* edge, and its inbound fixture entry is logged before
 `CompensationStarted`, so `_compensating` is still `false` when that edge is built. That is structural,
 not lucky: `MessageReceived` is always logged before the step that might start compensating runs.
@@ -299,7 +299,7 @@ not lucky: `MessageReceived` is always logged before the step that might start c
 
 ## 7. The sample: `MixedFulfilmentSaga`
 
-New contracts in `samples/VSaga.Samples.OrderProcessing.Contracts/Messages.cs`. Deliberately **new broker
+New contracts in `dotnet/samples/VSaga.Samples.OrderProcessing.Contracts/Messages.cs`. Deliberately **new broker
 message types**, not `ReserveInventory`/`InventoryReserved`: RabbitMQ's topic exchange fans a published
 message out to *every* subscriber of that type, so reusing them would deliver copies to `OrderSaga` under
 a correlation id it has no instance for, logging `UnexpectedEvent` noise on every run.
@@ -312,7 +312,7 @@ public sealed record StockUnavailable(Guid CorrelationId, string OrderId, string
 public sealed record ReleaseStock(Guid CorrelationId, string OrderId);
 ```
 
-A new `samples/.../Participants/StockParticipant.cs`, a sibling of `InventoryParticipant.cs` rather than
+A new `dotnet/samples/.../Participants/StockParticipant.cs`, a sibling of `InventoryParticipant.cs` rather than
 new handlers bolted onto it. `ParticipantService` stamps its own `consumerName` as `sourceService` on
 every reply and derives its subscription from one `Handlers` dictionary and one `QueueName`; folding stock
 into `InventoryService` would make the mixed saga's own Map claim `InventoryService` did the work, which
@@ -456,7 +456,7 @@ second pass over this exact design found four more things worth stating here rat
 
 ## 9. Tests, mutation tests, and live verification
 
-**Tests** (`tests/VSaga.Core.Tests`, `tests/VSaga.Http.Tests`, `tests/VSaga.Dashboard.Api.Tests`; xUnit v2,
+**Tests** (`dotnet/tests/VSaga.Core.Tests`, `dotnet/tests/VSaga.Http.Tests`, `dotnet/tests/VSaga.Dashboard.Api.Tests`; xUnit v2,
 raw `Assert.*`, hand-written fakes — no Moq/FluentAssertions). Reuse the existing harnesses:
 `SagaTestHarness<TDefinition,TState>`, `CallHttpTestHarness`/`StubHttpMessageHandler`, and
 `SagaMapBuilder.Build(...)` called directly the way `CallHttpSagaMapTests` already does.
@@ -476,7 +476,7 @@ once per attempt.
 `VSaga.Dashboard.Api` (§6): a compensating reply logged after `CompensationStarted` renders
 `IsCompensation: true` on both legs; a reply logged before `CompensationStarted` still renders `false`.
 
-The six existing `tests/VSaga.Http.Tests` tests must stay unedited and green throughout — the refactor's
+The six existing `dotnet/tests/VSaga.Http.Tests` tests must stay unedited and green throughout — the refactor's
 regression proof.
 
 **Mutation tests** (this repo has no Stryker; the discipline is manual — break one line, confirm *exactly*
@@ -498,8 +498,8 @@ orchestrator never actually read three separate times (`docs/http-based-sagas.md
 only by a live run and never by tests that hand-built the objects under test.
 
 ```
-dotnet build VSaga.slnx
-dotnet test VSaga.slnx
+dotnet build dotnet/VSaga.slnx
+dotnet test dotnet/VSaga.slnx
 docker compose up -d --build
 docker compose -f docker-compose.yml -f docker-compose.chaos.yml up -d --build   # timeout/compensation arm
 ```

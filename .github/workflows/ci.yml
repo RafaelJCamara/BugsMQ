@@ -16,23 +16,23 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          global-json-file: dotnet/global.json
 
       - name: Restore
-        run: dotnet restore VSaga.slnx
+        run: dotnet restore dotnet/VSaga.slnx
 
       - name: Build
-        run: dotnet build VSaga.slnx --no-restore --configuration Release
+        run: dotnet build dotnet/VSaga.slnx --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test VSaga.slnx --no-build --configuration Release --logger "console;verbosity=normal"
+        run: dotnet test dotnet/VSaga.slnx --no-build --configuration Release --logger "console;verbosity=normal"
 
   angular:
     name: Angular build & test
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: dashboard-web
+        working-directory: typescript/dashboard-web
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: dashboard-web/package-lock.json
+          cache-dependency-path: typescript/dashboard-web/package-lock.json
 
       - name: Install dependencies
         run: npm ci

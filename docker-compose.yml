@@ -28,7 +28,7 @@ services:
 
   dashboard-api:
     build:
-      context: .
+      context: ./dotnet
       dockerfile: src/VSaga.Dashboard.Api/Dockerfile
     ports:
       - "5080:8080"
@@ -52,7 +52,7 @@ services:
 
   order-processing:
     build:
-      context: .
+      context: ./dotnet
       dockerfile: samples/VSaga.Samples.OrderProcessing/Dockerfile
     environment:
       ConnectionStrings__VSaga: "Host=postgres;Port=5432;Database=vsaga;Username=postgres;Password=postgres"
