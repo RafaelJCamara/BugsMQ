@@ -56,3 +56,15 @@ public sealed record InvoiceCopyStorageFailed(Guid CorrelationId, string OrderId
 // is real (see docs/sub-saga-composition.md §3.4) and InvoiceFollowUpSaga's own timeout is what
 // covers it, not this message.
 public sealed record InvoiceArchivalFinished(string OrderId, bool Archived);
+
+// --- Mixed fulfilment (docs/mixed-sagas.md): REST authorization + broker stock reservation in one saga ---
+// Deliberately new message types, not ReserveInventory/InventoryReserved: RabbitMQ's topic exchange fans
+// a published message out to every subscriber of that type, so reusing OrderSaga's own types would
+// deliver copies to OrderSaga under a correlation id it has no instance for, logging UnexpectedEvent
+// noise on every run. FulfilmentRequested opens its own instance under a fresh correlation id (see
+// OrderSubmitter.cs), sharing nothing with OrderSaga/PostShipmentChoreography.
+public sealed record FulfilmentRequested(string OrderId, decimal Amount);
+public sealed record ReserveStock(Guid CorrelationId, string OrderId);
+public sealed record StockReserved(Guid CorrelationId, string OrderId);
+public sealed record StockUnavailable(Guid CorrelationId, string OrderId, string Reason);
+public sealed record ReleaseStock(Guid CorrelationId, string OrderId);

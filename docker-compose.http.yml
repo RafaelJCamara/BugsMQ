@@ -58,6 +58,11 @@ services:
       HttpSagas__Routes__ShipOrder__0: "participants"
       HttpSagas__Routes__SendInvoiceEmail__0: "participants"
       HttpSagas__Routes__StoreInvoiceCopy__0: "participants"
+      # docs/mixed-sagas.md §7/§8: MixedFulfilmentSaga's broker hop, same as every other route above --
+      # its REST hop (ctx.CallHttpAsync to this same process's /payments endpoints) is unrelated to
+      # whichever IMessageTransport is active and needs no route entry of its own.
+      HttpSagas__Routes__ReserveStock__0: "participants"
+      HttpSagas__Routes__ReleaseStock__0: "participants"
     depends_on:
       order-processing-participants:
         condition: service_started

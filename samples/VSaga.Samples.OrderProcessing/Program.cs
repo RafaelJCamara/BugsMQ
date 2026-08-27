@@ -106,7 +106,11 @@ if (role != ServiceRole.Participants)
         // Live-verification vehicle for .CallHttp (docs/http-based-sagas.md §5) -- see
         // LoyaltyLookupSaga's own doc comment. A second, independent subscriber of LoyaltyPointsAwarded,
         // same ordinary fan-out PostShipmentChoreography's own subscription already relies on.
-        .AddSaga<LoyaltyLookupSaga, LoyaltyLookupSagaState>());
+        .AddSaga<LoyaltyLookupSaga, LoyaltyLookupSagaState>()
+        // Live-verification vehicle for mixed sagas (docs/mixed-sagas.md) -- drives a broker participant
+        // (StockService) and a REST participant (this process's own /payments endpoints) side by side,
+        // under OrderSubmitter's own fresh correlation id, so it never shares an instance with OrderSaga.
+        .AddSaga<MixedFulfilmentSaga, MixedFulfilmentSagaState>());
 
     builder.Services.AddHostedService<OrderSubmitter>();
 }
@@ -116,6 +120,7 @@ if (role != ServiceRole.Sagas)
     builder.Services.AddHostedService<InventoryParticipant>();
     builder.Services.AddHostedService<PaymentParticipant>();
     builder.Services.AddHostedService<ShippingParticipant>();
+    builder.Services.AddHostedService<StockParticipant>();
 
     // The choreographed leg's participants: no conductor commands these, they each react to OrderShipped.
     builder.Services.AddHostedService<NotificationParticipant>();
@@ -152,6 +157,34 @@ if (role != ServiceRole.Participants)
         };
         return Results.Ok(new { tier });
     });
+
+    // The live-verification target for MixedFulfilmentSaga's compensating REST hop (docs/mixed-sagas.md
+    // §7) -- an ordinary REST API with no vSaga awareness, same spirit as /loyalty/lookup above.
+    app.MapPost("/payments/authorize", (AuthorizePaymentRequest request, ILogger<Program> paymentsLogger) =>
+    {
+        // A simulated decline rate distinct from the simulated-failure rate, so both of the saga's
+        // 402/.OnFailure branches fire live -- same spirit as PaymentParticipant's own decline/hang split.
+        if (Random.Shared.NextDouble() < 0.15)
+            return Results.StatusCode(StatusCodes.Status402PaymentRequired);
+        if (Random.Shared.NextDouble() < 0.1)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        paymentsLogger.LogInformation("Order {OrderId}: payment authorized for {Amount:C}", request.OrderId, request.Amount);
+        var authorizationId = Guid.NewGuid().ToString("N");
+        return Results.Ok(new { authorizationId });
+    });
+
+    app.MapPost("/payments/void", (VoidPaymentRequest request, ILogger<Program> paymentsLogger) =>
+    {
+        // An occasional failure so both the .OnFailure arm and the Voiding backstop timeout fire live,
+        // not only the happy-path confirmation.
+        if (Random.Shared.NextDouble() < 0.15)
+            return Results.StatusCode(StatusCodes.Status500InternalServerError);
+
+        paymentsLogger.LogInformation("Authorization {AuthorizationId}: voided", request.AuthorizationId);
+        var voidedAt = DateTimeOffset.UtcNow;
+        return Results.Ok(new { voidedAt });
+    });
 }
 
 // Schema creation is dashboard-api's job (versioned `dotnet ef` migrations against
@@ -182,4 +215,10 @@ namespace VSaga.Samples.OrderProcessing
 
     /// <summary>Request body for the plain /loyalty/lookup REST endpoint — see its own mapping comment in this file.</summary>
     internal sealed record LoyaltyLookupRequest(string OrderId, int Points);
+
+    /// <summary>Request body for the plain /payments/authorize REST endpoint — see its own mapping comment in this file.</summary>
+    internal sealed record AuthorizePaymentRequest(string OrderId, decimal Amount);
+
+    /// <summary>Request body for the plain /payments/void REST endpoint — see its own mapping comment in this file.</summary>
+    internal sealed record VoidPaymentRequest(string AuthorizationId);
 }
