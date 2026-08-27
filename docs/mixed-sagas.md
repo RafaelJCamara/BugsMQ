@@ -1,6 +1,38 @@
 # Design: mixed sagas (RabbitMQ messages and outbound REST calls in one saga)
 
-**Status: designed, not built.**
+**Status: built and live-verified**, as five commits in the order §4-§7 lay out: `ctx.CallHttpAsync`
+(§4), the §3.2 retry-dedupe fix and the §3.1 timeout-drain fix as two separate engine commits (each
+landed and live-verified alone before anything depended on them — this repo's habit, see `937243a`), the
+Saga Map fix (§6, its own commit per the note below), then `MixedFulfilmentSaga` (§7). See the README's
+"Mixed sagas: RabbitMQ messages and REST calls in one saga" section for the shipped shape and live-
+verification evidence, including the chaos-overlay run that caught `AwaitingStock`'s own timeout firing
+directly (not via a `StockUnavailable` message) and resolving cleanly — the direct live proof that §5's
+drain fix closes the gap it was built for.
+
+Every §9 mutation test passed as specified: removing a fix (or, for the timeout drain, moving it to the
+wrong place instead of deleting it) made exactly the tests written for that fix fail, and reverting
+restored a fully green suite each time. Two implementation notes worth recording for a later reader:
+
+- **§3.2's dedupe fix and §3.1's timeout-drain fix landed as two separate commits**, not one "§5 engine
+  change" commit — each is independently mutation-tested in `docs/mixed-sagas.md` §9's own list (four
+  distinct mutations across the two), and splitting them let each be a small, focused, easily-reverted
+  diff, consistent with `937243a`'s own "landed and verified alone" precedent.
+- **The retried-`ctx.CallHttpAsync` test can't observe its `.Body(...)` value's identity** the way a
+  message-aware `.CallHttp` body factory can (a counter closed over by a real factory function) — `.Body`
+  takes an already-evaluated value, and `SagaTestHarness`'s in-memory store round-trips saga state through
+  JSON on every read/write (deliberately, for real snapshot-isolation semantics), which silently resets
+  any counter stored on saga state between the write that captured it and the read that would inspect it.
+  The test instead reads the raw bytes the stub `HttpMessageHandler` actually received on each attempt,
+  from a payload whose serialized value increments on every serialization
+  (`tests/VSaga.Http.Tests/CallHttpAsyncFixtures.cs`'s `CountingPayload`) — proving the shared executor's
+  `body()` call happens once per attempt without relying on saga-state persistence at all.
+- **Forcing the timeout's final-persist race to lose needed a way to bump the saga's `Version` without
+  cancelling its pending timeout.** A self-transition (`During(Waiting).When<NudgeVersion>().TransitionTo(Waiting)`,
+  `tests/VSaga.Core.Tests/TimeoutDrainTests.cs`) does both: `HandleStepSuccessAsync` persists
+  unconditionally regardless of whether the state actually changed, but a self-transition is "no
+  transition" to the timeout-scheduling logic, so the pending timeout survives untouched — the same
+  behaviour `EventBuilder.TransitionTo(Func<TState,State<TState>>)`'s own remarks document for a
+  parallel-fan-out join.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit
