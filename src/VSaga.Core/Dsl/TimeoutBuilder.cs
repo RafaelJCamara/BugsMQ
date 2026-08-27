@@ -25,6 +25,18 @@ public sealed class TimeoutBuilder<TState> where TState : SagaState, new()
         return this;
     }
 
+    /// <summary>
+    /// docs/mixed-sagas.md §5: the async counterpart, needed for a timeout step that awaits something
+    /// (e.g. <c>ctx.CallHttpAsync(...)</c>) directly rather than through <see cref="Compensate"/>.
+    /// Mirrors <see cref="EventBuilder{TState,TMessage}"/>'s existing <c>Then(Action)</c>/<c>Then(Func{...,Task})</c>
+    /// pair; <c>ChoreographyEventBuilder</c> already has this, so this gap exists only on TimeoutBuilder.
+    /// </summary>
+    public TimeoutBuilder<TState> Then(Func<ISagaContext<TState>, Task> action)
+    {
+        Step.Actions.Add((ctx, _) => action(ctx));
+        return this;
+    }
+
     public TimeoutBuilder<TState> Publish<TOut>(Func<ISagaContext<TState>, TOut> factory) where TOut : notnull
     {
         Step.Actions.Add((ctx, _) => ctx.PublishAsync(factory(ctx), ctx.CancellationToken));

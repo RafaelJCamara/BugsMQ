@@ -233,8 +233,12 @@ public sealed class SagaOrchestrator<TState>(
         // letting it propagate to the dispatcher's generic catch-and-log) at least makes that
         // distinction visible instead of indistinguishably silent.
         if (!await TryPersistOrLogRaceLossAsync(state, timeout, sideEffectsAlreadyRan: true, cancellationToken))
+        {
+            await DiscardDeferredPublishesAsync(timeout.CorrelationId, context, timeout.ForState, cancellationToken);
             return;
+        }
 
+        await DrainDeferredPublishesAsync(timeout.CorrelationId, context, cancellationToken);
         await RecordTimeoutOutcomeAsync(state, outcome, cancellationToken);
     }
 
@@ -514,6 +518,28 @@ public sealed class SagaOrchestrator<TState>(
 
                 await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.DeliveryExhausted, errorMessage: ex.Message), cancellationToken);
             }
+        }
+    }
+
+    /// <summary>
+    /// docs/mixed-sagas.md §5: the timeout's own final persist lost the optimistic-concurrency race, so
+    /// the state transition that queued these was never actually committed -- publishing them now would
+    /// announce a transition nobody recorded. Reuses DrainDeferredPublishesAsync's own "leave the saga
+    /// for its own timeout to rescue it" policy (one DeliveryExhausted entry per dropped publish, logged
+    /// and swallowed, never thrown) rather than inventing a second one -- the only difference from a
+    /// drain is that these are never sent at all.
+    /// </summary>
+    private async Task DiscardDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, string forState, CancellationToken cancellationToken)
+    {
+        foreach (var messageType in publisher.DeferredPublishes.Select(publish => publish.MessageType))
+        {
+            logger.LogWarning(
+                "Discarding a deferred publish of {MessageType} for saga {SagaType} correlation {CorrelationId} in state {State}: its timeout lost the persist race, so the transition that queued it was never recorded",
+                messageType, SagaType, correlationId, forState);
+
+            await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.DeliveryExhausted,
+                fromState: forState, messageType: messageType,
+                errorMessage: "Deferred publish discarded: its timeout lost the persist race before committing."), cancellationToken);
         }
     }
 
