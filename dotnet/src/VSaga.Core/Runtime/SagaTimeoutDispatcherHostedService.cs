@@ -1,4 +1,5 @@
 using VSaga.Abstractions.Persistence;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -7,7 +8,7 @@ namespace VSaga.Core.Runtime;
 /// <summary>Polls <see cref="ISagaTimeoutStore"/> for due timeouts and dispatches each to the owning saga's runtime.</summary>
 internal sealed class SagaTimeoutDispatcherHostedService(
     IEnumerable<ISagaRuntime> runtimes,
-    ISagaTimeoutStore timeoutStore,
+    IServiceScopeFactory scopeFactory,
     TimeProvider timeProvider,
     ILogger<SagaTimeoutDispatcherHostedService> logger) : BackgroundService
 {
@@ -26,7 +27,7 @@ internal sealed class SagaTimeoutDispatcherHostedService(
         {
             try
             {
-                var due = await timeoutStore.ClaimDueAsync(timeProvider.GetUtcNow(), BatchSize, stoppingToken);
+                var due = await ClaimDueTimeoutsAsync(stoppingToken);
 
                 foreach (var timeout in due)
                 {
@@ -51,5 +52,18 @@ internal sealed class SagaTimeoutDispatcherHostedService(
                 logger.LogError(ex, "Error while polling for due saga timeouts");
             }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    /// <summary>
+    /// Opens a fresh DI scope per poll so <see cref="ISagaTimeoutStore"/> — Scoped under EF Core,
+    /// one <c>DbContext</c> per unit of work — is never captured for this singleton
+    /// <see cref="BackgroundService"/>'s process lifetime. Matches <see cref="SagaRuntime{TState}"/>'s
+    /// own per-unit-of-work scoping.
+    /// </summary>
+    private async Task<IReadOnlyList<SagaTimeout>> ClaimDueTimeoutsAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var timeoutStore = scope.ServiceProvider.GetRequiredService<ISagaTimeoutStore>();
+        return await timeoutStore.ClaimDueAsync(timeProvider.GetUtcNow(), BatchSize, cancellationToken);
     }
 }
