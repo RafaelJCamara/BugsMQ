@@ -6,7 +6,7 @@ namespace VSaga.Chaos;
 /// <summary>
 /// Simulates an unroutable/vanished publish: sets <see cref="OutboundMessageContext.Suppressed"/> so
 /// <c>MiddlewarePipelineTransport</c>'s terminal skips the real send, then still calls
-/// <paramref name="nextAsync"/> — mirrors <c>MessageMiddleware.cs</c>'s documented contract for this
+/// <c>nextAsync</c> — mirrors <c>MessageMiddleware.cs</c>'s documented contract for this
 /// flag exactly. From the caller's perspective the publish simply returns, same as if it had
 /// succeeded; nothing ever arrives at the other end.
 /// </summary>
@@ -33,7 +33,7 @@ public sealed class DropOutboundMiddleware(
 /// Suppressing here means the terminal handler — which normally owns the ack — never runs, so this
 /// middleware acks the delivery itself before returning; otherwise the message would sit
 /// unacknowledged forever and eventually exhaust the consumer's prefetch window. Deliberately does
-/// not call <paramref name="nextAsync"/> when triggered: unlike the outbound case there's no
+/// not call <c>nextAsync</c> when triggered: unlike the outbound case there's no
 /// downstream code left that needs a chance to run against an already-decided drop.
 /// </summary>
 public sealed class DropInboundMiddleware(

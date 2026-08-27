@@ -6,7 +6,7 @@ namespace VSaga.Chaos;
 /// <summary>
 /// Re-publishes the same outbound message (same <see cref="MessageEnvelope.MessageId"/>) one or more
 /// extra times after the real publish, simulating a broker's at-least-once delivery guarantee at the
-/// point of sending. Each extra call to <paramref name="nextAsync"/> becomes its own independent
+/// point of sending. Each extra call to <c>nextAsync</c> becomes its own independent
 /// broker delivery with its own delivery tag on the receiving end, so — unlike duplicating inbound —
 /// there's no shared ack to worry about double-acknowledging.
 /// </summary>
@@ -34,7 +34,7 @@ public sealed class DuplicateOutboundMiddleware(
 /// Redelivers the same inbound message to the handler one or more extra times after the real
 /// delivery, simulating a broker's at-least-once guarantee on the receiving end — this is what
 /// exercises the saga engine's own duplicate-message dedup (<c>ISagaEventLogStore.IsDuplicateAsync</c>).
-/// The genuine delivery runs through <paramref name="nextAsync"/> unmodified (real ack included); each
+/// The genuine delivery runs through <c>nextAsync</c> unmodified (real ack included); each
 /// synthetic extra "redelivery" wraps a copy of the message with a no-op ack instead of reusing the
 /// original <see cref="IMessageAckContext"/>, since the one physical broker delivery behind it must
 /// only ever be acked/nacked once.

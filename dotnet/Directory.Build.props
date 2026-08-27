@@ -8,11 +8,46 @@
     <Deterministic>true</Deterministic>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsAsErrors />
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- GenerateDocumentationFile=true activates CS1591 ("missing XML comment on publicly visible
+         member") for every undocumented public member, which TreatWarningsAsErrors above turns into
+         a build error across all 16 projects. Suppressed here, in the same edit as the flip. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <IsPackable>true</IsPackable>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
     <AssemblyName>$(MSBuildProjectName)</AssemblyName>
   </PropertyGroup>
+
+  <!-- Packaging metadata: every IsPackable project ships as VSaga.* on nuget.org in lockstep. -->
+  <PropertyGroup>
+    <Authors>Rafael Camara</Authors>
+    <Description>Part of vSaga, a saga orchestration framework for .NET.</Description>
+    <PackageProjectUrl>https://github.com/RafaelJCamara/vSaga</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/RafaelJCamara/vSaga</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Copyright>Copyright (c) Rafael Camara</Copyright>
+  </PropertyGroup>
+
+  <!-- Versioning: MinVer derives the version from git tags, with no version string committed
+       anywhere. MinVerTagPrefix matches the release workflow's v* tag convention. -->
+  <PropertyGroup>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- MinVer can't tell a shallow checkout (fetch-depth: 1, the GitHub Actions default) apart from a
+       repo that genuinely has no tags yet: both resolve to the same 0.0.0-prefixed fallback. A shallow
+       checkout hiding a real tag would otherwise pack and publish that fake version silently, which is
+       worse than refusing to pack. Scoped to Pack (not Build/Test) so ordinary per-commit
+       build/test verification keeps working before the first tag exists. -->
+  <Target Name="VSagaFailOnUnresolvedMinVerVersion" BeforeTargets="GenerateNuspec" DependsOnTargets="MinVer"
+          Condition="'$(IsPackable)' == 'true' AND '$(MinVerMajor)' == '0' AND '$(MinVerMinor)' == '0' AND '$(MinVerPatch)' == '0'">
+    <Error Text="MinVer resolved $(MSBuildProjectName)'s version to the untagged fallback 0.0.0 (no reachable git tag). This usually means the checkout is shallow (missing fetch-depth: 0) or the repository has no version tag yet. Refusing to pack a fake 0.0.0 version." />
+  </Target>
 
   <!-- Static code analysis: built-in .NET analyzers + SonarQube/Meziantu/AsyncFixer, enforced via .editorconfig -->
   <PropertyGroup>

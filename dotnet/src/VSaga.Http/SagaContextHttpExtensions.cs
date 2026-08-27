@@ -5,7 +5,7 @@ namespace VSaga.Http;
 /// <summary>
 /// docs/mixed-sagas.md §4: the imperative counterpart to <see cref="EventBuilderHttpExtensions.CallHttp{TState,TMessage}"/>,
 /// reachable from a <c>Compensate(state, ...)</c> delegate or a <c>TimeoutBuilder&lt;TState&gt;.Then(...)</c>
-/// step -- neither of which hands this call an inbound <typeparamref name="TState"/>-scoped message the
+/// step -- neither of which hands this call an inbound <c>TState</c>-scoped message the
 /// way an <c>EventBuilder</c> step does. One primitive covers both, so no separate <c>.CallHttp</c>
 /// extension is needed on <c>TimeoutBuilder</c>.
 /// </summary>

@@ -40,7 +40,7 @@ internal sealed class NodeRegistry
 
 /// <summary>
 /// One vSaga-aware HTTP "service" for tests: a real ASP.NET Core pipeline with MapVSagaHttp() mapped,
-/// hosted entirely in-memory via TestServer. <paramref name="host"/> is the synthetic hostname other
+/// hosted entirely in-memory via TestServer. <c>host</c> is the synthetic hostname other
 /// nodes address it by in their own HttpTransportOptions.Endpoints (e.g. "http://{host}").
 /// </summary>
 internal sealed class HttpTestNode : IAsyncDisposable

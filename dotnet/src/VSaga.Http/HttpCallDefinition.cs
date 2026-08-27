@@ -25,12 +25,14 @@ internal sealed class HttpCallExecutor<TState>(
 {
     private readonly string _host = new Uri(url, UriKind.Absolute).Host;
 
+    /// <param name="context">The saga context this call executes within.</param>
     /// <param name="body">
     /// Null means no <c>.Body(...)</c> was configured at all (no request content, matching the
     /// pre-refactor <c>bodyFactory is null</c> check). Non-null is invoked once per retry attempt --
     /// see <c>ctx.CallHttpAsync</c>'s own remarks on why an eagerly-captured value passed as a
     /// <see cref="Func{TResult}"/> here still preserves per-attempt invocation semantics literally.
     /// </param>
+    /// <param name="cancellationToken">Cancellation token observed by the call and its retries.</param>
     public async Task ExecuteAsync(ISagaContext<TState> context, Func<object?>? body, CancellationToken cancellationToken)
     {
         var httpClient = context.Services.GetRequiredService<IHttpClientFactory>().CreateClient(ServiceCollectionExtensions.ClientName);
@@ -109,7 +111,7 @@ internal sealed class HttpCallExecutor<TState>(
 /// <see cref="HttpCallBuilder{TState,TMessage}"/> collected, executed once per step invocation. A thin,
 /// message-typed adapter over <see cref="HttpCallExecutor{TState}"/>: its only job is turning the eager
 /// <c>bodyFactory(context, message)</c> shape into the shared executor's <see cref="Func{TResult}"/>, re-
-/// closing over <paramref name="message"/> fresh on every call so the factory still runs once per retry
+/// closing over <c>message</c> fresh on every call so the factory still runs once per retry
 /// attempt exactly as it always has.
 /// </summary>
 internal sealed class HttpCallDefinition<TState, TMessage>(

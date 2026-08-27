@@ -2,7 +2,7 @@ namespace VSaga.Transport.MassTransit;
 
 public sealed class MassTransitOptions
 {
-    /// <summary>Passed straight to MassTransit's RabbitMQ <c>cfg.Host(new Uri(...))</c>, same convention as <see cref="Transport.RabbitMQ.RabbitMqOptions.ConnectionString"/>.</summary>
+    /// <summary>Passed straight to MassTransit's RabbitMQ <c>cfg.Host(new Uri(...))</c>, same convention as <c>RabbitMqOptions.ConnectionString</c>.</summary>
     public string ConnectionString { get; set; } = "amqp://guest:guest@localhost:5672/";
 
     /// <summary>

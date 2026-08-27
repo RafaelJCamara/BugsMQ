@@ -20,6 +20,11 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          # MinVer derives the .NET packages' version from git tags; the default shallow checkout
+          # (fetch-depth: 1) hides tags reachable only through fuller history, and MinVer silently
+          # falls back to a fake 0.0.0 version instead of failing when that happens.
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -43,6 +48,9 @@ jobs:
         working-directory: typescript/dashboard-web
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Kept consistent with the dotnet job's checkout above, which needs full history for MinVer.
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -71,6 +79,9 @@ jobs:
         working-directory: typescript
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Kept consistent with the dotnet job's checkout above, which needs full history for MinVer.
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
