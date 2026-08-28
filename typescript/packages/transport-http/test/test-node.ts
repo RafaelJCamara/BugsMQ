@@ -24,7 +24,24 @@ export interface TestNode {
   close(): Promise<void>;
 }
 
-export async function startTestNode(): Promise<TestNode> {
+/** A canned response, for failure-path tests that need a reply no real vSaga endpoint would produce. */
+export interface CannedResponse {
+  readonly status: number;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: Buffer | string;
+}
+
+export interface TestNodeOptions {
+  /**
+   * Replaces the transport-backed inbound handling entirely, so a test can serve a 500, a malformed
+   * 200, or -- by returning a promise that never settles -- nothing at all. `bind()` is still
+   * available on such a node, but only so the test can hand its `baseUrl` to a sender; its own
+   * transport never sees a request.
+   */
+  readonly respondWith?: (request: http.IncomingMessage, body: Buffer) => Promise<CannedResponse>;
+}
+
+export async function startTestNode(options: TestNodeOptions = {}): Promise<TestNode> {
   let transport: HttpTransport | undefined;
 
   const server = http.createServer((req, res) => {
@@ -32,16 +49,22 @@ export async function startTestNode(): Promise<TestNode> {
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       void (async () => {
+        const body = Buffer.concat(chunks);
+
+        if (options.respondWith) {
+          const canned = await options.respondWith(req, body);
+          res.writeHead(canned.status, canned.headers ?? {});
+          res.end(canned.body);
+          return;
+        }
+
         if (!transport) {
           res.writeHead(503);
           res.end();
           return;
         }
 
-        const result = await transport.handleInboundRequest({
-          headers: req.headers,
-          body: Buffer.concat(chunks),
-        });
+        const result = await transport.handleInboundRequest({ headers: req.headers, body });
 
         res.writeHead(result.status, result.headers ?? {});
         res.end(result.body);
@@ -64,6 +87,10 @@ export async function startTestNode(): Promise<TestNode> {
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        // `close()` alone only stops new connections and then waits for the open ones to end, which
+        // never happens for a `respondWith` that deliberately never responds -- afterEach would hang
+        // instead of failing.
+        server.closeAllConnections();
       }),
   };
 }

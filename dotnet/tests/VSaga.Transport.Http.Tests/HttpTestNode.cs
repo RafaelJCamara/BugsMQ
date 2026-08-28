@@ -17,8 +17,18 @@ namespace VSaga.Transport.Http.Tests;
 internal sealed class NodeRegistry
 {
     private readonly ConcurrentDictionary<string, TestServer> _servers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>> _stubs =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public void Register(string host, TestServer server) => _servers[host] = server;
+
+    /// <summary>
+    /// Registers a canned responder for a host instead of a real vSaga node, for failure-path tests
+    /// that need a reply no <c>MapVSagaHttp()</c> endpoint would ever produce -- a 500, a malformed
+    /// 200, or (by never returning) nothing at all. Takes precedence over a registered TestServer.
+    /// </summary>
+    public void RegisterStub(string host, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) =>
+        _stubs[host] = respond;
 
     public HttpMessageHandler CreateRoutingHandler() => new RoutingHandler(this);
 
@@ -28,6 +38,9 @@ internal sealed class NodeRegistry
         {
             var host = request.RequestUri?.Host
                 ?? throw new InvalidOperationException("Request has no target host.");
+
+            if (registry._stubs.TryGetValue(host, out var respond))
+                return await respond(request, cancellationToken);
 
             if (!registry._servers.TryGetValue(host, out var server))
                 throw new InvalidOperationException($"No test node is registered for host '{host}'.");

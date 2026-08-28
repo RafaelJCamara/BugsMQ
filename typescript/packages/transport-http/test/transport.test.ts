@@ -1,3 +1,5 @@
+import type { IncomingMessage } from 'node:http';
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CAUSATION_ID_HEADER,
@@ -16,7 +18,12 @@ import {
   newMessageId,
 } from '@vsaga/protocol';
 
-import { type TestNode, startTestNode } from './test-node.js';
+import {
+  type CannedResponse,
+  type TestNode,
+  type TestNodeOptions,
+  startTestNode,
+} from './test-node.js';
 
 /** TaskCompletionSource-alike: lets a test observe both "has it settled yet" and await the eventual value. */
 interface Deferred<T> {
@@ -57,8 +64,8 @@ describe('createHttpTransport', () => {
     await Promise.all(nodes.splice(0).map((n) => n.close()));
   });
 
-  async function node(): Promise<TestNode> {
-    const testNode = await startTestNode();
+  async function node(options?: TestNodeOptions): Promise<TestNode> {
+    const testNode = await startTestNode(options);
     nodes.push(testNode);
     return testNode;
   }
@@ -595,5 +602,165 @@ describe('createHttpTransport', () => {
     releaseFirstHandler.resolve();
 
     expect(await secondHandlerRan.promise).toBe(true);
+  });
+
+  it('publish() with no explicit route for the type falls back to the "*" wildcard endpoint', async () => {
+    const receiverNode = await node();
+    const senderNode = await node();
+
+    const receiver = receiverNode.bind();
+    // No entry for PingMessage -- only the wildcard, the shape an ops/redrive process uses when it
+    // pushes every message type at one saga host rather than enumerating them.
+    const sender = senderNode.bind({
+      endpoints: { hub: receiverNode.baseUrl },
+      routes: { '*': ['hub'] },
+    });
+
+    const received = deferred<ReceivedMessage>();
+    await receiver.subscribe(
+      {
+        consumerName: 'WildcardConsumer',
+        messageTypeNames: ['PingMessage'],
+        queueNameHint: 'receiver-wildcard-queue',
+      },
+      async (message) => received.resolve(message),
+    );
+
+    const correlationId = newCorrelationId();
+    await sender.publish(
+      'PingMessage',
+      Buffer.from(JSON.stringify({ text: 'wildcard' })),
+      newEnvelope(correlationId),
+    );
+
+    const message = await received.promise;
+    expect(message.correlationId).toBe(correlationId);
+    expect(message.messageTypeName).toBe('PingMessage');
+  });
+
+  /**
+   * The three ways a remote endpoint can fail a publish that is otherwise perfectly routable. All
+   * three are non-unroutable: the route existed and was used, so a saga's retry/compensation path
+   * is the right response, whereas `isUnroutable` means the message had nowhere to go at all and
+   * retrying the same publish can only fail the same way.
+   *
+   * Mirrors dotnet/tests/VSaga.Transport.Http.Tests/HttpTransportFailureTests.cs.
+   */
+  describe('remote failures', () => {
+    async function senderTo(
+      respondWith: (request: IncomingMessage, body: Buffer) => Promise<CannedResponse>,
+      options?: { requestTimeoutMs?: number },
+    ) {
+      const receiverNode = await node({ respondWith });
+      const senderNode = await node();
+      return senderNode.bind({
+        endpoints: { receiver: receiverNode.baseUrl },
+        routes: { PingMessage: ['receiver'] },
+        ...options,
+      });
+    }
+
+    it('rejects the publish when the remote endpoint answers 500, naming the status', async () => {
+      const sender = await senderTo(() => Promise.resolve({ status: 500 }));
+
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({
+        name: 'MessageTransportPublishError',
+        isUnroutable: false,
+        messageTypeName: 'PingMessage',
+        message: expect.stringContaining('500'),
+      });
+    });
+
+    it('rejects a 4xx the same way -- any non-2xx is a failed publish, not a silent drop', async () => {
+      const sender = await senderTo(() => Promise.resolve({ status: 404 }));
+
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({ name: 'MessageTransportPublishError', isUnroutable: false });
+    });
+
+    it('aborts a request that outlives requestTimeoutMs instead of hanging forever', async () => {
+      // Never settles: without the transport's own AbortSignal.timeout this publish would hang for
+      // as long as the socket stayed open, stalling the saga step that issued it with no error and
+      // no timeout of its own.
+      const sender = await senderTo(() => new Promise<CannedResponse>(() => {}), {
+        requestTimeoutMs: 150,
+      });
+
+      const startedAt = performance.now();
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({
+        name: 'MessageTransportPublishError',
+        isUnroutable: false,
+        message: expect.stringContaining('timed out'),
+      });
+      expect(performance.now() - startedAt).toBeLessThan(5_000);
+    });
+
+    it('rejects a 200 that is missing the x-vsaga- headers a reply must carry', async () => {
+      // A 200 IS the reply on this transport, so one without the reserved headers cannot be
+      // dispatched to anything -- surfacing it beats enqueuing a message with no type or correlation.
+      const sender = await senderTo(() =>
+        Promise.resolve({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: '{"Text":"a reply with no envelope headers"}',
+        }),
+      );
+
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({
+        name: 'MessageTransportPublishError',
+        isUnroutable: false,
+        message: expect.stringContaining('missing one of the required x-vsaga- headers'),
+      });
+    });
+
+    it('rejects a 200 whose correlation id is not a dashed Guid', async () => {
+      const sender = await senderTo(() =>
+        Promise.resolve({
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            [MESSAGE_TYPE_HEADER]: 'PingReply',
+            [MESSAGE_ID_HEADER]: newMessageId(),
+            [CORRELATION_ID_HEADER]: 'not-a-guid',
+          },
+          body: '{}',
+        }),
+      );
+
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({ name: 'MessageTransportPublishError', isUnroutable: false });
+    });
+
+    it('rejects the publish when nothing is listening on the far end at all', async () => {
+      // A dead port, not a slow one: fetch fails at connect time rather than answering, and the
+      // transport has to turn Node's bare "fetch failed" into something that names the cause.
+      // Deliberately not registered for afterEach cleanup -- this test closes it itself, and
+      // closing an already-closed server errors.
+      const deadNode = await startTestNode();
+      const senderNode = await node();
+      const deadUrl = deadNode.baseUrl;
+      await deadNode.close();
+
+      const sender = senderNode.bind({
+        endpoints: { receiver: deadUrl },
+        routes: { PingMessage: ['receiver'] },
+      });
+
+      await expect(
+        sender.publish('PingMessage', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({
+        name: 'MessageTransportPublishError',
+        isUnroutable: false,
+        message: expect.stringContaining('connection refused'),
+      });
+    });
   });
 });
