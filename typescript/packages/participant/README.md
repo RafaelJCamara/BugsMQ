@@ -67,10 +67,10 @@ only acknowledge after an external commit.
 
 ## Topology reporting
 
-Pass a `topology: TopologyReporter` (see `httpTopologyReporter` in this package, or
-`@vsaga/transport-http`'s equivalent) so this service resolves to a named node on the dashboard's
-Saga Map instead of an `Unresolved` one. Registration is best-effort — a cold dashboard never stops
-a participant from starting.
+Pass a `topology: TopologyReporter` (see `httpTopologyReporter` in this package — the only
+implementation in the SDK, usable regardless of which transport the participant itself runs over) so
+this service resolves to a named node on the dashboard's Saga Map instead of an `Unresolved` one.
+Registration is best-effort — a cold dashboard never stops a participant from starting.
 
 ## License
 

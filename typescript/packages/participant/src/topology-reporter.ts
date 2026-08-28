@@ -22,10 +22,16 @@ export interface HttpTopologyReporterOptions {
  */
 export function httpTopologyReporter(options: HttpTopologyReporterOptions): TopologyReporter {
   const { baseUrl, apiKey, timeoutMs = 5000, path = '/api/topology/registrations' } = options;
-  const url = new URL(path, baseUrl).toString();
 
   return {
     async report(registrations: readonly TopologyRegistration[]): Promise<void> {
+      // Built here, not eagerly at httpTopologyReporter(...) call time: a malformed baseUrl (missing
+      // scheme, e.g. "localhost:5080" instead of "http://localhost:5080") throws synchronously from
+      // `new URL(...)`, and this function is the caller's best-effort try/catch boundary
+      // (participant.ts's start()) -- constructing it eagerly would throw before that boundary
+      // exists, crashing the whole process over a topology-config mistake instead of degrading to an
+      // Unresolved Saga Map node the way every other topology-reporting failure already does.
+      const url = new URL(path, baseUrl).toString();
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey },

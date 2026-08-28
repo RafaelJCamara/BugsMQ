@@ -56,7 +56,7 @@ public sealed class SagaHubTests
         var (hub, groups) = NewHub();
         var correlationId = Guid.NewGuid();
 
-        await hub.SubscribeToSaga("OrderSaga", correlationId);
+        await hub.SubscribeToSaga("OrderSaga", correlationId.ToString());
 
         var joined = Assert.Single(groups.Added);
         Assert.Equal(ConnectionId, joined.ConnectionId);
@@ -70,12 +70,38 @@ public sealed class SagaHubTests
         var (hub, groups) = NewHub();
         var correlationId = Guid.NewGuid();
 
-        await hub.SubscribeToSaga("OrderSaga", correlationId);
-        await hub.UnsubscribeFromSaga("OrderSaga", correlationId);
+        await hub.SubscribeToSaga("OrderSaga", correlationId.ToString());
+        await hub.UnsubscribeFromSaga("OrderSaga", correlationId.ToString());
 
         var left = Assert.Single(groups.Removed);
         Assert.Equal(groups.Added[0].GroupName, left.GroupName);
         Assert.Equal(ConnectionId, left.ConnectionId);
+    }
+
+    /// <summary>
+    /// A malformed correlation id (a stale link, a hand-edited URL) used to fail the whole hub
+    /// invocation via SignalR's default Guid model binder -- surfacing client-side as "Failed to
+    /// invoke 'SubscribeToSaga' due to an error on the server". Parsing it here instead lets it join
+    /// no group and return cleanly, matching how the REST endpoint for the same id already degrades.
+    /// </summary>
+    [Fact]
+    public async Task SubscribeToSaga_WithAMalformedCorrelationId_JoinsNoGroupAndDoesNotThrow()
+    {
+        var (hub, groups) = NewHub();
+
+        await hub.SubscribeToSaga("OrderSaga", "not-a-guid");
+
+        Assert.Empty(groups.Added);
+    }
+
+    [Fact]
+    public async Task UnsubscribeFromSaga_WithAMalformedCorrelationId_DoesNotThrow()
+    {
+        var (hub, groups) = NewHub();
+
+        await hub.UnsubscribeFromSaga("OrderSaga", "not-a-guid");
+
+        Assert.Empty(groups.Removed);
     }
 
     [Fact]
@@ -84,8 +110,8 @@ public sealed class SagaHubTests
         var (hub, groups) = NewHub();
         var correlationId = Guid.NewGuid();
 
-        await hub.SubscribeToSaga("OrderSaga", correlationId);
-        await hub.SubscribeToSaga("PostShipmentChoreography", correlationId);
+        await hub.SubscribeToSaga("OrderSaga", correlationId.ToString());
+        await hub.SubscribeToSaga("PostShipmentChoreography", correlationId.ToString());
 
         Assert.Equal(2, groups.Added.Count);
         Assert.Equal(2, groups.Added.Select(g => g.GroupName).Distinct(StringComparer.Ordinal).Count());
@@ -98,9 +124,9 @@ public sealed class SagaHubTests
         var (hub, groups) = NewHub();
         var correlationId = Guid.NewGuid();
 
-        await hub.SubscribeToSaga("OrderSaga", correlationId);
-        await hub.SubscribeToSaga("PostShipmentChoreography", correlationId);
-        await hub.UnsubscribeFromSaga("OrderSaga", correlationId);
+        await hub.SubscribeToSaga("OrderSaga", correlationId.ToString());
+        await hub.SubscribeToSaga("PostShipmentChoreography", correlationId.ToString());
+        await hub.UnsubscribeFromSaga("OrderSaga", correlationId.ToString());
 
         var left = Assert.Single(groups.Removed);
         Assert.Equal(SagaHub.GroupForSaga("OrderSaga", correlationId), left.GroupName);

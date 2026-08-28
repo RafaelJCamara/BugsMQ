@@ -64,4 +64,34 @@ public sealed class SagaEngineBuilder(IServiceCollection services)
 
         return this;
     }
+
+    /// <summary>
+    /// Configures engine-wide orchestrator behavior (currently just
+    /// <see cref="SagaOrchestratorOptions.MaxDeliveryAttempts"/>). <c>AddVSagaEngine</c> already
+    /// registers a default-valued <see cref="SagaOrchestratorOptions"/> via <c>TryAddSingleton</c>
+    /// before this delegate runs, so calling this here overrides it -- order relative to
+    /// <see cref="AddSaga{TDefinition, TState}"/> doesn't matter, only that it's called somewhere
+    /// inside the same <c>AddVSagaEngine(...)</c> delegate.
+    /// </summary>
+    public SagaEngineBuilder ConfigureOrchestrator(Action<SagaOrchestratorOptions> configure)
+    {
+        var options = new SagaOrchestratorOptions();
+        configure(options);
+        services.AddSingleton(options);
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the outbox dispatcher (<see cref="SagaOutboxOptions.Mode"/>,
+    /// <see cref="SagaOutboxOptions.PollInterval"/>, <see cref="SagaOutboxOptions.BatchSize"/>). See
+    /// <see cref="ConfigureOrchestrator"/> for why this, not <c>services.Configure&lt;T&gt;</c>, is
+    /// the right way to set these.
+    /// </summary>
+    public SagaEngineBuilder ConfigureOutbox(Action<SagaOutboxOptions> configure)
+    {
+        var options = new SagaOutboxOptions();
+        configure(options);
+        services.AddSingleton(options);
+        return this;
+    }
 }

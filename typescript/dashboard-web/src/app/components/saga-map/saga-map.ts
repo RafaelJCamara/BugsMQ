@@ -63,6 +63,17 @@ export class SagaMap {
     return failureIndex === null ? null : (this.map().events[failureIndex] ?? null);
   });
 
+  /**
+   * A saga that fails on its very first outbound publish (e.g. an unroutable-publish exception, thrown
+   * before any edge is ever logged) has nothing at all to draw -- one bare node, no edges, and the
+   * scrub-triggered error-card below stays hidden until you've clicked Play/scrubbed to the failure,
+   * which there's nothing to prompt you to do. Surfaced unconditionally, not gated on replay position,
+   * only when there's essentially nothing else on the canvas already telling that story.
+   */
+  readonly failedWithNothingToShow = computed(
+    () => this.map().failureEventIndex !== null && this.layout().nodes.length <= 1 && this.layout().edges.length === 0,
+  );
+
   readonly atEnd = computed(() => this.currentIndex() >= this.map().events.length - 1);
 
   readonly tokenPosition = computed(() => {

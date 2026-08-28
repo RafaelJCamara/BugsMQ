@@ -75,10 +75,11 @@ four envelope headers (plus `traceparent`/`tracestate` — see
 
 ## Topology reporting
 
-Pass a `topology: TopologyReporter` (`@vsaga/participant`'s `httpTopologyReporter`, or
-`@vsaga/transport-http`'s equivalent) so a participant resolves to a named node on the dashboard's
-Saga Map (see [`dashboard.md`](dashboard.md#saga-map)) instead of an `Unresolved` one. Registration is
-best-effort — a cold dashboard never stops a participant from starting.
+Pass a `topology: TopologyReporter` (`@vsaga/participant`'s `httpTopologyReporter` — the only
+implementation in the SDK, usable regardless of which transport the participant itself runs over) so a
+participant resolves to a named node on the dashboard's Saga Map (see
+[`dashboard.md`](dashboard.md#saga-map)) instead of an `Unresolved` one. Registration is best-effort —
+a cold dashboard never stops a participant from starting.
 
 It posts to the Dashboard API's `POST /api/topology/registrations` rather than writing to Postgres
 the way .NET's `AddVSagaTopologyRecording` does. That asymmetry is deliberate: registering two rows

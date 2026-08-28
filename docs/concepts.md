@@ -90,7 +90,7 @@ the snapshot primary key would then cap a parent at one child per saga type, and
 would collide with itself. The parent-child relationship rides on two dedicated envelope headers
 (`x-vsaga-parent-saga-type`, `x-vsaga-parent-correlation-id`), not on business-key correlation. See
 [`saga-dsl.md`](saga-dsl.md)'s `ISagaContext` section and
-[`../design/sub-saga-composition.md`](design/sub-saga-composition.md) for the full sub-saga design.
+[`design/sub-saga-composition.md`](design/sub-saga-composition.md) for the full sub-saga design.
 
 ## Compensation
 
@@ -112,7 +112,7 @@ state's compensation unconditionally undoes every branch rather than checking wh
 **Compensation does not cascade into children.** A parent's `.Compensate()` only ever runs its own
 registered delegates; it never automatically walks `FindChildrenAsync` or touches a child saga. This
 is a closed design decision (see
-[`../design/sub-saga-composition.md`](design/sub-saga-composition.md) §3.5), not a gap — a parent that
+[`design/sub-saga-composition.md`](design/sub-saga-composition.md) §3.5), not a gap — a parent that
 needs a child compensated publishes its own compensating command explicitly, the same way it would
 address any other collaborator.
 
@@ -159,7 +159,7 @@ A saga can start another saga as a step (`ISagaContext.StartChildAsync`), and a 
 own parent (`ISagaContext.NotifyParentAsync`) or have the engine notify on its behalf when it fails or
 times out (`ChildSagaFinished`, published by the engine itself, not through `ISagaContext`). See
 [`saga-dsl.md`](saga-dsl.md) for the method reference and
-[`../design/sub-saga-composition.md`](design/sub-saga-composition.md) for the full design history,
+[`design/sub-saga-composition.md`](design/sub-saga-composition.md) for the full design history,
 including two races found in production traffic (a child that reports back from the very step that
 started it can race ahead of the parent's own not-yet-persisted transition) that are pinned by tests
 but not fixed, since a real fix means reordering the engine's "run step actions, then persist"

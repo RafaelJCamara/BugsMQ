@@ -35,8 +35,11 @@ live-verification detail: [`../history/transport-adapter-brighter.md`](../histor
   `Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway` documents this
   verified behaviour directly.
 - **Header filtering on receipt.** `ReceivedMessage.Headers` is filtered to the `x-vsaga-` prefix on
-  the way in, rather than passed through unfiltered — Brighter's own `Bag` carries CloudEvents-flavoured
-  echoes of core fields on receipt (`CorrelationId`, `Topic`, `HandledCount`, `cloudEvents_id`, ...)
+  the way in — plus the two bare W3C trace context headers, `traceparent`/`tracestate`, as a named
+  allowlist exception (they interoperate only by *not* carrying the `x-vsaga-` prefix, so both still
+  round-trip losslessly per [`index.md`](index.md#what-every-adapter-guarantees)) — rather than passed
+  through unfiltered. Brighter's own `Bag` carries CloudEvents-flavoured echoes of core fields on
+  receipt (`CorrelationId`, `Topic`, `HandledCount`, `cloudEvents_id`, ...)
   that would otherwise leak forward as bogus outbound headers on redelivery.
 - **A known intermittent condition, not a defect.** The low-traffic sub-saga queues occasionally logged
   `ChannelFailureException`/`precondition_failed: unknown delivery tag` following RabbitMQ.Client's

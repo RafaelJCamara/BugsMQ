@@ -1,12 +1,26 @@
 # Configuration
 
-Every options class below binds from `IConfiguration` the standard .NET way (`services.Configure<T>(configuration.GetSection("..."))`)
-or is set directly in code when calling the relevant `AddVSaga*` extension. Defaults are shown as
-written in source.
+None of vSaga's options classes bind from `IConfiguration` — there is no `services.Configure<T>(...)`
+step anywhere in this library, and calling one yourself is a silent no-op (it registers an `IOptions<T>`
+nobody reads; every options class below is resolved as a plain `T` singleton, not `IOptions<T>`). Every
+adapter's own options (`RabbitMqOptions`, `HttpTransportOptions`, ...) are set the same way: pass an
+`Action<TOptions>` to that adapter's `AddVSaga*` extension, e.g. `AddVSagaRabbitMq(o => o.ConnectionString = "...")`.
+`SagaOrchestratorOptions`/`SagaOutboxOptions` are the two exceptions — `AddVSagaEngine` takes no
+options delegate of its own — configured instead via `SagaEngineBuilder.ConfigureOrchestrator`/
+`ConfigureOutbox`, shown below. Defaults are shown as written in source.
 
 ## `SagaOrchestratorOptions`
 
-Registered by `AddVSagaEngine(...)`. One tunable:
+Registered by `AddVSagaEngine(...)` with library defaults; override with `ConfigureOrchestrator` inside
+the same builder delegate:
+
+```csharp
+services.AddVSagaEngine(o => o
+    .ConfigureOrchestrator(opt => opt.MaxDeliveryAttempts = 10)
+    .AddSaga<OrderSaga, OrderSagaState>());
+```
+
+One tunable:
 
 | Property | Default | Meaning |
 | --- | --- | --- |
@@ -14,8 +28,20 @@ Registered by `AddVSagaEngine(...)`. One tunable:
 
 ## `SagaOutboxOptions`
 
-Registered by `AddVSagaEngine(...)`. Governs the transactional outbox's crash-recovery poller
-(`SagaOutboxDispatcherHostedService`) and which publishes get an outbox row in the first place.
+Registered by `AddVSagaEngine(...)` with library defaults; override with `ConfigureOutbox` the same way:
+
+```csharp
+services.AddVSagaEngine(o => o
+    .ConfigureOutbox(opt =>
+    {
+        opt.Mode = SagaOutboxMode.All;
+        opt.PollInterval = TimeSpan.FromSeconds(2);
+    })
+    .AddSaga<OrderSaga, OrderSagaState>());
+```
+
+Governs the transactional outbox's crash-recovery poller (`SagaOutboxDispatcherHostedService`) and
+which publishes get an outbox row in the first place.
 
 | Property | Default | Meaning |
 | --- | --- | --- |
@@ -86,6 +112,17 @@ No broker at all — see [`transports/http.md`](transports/http.md) for the full
 
 The in-memory transport (`VSaga.Transport.InMemory`, `AddVSagaInMemoryTransport()`) takes no options —
 it's a single-process, dev/test-only provider with nothing to configure.
+
+## `HttpCallOptions` (`VSaga.Http`)
+
+Registered by `AddVSagaHttpCalls(...)` — required once per host before any saga's `.CallHttp`/
+`ctx.CallHttpAsync` step runs (see [`saga-dsl.md`](saga-dsl.md#callhttp-from-vsagahttp)). Unrelated to
+`VSaga.Transport.Http` above: this is the transport-agnostic outbound REST-call step, available on any
+saga regardless of which `IMessageTransport` it uses.
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `Timeout` | `30s` | Per-call timeout for the outbound HTTP request, before `.WithRetry`'s own bounded retry (if configured) kicks in. |
 
 ## `ChaosOptions` (`VSaga.Chaos`)
 

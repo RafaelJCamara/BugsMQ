@@ -89,5 +89,16 @@
         <p>{{ failure.errorMessage }}</p>
       }
     </div>
+  } @else if (failedWithNothingToShow() && failureEvent(); as failure) {
+    <div class="error-card">
+      <strong>This saga failed with nothing to map</strong>
+      <p>
+        {{ failure.entryType }} on its first outbound step, before any hop was ever recorded — press Play
+        or step forward to see it in the timeline below.
+        @if (failure.errorMessage) {
+          {{ failure.errorMessage }}
+        }
+      </p>
+    </div>
   }
 </div>

@@ -159,6 +159,16 @@ An extension method on `EventBuilder<TState, TMessage>`, reached through the DSL
 seam — no change to `VSaga.Core` itself, and `VSaga.Core` gains no `HttpClient` dependency. Any
 saga, on any transport, gets `.CallHttp` by referencing `VSaga.Http`.
 
+> **Requires `AddVSagaHttpCalls()`.** `.CallHttp`/`ctx.CallHttpAsync` resolve an `IHttpClientFactory`
+> from `ISagaContext.Services` at call time — without registering it, the first `.CallHttp` step throws.
+> Call it once per host, alongside your other `AddVSaga*` registrations:
+>
+> ```csharp
+> services.AddVSagaHttpCalls();   // required once per host before any saga using .CallHttp runs
+> ```
+>
+> `HttpCallOptions` (its `Timeout`, default 30s) is set the same way: `AddVSagaHttpCalls(o => o.Timeout = TimeSpan.FromSeconds(10))`.
+
 ```csharp
 .When<OrderShipped>()
     .CallHttp(h => h.Post("https://payments.example/authorize")

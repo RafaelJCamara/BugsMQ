@@ -55,6 +55,40 @@ exchange (`vsaga.saga.events` by default) and route by message-type name, so the
 deployment looks the same regardless of which one is chosen — see [`configuration.md`](../configuration.md#transport-options)
 for each adapter's options.
 
+## Running an adapter's own overlay
+
+RabbitMQ is what plain `docker compose up` runs (see ["Run the demo"](../../README.md#run-the-demo)).
+To try Wolverine, MassTransit, Brighter, or HTTP instead, each has its own compose overlay — but unlike
+the chaos overlay, these two things are **not optional**:
+
+- **A `-p <project-name>` compose project name.** Without it, this overlay's containers join the
+  default `bugsmq`/`vsaga` compose project instead of a distinct one, colliding with any stack already
+  up under the plain command.
+- **Every host port is remapped** (`!override` in each overlay file) so the overlay's stack can run
+  *alongside* the plain one rather than fighting it for `5433`/`5672`/`15672`/`5080`. Skip the `-p` flag
+  and you'll bring these containers up fine, then find every URL this repo documents
+  (`localhost:5080`, `localhost:15672`, ...) pointing at whichever stack happened to bind the port first.
+
+```bash
+docker compose -p vsaga-wolverine    -f docker-compose.yml -f docker-compose.wolverine.yml    up -d --build
+docker compose -p vsaga-masstransit  -f docker-compose.yml -f docker-compose.masstransit.yml  up -d --build
+docker compose -p vsaga-brighter     -f docker-compose.yml -f docker-compose.brighter.yml     up -d --build
+docker compose -p vsaga-http         -f docker-compose.yml -f docker-compose.http.yml         up -d --build
+```
+
+Each overlay remaps a different, non-overlapping port range, so more than one can genuinely run at
+once — see that overlay's own file header for its exact ports:
+
+| Overlay | Postgres | RabbitMQ (AMQP / mgmt) | Dashboard API |
+| --- | --- | --- | --- |
+| `docker-compose.wolverine.yml` | `5443` | `5772` / `15772` | `5180` |
+| `docker-compose.masstransit.yml` | `5444` | `5872` / `15872` | `5280` |
+| `docker-compose.brighter.yml` | `5445` | `5972` / `15972` | `5380` |
+| `docker-compose.http.yml` | `5446` | `6072` / `16072` | `5480` |
+
+Tear one down the same way you brought it up, naming the same `-p` project:
+`docker compose -p vsaga-wolverine down`.
+
 ## What every adapter guarantees
 
 - **All four vSaga envelope headers round-trip losslessly**: `x-vsaga-source-service`,

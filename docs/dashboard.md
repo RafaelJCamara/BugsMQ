@@ -21,7 +21,7 @@ All routes below require authentication (see [Authentication](#authentication)) 
 | `POST` | `/api/sagas/{sagaType}/{correlationId}/retry` | Manually redrives a `Failed`/`TimedOut` instance — see [Manual retry](#manual-retry). `409` for any other status. |
 | `GET` | `/api/saga-types` | Every distinct saga type currently known to the store, for populating filter dropdowns. |
 | `GET` | `/api/correlations/{correlationId}` | Every saga instance — of any type — currently tracking this correlation id. The one route that still takes a bare correlation id, since two saga types (an orchestrated one and a choreography observing the same transaction, or a parent and its child sharing an id — see [`concepts.md`](concepts.md#saga-instances-and-identity)) may both track it. Does **not** include sub-saga children, which have their own correlation ids and are reached via `/children` instead. |
-| `POST` | `/api/topology/registrations` | Records `(serviceName, messageType, queueName)` bindings so a service resolves to a named node on the [Saga Map](#saga-map). For participants that can't write to the store directly — a .NET participant gets this from `AddVSagaTopologyRecording` instead. Upserts on `(serviceName, messageType)`, so re-reporting on every restart is expected. `204` on success, `400` if any field is blank. |
+| `POST` | `/api/topology/registrations` | Body is a **JSON array** of `{serviceName, messageType, queueName}` objects, not a single object. Records those `(serviceName, messageType, queueName)` bindings so a service resolves to a named node on the [Saga Map](#saga-map). For participants that can't write to the store directly — a .NET participant gets this from `AddVSagaTopologyRecording` instead. Upserts on `(serviceName, messageType)`, so re-reporting on every restart is expected. `204` on success (including an empty array — a no-op, not an error), `400` if any registration in the array has a blank field. |
 | `GET` | `/health` | Unauthenticated. Real Postgres/RabbitMQ connectivity checks — `503` with a per-check breakdown when either is unreachable, not a hardcoded `200`. |
 
 Every per-instance route is keyed by `(sagaType, correlationId)`, not correlation id alone — see
@@ -149,6 +149,6 @@ real gaps during the Saga Map's own development: `MessageReceived`/`SagaStarted`
 with `SourceService` but never `CausationId`, so nothing ever stitched a reply back to its request;
 and the business-failure-without-exception case above had no detection path at all until added.
 
-See [`../history/`](history/) for the live-verification history behind each of these mechanisms — most
+See [`history/`](history/) for the live-verification history behind each of these mechanisms — most
 of them were built once, found wrong by a real `docker compose up` run (not a unit test with a
 hand-seeded `SagaLogEntry`), and fixed.

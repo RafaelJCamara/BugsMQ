@@ -1,5 +1,20 @@
 # Contributing to vSaga
 
+## Prerequisites
+
+- **.NET SDK** matching `dotnet/global.json` (currently `10.0.301`, `rollForward: latestFeature` — an
+  older SDK scaffolds/targets the wrong framework and every `dotnet` command below fails from the
+  start).
+- **Node.js ≥ 22** (`typescript/package.json`'s `engines` field; also what CI's `setup-node` installs).
+- **Docker**, for two things: five `dotnet/tests/*` suites use Testcontainers (RabbitMQ, MassTransit,
+  Wolverine, Brighter, Postgres — see the Test section below), and `typescript`'s own `npm run test`
+  starts a RabbitMQ Testcontainers instance for `transport-rabbitmq`'s suite. Without Docker, both sets
+  of tests fail outright rather than skip.
+
+Every command below uses `&&` to chain steps — that's a parse error in Windows PowerShell 5.1
+(`powershell.exe`). Use PowerShell 7+ (`pwsh`, which supports `&&` the same as bash) or Git Bash/WSL
+instead.
+
 ## Build
 
 ```bash
@@ -11,13 +26,14 @@ Must stay clean with **zero warnings** — `TreatWarningsAsErrors` is on
 Meziantou.Analyzer, and AsyncFixer.
 
 ```bash
-cd typescript && npm install && npm run lint && npm run format:check && npm run typecheck && npm run build
-cd typescript/dashboard-web && npm install && npx ng build
+cd typescript && npm install && npm run lint && npm run format:check && npm run typecheck && npm run build && cd ..
+cd typescript/dashboard-web && npm install && npx ng build && cd ../..
 ```
 
 The first command covers `typescript/packages/*` (the SDK) and `typescript/samples/*` (runnable
 participants), which are one npm workspace. `dashboard-web` is deliberately not a member of it and
-needs its own `npm install` — hence the second line.
+needs its own `npm install` — hence the second line. (Each line ends by returning to the repo root, so
+they're safe to paste as a block or run one at a time.)
 
 `format:check` is separate from `lint` and CI fails on it independently, so running ESLint alone is
 not enough to know a change will pass. `npm run format` fixes what it reports.
@@ -25,9 +41,12 @@ not enough to know a change will pass. `npm run format` fixes what it reports.
 On Windows, `format:check` also flags every file with CRLF endings, which is most of a fresh
 checkout — Prettier defaults to `endOfLine: "lf"` and this repo has no `.gitattributes`. Those are
 working-copy artifacts: Git stores LF, so CI never sees them. To find only what CI will reject,
-check the committed content rather than the working copy:
+check the committed content rather than the working copy (run from the repo root, in a POSIX-ish shell
+— Git Bash or WSL on Windows; substitute `$FILE` with the path you actually want to check, relative to
+`typescript/`):
 
 ```bash
+FILE=packages/protocol/src/index.ts
 git show ":typescript/$FILE" | npx prettier --check --stdin-filepath "$FILE"
 ```
 
@@ -43,8 +62,8 @@ Docker isn't available, say so rather than skipping silently — this repo's own
 five suites were only compiled, never run" as an explicit, carried-forward caveat, not a pass.
 
 ```bash
-cd typescript && npm run test
-cd typescript/dashboard-web && npx ng test --watch=false
+cd typescript && npm run test && cd ..
+cd typescript/dashboard-web && npx ng test --watch=false && cd ../..
 ```
 
 **Live verification**, for anything touching message flow, envelope headers, or timing (a new

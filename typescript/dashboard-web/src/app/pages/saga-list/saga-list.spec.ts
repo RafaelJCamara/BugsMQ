@@ -1,9 +1,9 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { BehaviorSubject, Subject, of, throwError } from 'rxjs';
 import { vi } from 'vitest';
 import { SagaApiService } from '../../services/saga-api.service';
-import { SagaHubService } from '../../services/saga-hub.service';
+import { SagaHubConnectionState, SagaHubService } from '../../services/saga-hub.service';
 import { PagedResult, SagaSummary } from '../../models/saga.model';
 import { SagaList } from './saga-list';
 
@@ -25,7 +25,11 @@ function makeSummary(overrides: Partial<SagaSummary> = {}): SagaSummary {
 
 describe('SagaList', () => {
   let apiMock: { list: ReturnType<typeof vi.fn>; getSagaTypes: ReturnType<typeof vi.fn> };
-  let hubMock: { sagaUpdated$: Subject<SagaSummary>; subscribeToList: ReturnType<typeof vi.fn> };
+  let hubMock: {
+    sagaUpdated$: Subject<SagaSummary>;
+    connectionState$: BehaviorSubject<SagaHubConnectionState>;
+    subscribeToList: ReturnType<typeof vi.fn>;
+  };
 
   function setup(listResult: PagedResult<SagaSummary> = { items: [], page: 1, pageSize: 25, totalCount: 0 }) {
     apiMock = {
@@ -34,6 +38,7 @@ describe('SagaList', () => {
     };
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
       subscribeToList: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -67,7 +72,11 @@ describe('SagaList', () => {
       list: vi.fn().mockReturnValue(throwError(() => new Error('network down'))),
       getSagaTypes: vi.fn().mockReturnValue(of([])),
     };
-    hubMock = { sagaUpdated$: new Subject(), subscribeToList: vi.fn().mockResolvedValue(undefined) };
+    hubMock = {
+      sagaUpdated$: new Subject(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
 
     TestBed.configureTestingModule({
       imports: [SagaList],
@@ -384,5 +393,132 @@ describe('SagaList', () => {
     hubMock.sagaUpdated$.next(completed);
 
     expect(fixture.componentInstance.sagas().map((s) => s.correlationId)).toEqual(['a', 'b', 'c']);
+  });
+
+  // A shared/bookmarked link's page number can be stale (the result set shrank since). Left
+  // uncorrected, this strands the user on an empty page reading e.g. "Page 40 of 3" with no easy way
+  // back to page 1.
+  it('clamps to the last valid page when the current page no longer exists', () => {
+    apiMock = {
+      list: vi.fn().mockReturnValue(of({ items: [], page: 40, pageSize: 25, totalCount: 60 })),
+      getSagaTypes: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [SagaList],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaList);
+    fixture.componentInstance.page.set(40);
+    fixture.detectChanges();
+
+    // totalCount=60 at pageSize=25 -> 3 pages; page 40 is out of range and should self-correct.
+    expect(fixture.componentInstance.page()).toBe(3);
+    expect(apiMock.list).toHaveBeenCalledWith(expect.objectContaining({ page: 3 }));
+  });
+
+  it('reads initial filters, page, and sort from the URL query params on load', () => {
+    apiMock = {
+      // totalCount=100 at pageSize=50 -> exactly 2 pages, so the URL's page=2 is valid and the
+      // page-clamp fix (see the "clamps to the last valid page" test) does not kick in here.
+      list: vi.fn().mockReturnValue(of({ items: [], page: 2, pageSize: 50, totalCount: 100 })),
+      getSagaTypes: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [SagaList],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: {
+              queryParamMap: convertToParamMap({
+                status: 'Failed',
+                sagaType: 'OrderSaga',
+                search: 'abc',
+                page: '2',
+                pageSize: '50',
+                sortBy: 'Status',
+                sortDescending: 'true',
+              }),
+            },
+          },
+        },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaList);
+    fixture.detectChanges();
+
+    const c = fixture.componentInstance;
+    expect(c.status).toBe('Failed');
+    expect(c.sagaType).toBe('OrderSaga');
+    expect(c.search).toBe('abc');
+    expect(c.page()).toBe(2);
+    expect(c.pageSize).toBe(50);
+    expect(c.sortColumn()).toBe('Status');
+    expect(c.sortDirection()).toBe('desc');
+    expect(apiMock.list).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'Failed', sagaType: 'OrderSaga', search: 'abc', page: 2, pageSize: 50 }),
+    );
+  });
+
+  it('ignores an unknown status/kind value from the URL rather than trusting it verbatim', () => {
+    apiMock = {
+      list: vi.fn().mockReturnValue(of({ items: [], page: 1, pageSize: 25, totalCount: 0 })),
+      getSagaTypes: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [SagaList],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: convertToParamMap({ status: 'NotARealStatus' }) } },
+        },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaList);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.status).toBe('');
+  });
+
+  it('writes the active filters back to the URL as query params after a filter change', () => {
+    const fixture = setup();
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    fixture.componentInstance.status = 'Failed';
+    fixture.componentInstance.onFilterChange();
+
+    expect(navigateSpy).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({
+        queryParamsHandling: '',
+        queryParams: expect.objectContaining({ status: 'Failed', page: null }),
+      }),
+    );
   });
 });

@@ -1,5 +1,11 @@
 <a class="back" routerLink="/sagas">&larr; All sagas</a>
 
+@if (connectionState() === 'reconnecting') {
+  <div class="banner--warning">Reconnecting to live updates…</div>
+} @else if (hasEverConnected() && connectionState() === 'disconnected') {
+  <div class="banner--warning">Live updates disconnected.</div>
+}
+
 @if (loading()) {
   <div class="empty">Loading…</div>
 } @else if (error(); as message) {

@@ -85,9 +85,21 @@ public sealed class RabbitMqTransport(
         }
         catch (PublishException ex)
         {
+            // An unroutable publish overwhelmingly means "nothing has called SubscribeAsync for this
+            // message type yet" -- the single most common way a saga upgraded from the in-memory
+            // transport to a real broker hits this on its very first publish. A nack (the other
+            // IsReturn case) is a different, broker-side rejection with no single likely cause, so it
+            // gets no hint.
+            string? detail = null;
+            if (ex.IsReturn)
+            {
+                detail = destinationQueue is not null
+                    ? $"queue '{destinationQueue}' does not exist -- has anything called SubscribeAsync to declare it yet?"
+                    : $"no queue on exchange '{options.ExchangeName}' is bound to route '{routingKeyConvention.GetRoutingKey(messageTypeName)}' -- has any participant or saga called SubscribeAsync for '{messageTypeName}' yet?";
+            }
             logger.LogError(ex, "Publish of {MessageType} for correlation id {CorrelationId} was {Outcome} by the broker",
                 messageTypeName, envelope.CorrelationId, ex.IsReturn ? "returned as unroutable" : "nacked");
-            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, ex.IsReturn, ex);
+            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, ex.IsReturn, detail, ex);
         }
     }
 

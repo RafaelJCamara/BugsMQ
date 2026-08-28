@@ -12,9 +12,34 @@ running the full reference stack (Postgres, RabbitMQ, the dashboard) instead, se
 >
 > **Packing locally:** an untagged checkout has no version for MinVer to derive, so a bare
 > `dotnet pack` fails with `MinVer resolved ...'s version to the untagged fallback 0.0.0`. Pass a
-> version explicitly to pack anyway: `dotnet pack -p:MinVerVersionOverride=0.1.0-local`.
+> version explicitly, and pack every project into one shared folder:
+>
+> ```bash
+> dotnet pack dotnet/VSaga.slnx -p:MinVerVersionOverride=0.1.0-local -c Release -o ./local-nuget-feed
+> ```
+>
+> **Consuming a local pack:** point a `nuget.config` at that folder — next to your consumer's `.csproj`,
+> not vSaga's own — and pass `--prerelease` when adding a package. MinVer's `-local` suffix makes
+> `0.1.0-local` a prerelease version, and `dotnet add package` without `--prerelease` fails with "there
+> are no stable versions available":
+>
+> ```xml
+> <!-- nuget.config -->
+> <configuration>
+>   <packageSources>
+>     <add key="vsaga-local" value="../path/to/local-nuget-feed" />
+>   </packageSources>
+> </configuration>
+> ```
+>
+> ```bash
+> dotnet add package VSaga.Core --prerelease
+> ```
 
 ## Install
+
+> Commands below chain with `&&`, which Windows PowerShell 5.1 (`powershell.exe`) can't parse. Use
+> PowerShell 7+ (`pwsh`) or Git Bash/WSL, or just run each command on its own line.
 
 ```bash
 dotnet new console -n MyFirstSaga && cd MyFirstSaga
@@ -27,7 +52,10 @@ dotnet add package Microsoft.Extensions.Hosting
 
 (Swap `VSaga.Persistence.InMemory`/`VSaga.Transport.InMemory` for `VSaga.Persistence.EFCore` +
 `VSaga.Persistence.EFCore.Postgres` + `VSaga.Transport.RabbitMQ` when you're ready for something that
-survives a restart — see [`persistence.md`](persistence.md) and [`transports/index.md`](transports/index.md).)
+survives a restart — see [`persistence.md`](persistence.md) and [`transports/index.md`](transports/index.md).
+**Before you make that swap**, read the callout at the end of ["Run it"](#run-it) below: this page's own
+saga fails on its very first publish once a real broker is in the loop, for a reason that's obvious only
+after you've hit it once.)
 
 ## Write a saga
 
@@ -140,8 +168,19 @@ Status: Completed, State: Approved
 
 The saga itself logs nothing — reading the snapshot back is what makes the result visible here. In a
 real system you'd observe it the way the rest of these docs do: a participant reacting to
-`OrderApproved`, the [event log](observability.md#the-event-log), or the
+`OrderApproved`, the [event log](observability.md#the-persisted-event-log), or the
 [dashboard](dashboard.md).
+
+> **Upgrading this exact saga to RabbitMQ will fail on its first publish, and that's expected.** This
+> saga `.Publish`es `OrderApproved` with nothing subscribed to it — harmless on the in-memory transport,
+> which only delivers to subscribers that exist, but a real broker is stricter:
+> `VSaga.Transport.RabbitMQ` enables publisher confirms + `mandatory: true`
+> ([`transports/rabbitmq.md`](transports/rabbitmq.md)), so a publish with no bound queue comes back as an
+> **unroutable-publish exception** instead of vanishing, and the saga lands `Failed`. This isn't a bug in
+> the saga or the transport — it's the first time "nothing is listening for this message" stops being
+> silent. Register at least one `SubscribeAsync` for `OrderApproved` (a participant, or another saga's
+> `.When<OrderApproved>()`) before switching this example's transport, and the exception message itself
+> now names the missing subscription as the likely cause.
 
 ## Test it
 

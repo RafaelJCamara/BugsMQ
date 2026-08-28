@@ -159,4 +159,41 @@ describe('SagaMap', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('.error-card')).toBeNull();
   });
+
+  // A saga that fails on its very first outbound publish -- an unroutable-publish exception, thrown
+  // before any edge is ever logged -- has one bare node and nothing else to draw. Without this, the
+  // map tab (the default tab on the detail page) shows nothing indicating failure until the user
+  // presses Play/scrubs there themselves, with nothing on screen to prompt that.
+  function makeBareFailedMap(): SagaMapModel {
+    return {
+      summary: { ...makeMap().summary, currentState: 'AwaitingApproval' },
+      nodes: [{ id: 'OrderApprovalSaga', displayName: 'OrderApprovalSaga', kind: 'Orchestrator', status: 'failed', messagesIn: 1, messagesOut: 0 }],
+      edges: [],
+      events: [
+        { sequenceNumber: 1, edgeId: null, nodeId: null, entryType: 'SagaStarted', messageType: 'SubmitOrder', errorMessage: null, occurredAtUtc: '2026-01-01T00:00:00.000Z' },
+        { sequenceNumber: 2, edgeId: null, nodeId: null, entryType: 'MessageReceived', messageType: 'SubmitOrder', errorMessage: null, occurredAtUtc: '2026-01-01T00:00:00.050Z' },
+        { sequenceNumber: 3, edgeId: null, nodeId: 'OrderApprovalSaga', entryType: 'StepFailed', messageType: 'SubmitOrder', errorMessage: 'unroutable', occurredAtUtc: '2026-01-01T00:00:00.080Z' },
+      ],
+      failureEventIndex: 2,
+    };
+  }
+
+  it('flags failedWithNothingToShow for a saga that failed with no edges ever logged', () => {
+    const fixture = createComponent(makeBareFailedMap());
+
+    expect(fixture.componentInstance.failedWithNothingToShow()).toBe(true);
+  });
+
+  it('renders the error card immediately (no scrubbing needed) for a bare failed map', () => {
+    const fixture = createComponent(makeBareFailedMap());
+
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('.error-card')?.textContent).toContain('unroutable');
+  });
+
+  it('does not flag failedWithNothingToShow for a map with real edges', () => {
+    const fixture = createComponent();
+
+    expect(fixture.componentInstance.failedWithNothingToShow()).toBe(false);
+  });
 });

@@ -68,17 +68,26 @@ async function main(): Promise<void> {
 
   // Without this the two nodes this service owns render as `Unresolved` on the Saga Map -- the
   // .NET participants get the equivalent from AddVSagaTopologyRecording wrapping their transport.
-  const topology = httpTopologyReporter({
-    baseUrl: envOrThrow('DASHBOARD__BASEURL'),
-    apiKey: envOrThrow('DASHBOARD__APIKEY'),
-  });
+  // Genuinely optional, matching every other topology reporter in this SDK: a participant that never
+  // configured DASHBOARD__BASEURL/DASHBOARD__APIKEY still starts and does real work, just with
+  // `Unresolved` map nodes instead of named ones -- a cold or unconfigured dashboard must never be a
+  // reason this process can't come up.
+  const dashboardBaseUrl = process.env['DASHBOARD__BASEURL'];
+  const dashboardApiKey = process.env['DASHBOARD__APIKEY'];
+  const topology =
+    dashboardBaseUrl && dashboardApiKey
+      ? httpTopologyReporter({ baseUrl: dashboardBaseUrl, apiKey: dashboardApiKey })
+      : undefined;
 
   const notifications = createParticipant({
     serviceName: SERVICE_NAME,
     queue: QUEUE_NAME,
     transport,
-    topology,
     logger: consoleLogger,
+    // Spread rather than `topology` directly: exactOptionalPropertyTypes rejects an explicit
+    // `topology: undefined` on an optional property, so the key must be entirely absent, not present
+    // with an undefined value, when topology reporting isn't configured.
+    ...(topology ? { topology } : {}),
   });
 
   // Reacts on its own initiative: nobody sends a "notify the customer" command. It announces what it

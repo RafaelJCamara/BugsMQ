@@ -6,8 +6,8 @@ import { SagaHubService } from './saga-hub.service';
 
 /**
  * A stand-in for signalR.HubConnection: records the server methods invoked on it, exposes the
- * handlers the service registered so a test can push a server-initiated message, and lets each test
- * decide whether start() succeeds and what state the connection reports.
+ * handlers the service registered so a test can push a server-initiated message or lifecycle event,
+ * and lets each test decide whether start() succeeds and what state the connection reports.
  */
 class FakeHubConnection {
   readonly handlers = new Map<string, (...args: unknown[]) => void>();
@@ -17,13 +17,32 @@ class FakeHubConnection {
   state = 'Disconnected';
   startResult: () => Promise<void> = () => Promise.resolve();
 
+  private reconnectingHandlers: Array<(error?: Error) => void> = [];
+  private reconnectedHandlers: Array<(connectionId?: string) => void> = [];
+  private closeHandlers: Array<(error?: Error) => void> = [];
+
   on(methodName: string, handler: (...args: unknown[]) => void): void {
     this.handlers.set(methodName, handler);
   }
 
+  onreconnecting(handler: (error?: Error) => void): void {
+    this.reconnectingHandlers.push(handler);
+  }
+
+  onreconnected(handler: (connectionId?: string) => void): void {
+    this.reconnectedHandlers.push(handler);
+  }
+
+  onclose(handler: (error?: Error) => void): void {
+    this.closeHandlers.push(handler);
+  }
+
   start(): Promise<void> {
     this.startCount += 1;
-    return this.startResult();
+    return this.startResult().then((v) => {
+      this.state = 'Connected';
+      return v;
+    });
   }
 
   invoke(...args: unknown[]): Promise<void> {
@@ -42,12 +61,30 @@ class FakeHubConnection {
     if (!handler) throw new Error(`No handler registered for '${methodName}'.`);
     handler(...args);
   }
+
+  triggerReconnecting(): void {
+    this.state = 'Reconnecting';
+    this.reconnectingHandlers.forEach((h) => h());
+  }
+
+  triggerReconnected(): void {
+    this.state = 'Connected';
+    this.reconnectedHandlers.forEach((h) => h());
+  }
+
+  triggerClose(): void {
+    this.state = 'Disconnected';
+    this.closeHandlers.forEach((h) => h());
+  }
 }
 
-/** What HubConnectionBuilder was asked to build, so the URL and access-token wiring can be asserted. */
-const built: { url?: string; options?: { accessTokenFactory?: () => string }; automaticReconnect: boolean } = {
-  automaticReconnect: false,
-};
+/** What HubConnectionBuilder was asked to build, so the URL, access-token, and retry-policy wiring can
+ *  be asserted. */
+const built: {
+  url?: string;
+  options?: { accessTokenFactory?: () => string };
+  retryPolicy?: { nextRetryDelayInMilliseconds: (ctx: { previousRetryCount: number }) => number | null };
+} = {};
 
 let connection: FakeHubConnection;
 
@@ -59,8 +96,8 @@ vi.mock('@microsoft/signalr', () => ({
       built.options = options;
       return this;
     }
-    withAutomaticReconnect() {
-      built.automaticReconnect = true;
+    withAutomaticReconnect(retryPolicy: (typeof built)['retryPolicy']) {
+      built.retryPolicy = retryPolicy;
       return this;
     }
     build() {
@@ -76,7 +113,7 @@ describe('SagaHubService', () => {
     connection = new FakeHubConnection();
     built.url = undefined;
     built.options = undefined;
-    built.automaticReconnect = false;
+    built.retryPolicy = undefined;
 
     TestBed.configureTestingModule({});
     service = TestBed.inject(SagaHubService);
@@ -89,12 +126,17 @@ describe('SagaHubService', () => {
     expect(built.options?.accessTokenFactory?.()).toBe(DASHBOARD_API_KEY);
   });
 
-  // Without this the browser drops to polling the REST API after any hub blip, and the live
-  // updates the dashboard is built around silently stop.
-  it('enables automatic reconnect', async () => {
+  // A dashboard tab is meant to be left open for hours; giving up on reconnecting after ~30s of
+  // backoff (signalR's array-based policy default) would silently strand it on the first API blip.
+  it('retries indefinitely: the retry policy never returns null/undefined, even after many attempts', async () => {
     await service.subscribeToList();
 
-    expect(built.automaticReconnect).toBe(true);
+    expect(built.retryPolicy).toBeDefined();
+    for (const previousRetryCount of [0, 1, 2, 3, 4, 10, 100, 100_000]) {
+      const delay = built.retryPolicy!.nextRetryDelayInMilliseconds({ previousRetryCount });
+      expect(delay).not.toBeNull();
+      expect(typeof delay).toBe('number');
+    }
   });
 
   it('subscribeToList() starts the connection and invokes SubscribeToList', async () => {
@@ -121,19 +163,61 @@ describe('SagaHubService', () => {
     expect(connection.invocations).toHaveLength(3);
   });
 
-  // The failed start() promise is cached too, so without clearing it a single failure -- the API not
-  // up yet when the tab loads -- would leave the dashboard permanently on the stale first error.
-  it('clears the cached start promise on failure, so a later subscription retries', async () => {
-    connection.startResult = () => Promise.reject(new Error('hub is down'));
+  // signalR's own automatic-reconnect machinery only ever engages for a connection that reached
+  // Connected at least once -- a failed *first* start() gets no retry from it at all. Without this,
+  // a tab opened a beat before the API's hub endpoint is ready would fail once and then sit
+  // disconnected forever, since nothing else re-invokes ensureStarted() for an already-resolved
+  // (never-rejecting) startPromise.
+  it('retries the initial connect indefinitely instead of rejecting on the first failure', async () => {
+    let calls = 0;
+    connection.startResult = () => (calls++ === 0 ? Promise.reject(new Error('hub is down')) : Promise.resolve());
 
-    await expect(service.subscribeToList()).rejects.toThrow('hub is down');
-    expect(connection.startCount).toBe(1);
-
-    connection.startResult = () => Promise.resolve();
     await service.subscribeToList();
 
     expect(connection.startCount).toBe(2);
     expect(connection.invocations).toEqual([['SubscribeToList']]);
+  });
+
+  it('connectionState$ reflects reconnecting while retrying a failed initial connect', async () => {
+    let calls = 0;
+    connection.startResult = () => (calls++ === 0 ? Promise.reject(new Error('hub is down')) : Promise.resolve());
+    const seen: string[] = [];
+    service.connectionState$.subscribe((s) => seen.push(s));
+
+    await service.subscribeToList();
+
+    expect(seen).toEqual(['disconnected', 'reconnecting', 'connected']);
+  });
+
+  // Guards against the indefinite-retry change above making a mid-reconnect mount far more reachable
+  // than signalR's old give-up-after-30s default ever made it: invoke() on anything but a live
+  // Connected connection rejects, and every caller here is fire-and-forget, so an unguarded invoke
+  // would surface as an unhandled rejection.
+  it('subscribeToList() does not invoke while reconnecting, but the list group is rejoined once reconnected', async () => {
+    await service.subscribeToList();
+    connection.triggerReconnecting();
+    connection.invocations.length = 0;
+
+    await service.subscribeToList();
+    expect(connection.invocations).toEqual([]);
+
+    connection.triggerReconnected();
+    await Promise.resolve();
+    expect(connection.invocations).toContainEqual(['SubscribeToList']);
+  });
+
+  it('subscribeToSaga() does not invoke while reconnecting, but the saga group is rejoined once reconnected', async () => {
+    await service.subscribeToList();
+    connection.triggerReconnecting();
+    connection.invocations.length = 0;
+
+    await service.subscribeToSaga('OrderSaga', 'abc-123');
+    expect(connection.invocations).toEqual([]);
+
+    connection.triggerReconnected();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connection.invocations).toContainEqual(['SubscribeToSaga', 'OrderSaga', 'abc-123']);
   });
 
   it('pushes a SagaUpdated message onto sagaUpdated$', async () => {
@@ -184,6 +268,78 @@ describe('SagaHubService', () => {
   it('unsubscribeFromSaga() is a no-op before any connection exists', async () => {
     await expect(service.unsubscribeFromSaga('OrderSaga', 'abc-123')).resolves.toBeUndefined();
     expect(connection.startCount).toBe(0);
+  });
+
+  it('connectionState$ starts disconnected, then reaches connected once start() resolves', async () => {
+    const seen: string[] = [];
+    service.connectionState$.subscribe((s) => seen.push(s));
+
+    await service.subscribeToList();
+
+    expect(seen).toEqual(['disconnected', 'connected']);
+  });
+
+  it('connectionState$ reflects onreconnecting/onreconnected around a blip', async () => {
+    await service.subscribeToList();
+
+    const seen: string[] = [];
+    service.connectionState$.subscribe((s) => seen.push(s));
+
+    connection.triggerReconnecting();
+    connection.triggerReconnected();
+
+    expect(seen).toEqual(['connected', 'reconnecting', 'connected']);
+  });
+
+  it('connectionState$ reflects onclose', async () => {
+    await service.subscribeToList();
+
+    const seen: string[] = [];
+    service.connectionState$.subscribe((s) => seen.push(s));
+
+    connection.triggerClose();
+
+    expect(seen).toEqual(['connected', 'disconnected']);
+  });
+
+  // The whole point of tracking subscriptions: hub groups are server-side state, lost on every
+  // reconnect. Without this, a reconnected tab looks alive but silently stops receiving updates.
+  it('onreconnected re-subscribes to the list group and every active saga group', async () => {
+    await service.subscribeToList();
+    await service.subscribeToSaga('OrderSaga', 'abc-123');
+    await service.subscribeToSaga('InvoiceSaga', 'def-456');
+    connection.invocations.length = 0;
+
+    connection.triggerReconnected();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connection.invocations).toContainEqual(['SubscribeToList']);
+    expect(connection.invocations).toContainEqual(['SubscribeToSaga', 'OrderSaga', 'abc-123']);
+    expect(connection.invocations).toContainEqual(['SubscribeToSaga', 'InvoiceSaga', 'def-456']);
+    expect(connection.invocations).toHaveLength(3);
+  });
+
+  it('onreconnected does not re-subscribe to the list group if it was never subscribed', async () => {
+    await service.subscribeToSaga('OrderSaga', 'abc-123');
+    connection.invocations.length = 0;
+
+    connection.triggerReconnected();
+    await Promise.resolve();
+
+    expect(connection.invocations).toEqual([['SubscribeToSaga', 'OrderSaga', 'abc-123']]);
+  });
+
+  it('onreconnected does not re-subscribe to a saga that was since unsubscribed', async () => {
+    await service.subscribeToSaga('OrderSaga', 'abc-123');
+    connection.state = 'Connected';
+    await service.unsubscribeFromSaga('OrderSaga', 'abc-123');
+    connection.invocations.length = 0;
+
+    connection.triggerReconnected();
+    await Promise.resolve();
+
+    expect(connection.invocations).toEqual([]);
   });
 
   it('ngOnDestroy() stops the connection', async () => {

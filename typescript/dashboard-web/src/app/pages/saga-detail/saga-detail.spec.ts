@@ -1,9 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, ParamMap, convertToParamMap, provideRouter } from '@angular/router';
-import { Observable, Subject, of, throwError } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { vi } from 'vitest';
 import { SagaApiService } from '../../services/saga-api.service';
-import { SagaHubService } from '../../services/saga-hub.service';
+import { SagaHubConnectionState, SagaHubService } from '../../services/saga-hub.service';
 import { SagaDetail as SagaDetailModel, SagaLogEntry, SagaMap as SagaMapModel, SagaStatus, SagaSummary } from '../../models/saga.model';
 import { SagaDetail } from './saga-detail';
 
@@ -68,6 +68,7 @@ describe('SagaDetail', () => {
   let hubMock: {
     sagaUpdated$: Subject<SagaSummary>;
     timelineEntryAdded$: Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>;
+    connectionState$: BehaviorSubject<SagaHubConnectionState>;
     subscribeToSaga: ReturnType<typeof vi.fn>;
     unsubscribeFromSaga: ReturnType<typeof vi.fn>;
   };
@@ -95,6 +96,7 @@ describe('SagaDetail', () => {
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
       timelineEntryAdded$: new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
       subscribeToSaga: vi.fn().mockResolvedValue(undefined),
       unsubscribeFromSaga: vi.fn().mockResolvedValue(undefined),
     };
@@ -173,6 +175,7 @@ describe('SagaDetail', () => {
     hubMock = {
       sagaUpdated$: new Subject<SagaSummary>(),
       timelineEntryAdded$: new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
       subscribeToSaga: vi.fn().mockResolvedValue(undefined),
       unsubscribeFromSaga: vi.fn().mockResolvedValue(undefined),
     };

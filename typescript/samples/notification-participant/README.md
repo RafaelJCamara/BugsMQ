@@ -49,17 +49,17 @@ Three things carry the compatibility, all of them in `@vsaga/protocol`:
 
 ## Configuration
 
-| Variable                     | Meaning                                            |
-| ---------------------------- | -------------------------------------------------- |
-| `RABBITMQ__CONNECTIONSTRING` | AMQP URL, e.g. `amqp://guest:guest@rabbitmq:5672/` |
-| `DASHBOARD__BASEURL`         | Dashboard API base URL, for topology registration  |
-| `DASHBOARD__APIKEY`          | Dashboard API key                                  |
-
-All three are required and the process exits at startup naming any that are missing.
+| Variable                     | Required? | Meaning                                                                                            |
+| ---------------------------- | --------- | -------------------------------------------------------------------------------------------------- |
+| `RABBITMQ__CONNECTIONSTRING` | Yes       | AMQP URL, e.g. `amqp://guest:guest@rabbitmq:5672/`. Process exits at startup naming it if missing. |
+| `DASHBOARD__BASEURL`         | No        | Dashboard API base URL, for topology registration.                                                 |
+| `DASHBOARD__APIKEY`          | No        | Dashboard API key.                                                                                 |
 
 Topology registration goes over the Dashboard API (`POST /api/topology/registrations`) rather than
-straight to Postgres, so this service needs no database credentials and no copy of the schema.
-Skip it and the participant still runs — its nodes just render as `Unresolved` on the Saga Map.
+straight to Postgres, so this service needs no database credentials and no copy of the schema. Set
+**both** `DASHBOARD__BASEURL` and `DASHBOARD__APIKEY` to enable it, or leave either unset to skip it —
+the participant still runs and does real work either way; its nodes just render as `Unresolved` on the
+Saga Map without them.
 
 ## Running it outside Docker
 
@@ -67,11 +67,14 @@ Skip it and the participant still runs — its nodes just render as `Unresolved`
 cd typescript
 npm install
 npm run build
-RABBITMQ__CONNECTIONSTRING='amqp://guest:guest@localhost:5672/' \
-DASHBOARD__BASEURL='http://localhost:5080' \
-DASHBOARD__APIKEY='dev-local-only-change-me' \
+export RABBITMQ__CONNECTIONSTRING='amqp://guest:guest@localhost:5672/'
+export DASHBOARD__BASEURL='http://localhost:5080'
+export DASHBOARD__APIKEY='dev-local-only-change-me'
 npm start --workspace @vsaga/sample-notification-participant
 ```
+
+(bash/Git Bash/WSL syntax above — in PowerShell, use `$env:RABBITMQ__CONNECTIONSTRING = '...'` etc.
+instead of `export`.)
 
 Start the rest of the stack with `docker compose up -d --build` first, and set
 `Participants__NotificationInProcess=false` on `order-processing` so the two don't both consume the

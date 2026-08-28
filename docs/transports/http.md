@@ -32,7 +32,8 @@ gate against itself: if a saga host's own dispatch is still holding its correlat
 an outbound call's HTTP response, and that call's own reply routes back to the same saga host under the
 same correlation id, the inbound reply cannot acquire the very gate the outbound call is blocked
 behind — a genuine cross-process circular wait, breakable only by a timeout. Fixed by bounding the
-inline dispatch path's own gate-acquisition wait (`InlineGateAcquireTimeout`, 5s default) and falling
+inline dispatch path's own gate-acquisition wait (`InlineGateAcquireTimeout`, a fixed 5s — not exposed
+on `HttpTransportOptions`, so it isn't independently tunable today) and falling
 back — on timeout only — to the same deferred-to-a-background-pump path a captured reply already uses:
 a `202` now, dispatched once the gate frees, lossless rather than a long block.
 

@@ -57,7 +57,7 @@ public interface ISagaContext<out TState> where TState : SagaState
     /// out to <b>every</b> saga type subscribed to <typeparamref name="TMessage"/> that tracks an
     /// instance under the parent's correlation id, not only the one that called
     /// <see cref="StartChildAsync{TMessage}"/> — worth knowing when several saga types share one
-    /// correlation id (see the "Saga identity" section of the README).
+    /// correlation id (see docs/concepts.md's "Saga instances and identity" section).
     /// </para>
     /// <para>
     /// Carries the child's actual result, which is exactly what an engine-published completion event

@@ -15,17 +15,35 @@ rest of the engine resolves per-unit-of-work services) plus EF-backed implementa
 store contracts. Pass the actual provider hookup (`UseNpgsql`, `UseSqlServer`, `UseSqlite`, ...)
 yourself via `configureDbContext`.
 
+**Postgres-specific migrations live in a separate project**, `VSaga.Persistence.EFCore.Postgres`, kept
+apart from `VSaga.Persistence.EFCore` specifically so the latter stays provider-agnostic. Because of
+that split, `UseNpgsql` alone is not enough — EF Core looks for migrations in the `DbContext`'s own
+assembly by default, which is `VSaga.Persistence.EFCore` and has none, so `MigrateAsync()` silently logs
+"no migrations were applied" and every table is missing. Point `MigrationsAssembly` at the Postgres
+project instead:
+
 ```csharp
-services.AddVSagaEfCore(db => db.UseNpgsql(connectionString));
+services.AddVSagaEfCore(db => db.UseNpgsql(connectionString,
+    npgsql => npgsql.MigrationsAssembly("VSaga.Persistence.EFCore.Postgres")));
 ```
 
-**Postgres-specific migrations live in a separate project**, `VSaga.Persistence.EFCore.Postgres`, kept
-apart from `VSaga.Persistence.EFCore` specifically so the latter stays provider-agnostic. Apply them
-with `db.Database.MigrateAsync()` at startup — not `EnsureCreatedAsync()`, which does not apply
-migrations and leaves a database schema untracked by them. See `dotnet/src/VSaga.Persistence.EFCore.Postgres/Migrations/`
-for the migration history: identity scoping to `(SagaType, CorrelationId)`, the Saga Map's service-map
-fields, sub-saga parent-linkage columns, the outbox table (plus its own follow-up index migration), and
-the business-key column with its partial unique index.
+Apply them with `db.Database.MigrateAsync()` at startup — not `EnsureCreatedAsync()`, which does not
+apply migrations and leaves a database schema untracked by them:
+
+```csharp
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<VSagaDbContext>();
+    await db.Database.MigrateAsync();
+}
+```
+
+(This is exactly what `VSaga.Dashboard.Api`'s own `Program.cs` does — see there for the non-fatal
+try/catch around it, useful if the app might start before Postgres is reachable.) See
+`dotnet/src/VSaga.Persistence.EFCore.Postgres/Migrations/` for the migration history: identity scoping
+to `(SagaType, CorrelationId)`, the Saga Map's service-map fields, sub-saga parent-linkage columns, the
+outbox table (plus its own follow-up index migration), and the business-key column with its partial
+unique index.
 
 **Concurrency-safe timeout claiming.** `EfCoreSagaTimeoutStore.ClaimDueAsync` uses an atomic
 `UPDATE ... WHERE ... FOR UPDATE SKIP LOCKED ... RETURNING` on Postgres, so multiple

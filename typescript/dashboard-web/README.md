@@ -31,7 +31,8 @@ anything for this app.
 | --- | --- |
 | `npx ng serve` | Dev server with hot reload on http://localhost:4200 |
 | `npx ng build` | Production bundle into `dist/` |
-| `npx ng test` | Unit tests (vitest), the same command CI runs |
+| `npx ng test` | Unit tests (vitest), interactive watch mode |
+| `npx ng test --watch=false` | Same, single run — what CI actually runs |
 
 ## How it reaches the API
 

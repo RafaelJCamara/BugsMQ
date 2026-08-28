@@ -137,4 +137,19 @@ describe('httpTopologyReporter', () => {
     const reporter = httpTopologyReporter({ baseUrl: server.baseUrl, apiKey: 'k', timeoutMs: 50 });
     await expect(reporter.report([])).rejects.toThrow();
   });
+
+  // A scheme-less baseUrl (e.g. DASHBOARD__BASEURL='localhost:5080' instead of 'http://localhost:5080',
+  // a plausible operator typo) makes `new URL(...)` throw synchronously. httpTopologyReporter() itself
+  // must not throw for this -- only report() may, since that's the call every caller already wraps in
+  // a best-effort try/catch (participant.ts's start()). A throw from the constructor instead crashes
+  // the whole process over a topology-config mistake, contradicting "a cold dashboard must never stop
+  // a participant from starting".
+  it('does not throw when constructed with a malformed baseUrl', () => {
+    expect(() => httpTopologyReporter({ baseUrl: 'not-a-valid-url', apiKey: 'k' })).not.toThrow();
+  });
+
+  it('rejects report() rather than throwing from the constructor when baseUrl is malformed', async () => {
+    const reporter = httpTopologyReporter({ baseUrl: 'not-a-valid-url', apiKey: 'k' });
+    await expect(reporter.report([])).rejects.toThrow();
+  });
 });

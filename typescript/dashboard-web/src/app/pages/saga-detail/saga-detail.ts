@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { SagaApiService } from '../../services/saga-api.service';
-import { SagaHubService } from '../../services/saga-hub.service';
+import { SagaHubConnectionState, SagaHubService } from '../../services/saga-hub.service';
 import { SagaDetail as SagaDetailModel, SagaLogEntry, SagaMap as SagaMapModel, SagaSummary } from '../../models/saga.model';
 import { KindBadge } from '../../components/kind-badge/kind-badge';
 import { StatusBadge } from '../../components/status-badge/status-badge';
@@ -35,6 +35,8 @@ export class SagaDetail implements OnInit, OnDestroy {
   readonly retryMessage = signal<string | null>(null);
   /** Retry re-drives a real saga against real participants, so the button asks before it fires. */
   readonly confirmingRetry = signal(false);
+  readonly connectionState = signal<SagaHubConnectionState>('disconnected');
+  readonly hasEverConnected = signal(false);
 
   private subs: Subscription[] = [];
   /** Whether we've ever joined a hub group yet — guards the unsubscribe-previous-saga step below,
@@ -62,8 +64,16 @@ export class SagaDetail implements OnInit, OnDestroy {
         this.correlationId = params.get('id') ?? '';
         this.load();
 
+        // A malformed id (not a real saga, or a stray URL segment) still gets the REST 404 above --
+        // "Could not load this saga". SagaHub.SubscribeToSaga parses its own correlationId argument
+        // leniently server-side (see SagaHub.cs), so it's safe to call unconditionally here too: a
+        // non-Guid id just joins no group instead of failing the RPC.
         void this.hub.subscribeToSaga(this.sagaType, this.correlationId);
         this.hasSubscribedToHub = true;
+      }),
+      this.hub.connectionState$.subscribe((s) => {
+        this.connectionState.set(s);
+        if (s === 'connected') this.hasEverConnected.set(true);
       }),
       this.hub.sagaUpdated$.subscribe((summary) => {
         // Both halves must match: the list group pushes updates for every saga, and another saga

@@ -23,11 +23,17 @@
     type="search"
     placeholder="Search by type or correlation id…"
     [(ngModel)]="search"
-    (keyup.enter)="onFilterChange()"
+    (ngModelChange)="onSearchInput()"
   />
 
   <button type="button" (click)="refresh()">Refresh</button>
 </div>
+
+@if (connectionState() === 'reconnecting') {
+  <div class="banner banner--warning">Reconnecting to live updates…</div>
+} @else if (hasEverConnected() && connectionState() === 'disconnected') {
+  <div class="banner banner--warning">Live updates disconnected. <button type="button" (click)="refresh()">Refresh</button></div>
+}
 
 @if (error(); as message) {
   <div class="banner banner--error">{{ message }}</div>

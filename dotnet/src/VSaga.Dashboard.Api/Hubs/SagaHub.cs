@@ -29,7 +29,19 @@ public sealed class SagaHub : Hub<ISagaHubClient>
 
     public Task UnsubscribeFromList() => Groups.RemoveFromGroupAsync(Context.ConnectionId, ListGroup);
 
-    public Task SubscribeToSaga(string sagaType, Guid correlationId) => Groups.AddToGroupAsync(Context.ConnectionId, GroupForSaga(sagaType, correlationId));
+    // correlationId is a string, not a Guid, deliberately: SignalR's default model binder rejects a
+    // non-Guid-shaped argument by failing the whole hub invocation before this method body ever runs,
+    // which surfaces client-side as "Failed to invoke 'SubscribeToSaga' due to an error on the
+    // server" -- needless server-side noise for what's usually just a stale or hand-edited detail-page
+    // URL. Parsing it ourselves lets that case join no group instead, matching how the REST endpoint
+    // for the same malformed id already degrades (a clean 404, not a crash).
+    public Task SubscribeToSaga(string sagaType, string correlationId) =>
+        Guid.TryParse(correlationId, out var parsed)
+            ? Groups.AddToGroupAsync(Context.ConnectionId, GroupForSaga(sagaType, parsed))
+            : Task.CompletedTask;
 
-    public Task UnsubscribeFromSaga(string sagaType, Guid correlationId) => Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupForSaga(sagaType, correlationId));
+    public Task UnsubscribeFromSaga(string sagaType, string correlationId) =>
+        Guid.TryParse(correlationId, out var parsed)
+            ? Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupForSaga(sagaType, parsed))
+            : Task.CompletedTask;
 }

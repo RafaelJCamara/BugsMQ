@@ -114,5 +114,7 @@ public sealed class RabbitMqTransportTests : IAsyncLifetime
             _transport.PublishAsync(new PingMessage("nobody's listening"), MessageEnvelope.New(Guid.NewGuid())));
 
         Assert.True(ex.IsUnroutable);
+        // The likely-cause hint that closes the "docs never warn about this" field-test finding.
+        Assert.Contains("SubscribeAsync", ex.Message, StringComparison.Ordinal);
     }
 }
