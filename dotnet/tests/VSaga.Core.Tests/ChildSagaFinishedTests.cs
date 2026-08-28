@@ -88,6 +88,30 @@ public sealed class ChildSagaFinishedTests : IAsyncDisposable
         Assert.Equal(SagaStatus.Failed, childState.Status);
     }
 
+    /// <summary>
+    /// production-readiness.md §4.3's second publish surface: the engine's own ChildSagaFinished bypasses
+    /// SagaContext entirely, so it needs its own outbox row or a crash between the child's failure
+    /// committing and this publish would strand the parent forever. The row is staged before the persist
+    /// that records Failed and marked Dispatched by the inline send, so a healthy run leaves nothing for
+    /// the recovery poller — asserted by claiming with a cutoff far in the future, which would return the
+    /// row if it were still Pending.
+    /// </summary>
+    [Fact]
+    public async Task ChildSagaFinished_IsBackedByAnOutboxRow_MarkedDispatchedByTheInlineSend()
+    {
+        var parentId = Guid.NewGuid();
+        await _transport.PublishAsync(new BeginSafeguardedJob("JOB-OUTBOX"), MessageEnvelope.New(parentId));
+        var child = Assert.Single(await _reader.FindChildrenAsync(nameof(TestChildSafetyNetParentSaga), parentId));
+        await _transport.PublishAsync(new TriggerFailure("JOB-OUTBOX"), MessageEnvelope.New(child.CorrelationId));
+
+        var childTimeline = await _log.GetTimelineAsync(nameof(TestRiskyChildSaga), child.CorrelationId);
+        var finished = Assert.Single(childTimeline, e => e.EntryType == SagaEntryType.ChildSagaFinished);
+
+        var outbox = _provider.GetRequiredService<ISagaOutboxStore>();
+        var stillPending = await outbox.ClaimPendingAsync(DateTimeOffset.UtcNow.AddYears(1), batchSize: 100);
+        Assert.DoesNotContain(stillPending, m => string.Equals(m.MessageId, finished.MessageId, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task ChildSagaFinished_IsLoggedOnTheChildsOwnTimeline_DistinctFromMessagePublished()
     {

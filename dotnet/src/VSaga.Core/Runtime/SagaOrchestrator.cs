@@ -226,32 +226,48 @@ public sealed class SagaOrchestrator<TState>(
             await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutScheduled, toState: outcome.ToState), cancellationToken);
         }
 
-        // §4.1 step 2's outbox rows, staged so the persist below commits them with the snapshot -- or,
-        // if it loses its race, leaves them uncommitted for the discard path to drop.
-        await EnqueueOutboxRowsAsync(timeout.CorrelationId, context, cancellationToken);
+        await CommitAndDispatchTimeoutAsync(state, timeout, outcome, context, cancellationToken);
+    }
 
-        // The claim above only closes the race up to this point — definition.HandleTimeoutAsync just
-        // ran real Compensate()/Publish() I/O (and any step-level RetryPolicy delays), which is real
-        // wall-clock time a second concurrent write could land in. If that happens, this persist loses
-        // the same optimistic-concurrency check, but unlike the claim, the side effects above have
-        // already gone out — they can't be un-published. Logging this case distinctly (rather than
-        // letting it propagate to the dispatcher's generic catch-and-log) at least makes that
-        // distinction visible instead of indistinguishably silent.
+    /// <summary>
+    /// The stage/persist/dispatch tail of <see cref="HandleTimeoutAsync"/> — split out to stay under the
+    /// analyzer's method-length cap, like <see cref="RecordTimeoutOutcomeAsync"/>.
+    /// </summary>
+    private async Task CommitAndDispatchTimeoutAsync(TState state, SagaTimeout timeout, SagaStepOutcome outcome,
+        SagaContext<TState> context, CancellationToken cancellationToken)
+    {
+        // §4.1 step 2's outbox rows, staged so the persist below commits them with the snapshot -- or,
+        // if it loses its race, leaves them uncommitted for the discard path to drop. A terminal
+        // timeout's ChildSagaFinished stages in the same breath and for the same reason (§4.3's second
+        // publish surface): it is justified by precisely the transition this persist is about to record.
+        await EnqueueOutboxRowsAsync(timeout.CorrelationId, context, cancellationToken);
+        var stagedChildFinished = outcome.FinalStatus is { } terminalStatus
+            ? await StageChildSagaFinishedAsync(state, terminalStatus, causationMessageId: null, cancellationToken)
+            : null;
+
+        // HandleTimeoutAsync's up-front claim only closes the race up to this point —
+        // definition.HandleTimeoutAsync just ran real Compensate()/Publish() I/O (and any step-level
+        // RetryPolicy delays), which is real wall-clock time a second concurrent write could land in. If
+        // that happens, this persist loses the same optimistic-concurrency check, but unlike the claim,
+        // those side effects have already gone out — they can't be un-published. Logging this case
+        // distinctly (rather than letting it propagate to the dispatcher's generic catch-and-log) at
+        // least makes that distinction visible instead of indistinguishably silent.
         if (!await TryPersistOrLogRaceLossAsync(state, timeout, sideEffectsAlreadyRan: true, cancellationToken))
         {
+            await DiscardStagedChildSagaFinishedAsync(state, stagedChildFinished, timeout.ForState, cancellationToken);
             await DiscardDeferredPublishesAsync(timeout.CorrelationId, context, timeout.ForState, cancellationToken);
             return;
         }
 
         await DrainDeferredPublishesAsync(timeout.CorrelationId, context, cancellationToken);
-        await RecordTimeoutOutcomeAsync(state, outcome, cancellationToken);
+        await RecordTimeoutOutcomeAsync(state, outcome, stagedChildFinished, cancellationToken);
     }
 
     /// <summary>
     /// Diagnostics/notification/Slice-2b-safety-net bookkeeping once a timeout's own persist has
     /// committed — split out of HandleTimeoutAsync to stay under the analyzer's method-length cap.
     /// </summary>
-    private async Task RecordTimeoutOutcomeAsync(TState state, SagaStepOutcome outcome, CancellationToken cancellationToken)
+    private async Task RecordTimeoutOutcomeAsync(TState state, SagaStepOutcome outcome, StagedChildSagaFinished? stagedChildFinished, CancellationToken cancellationToken)
     {
         if (outcome.FinalStatus == SagaStatus.Failed)
             VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
@@ -263,9 +279,8 @@ public sealed class SagaOrchestrator<TState>(
         // A timeout that goes terminal is one of the two structural gaps ctx.NotifyParentAsync cannot
         // reach on its own — the timeout step itself can technically still call NotifyParentAsync (this
         // does not suppress that), but nothing requires it to, so the engine reports on the child's
-        // behalf regardless.
-        if (outcome.FinalStatus is { } finalStatus)
-            await PublishChildSagaFinishedAsync(state, finalStatus, causationMessageId: null, cancellationToken);
+        // behalf regardless. Staged before the caller's persist; this only sends it.
+        await PublishChildSagaFinishedAsync(state, stagedChildFinished, cancellationToken);
     }
 
     /// <summary>
@@ -437,6 +452,13 @@ public sealed class SagaOrchestrator<TState>(
             payloadJson: payloadJson, errorMessage: ex.Message,
             traceId: activity?.TraceId.ToString(), spanId: activity?.SpanId.ToString()), cancellationToken);
 
+        // Staged before the persist, like every other outbox row, so the row recording "this saga
+        // finished Failed" commits with the snapshot that says so. If this persist throws, the row stays
+        // uncommitted and the message is never announced -- and on the redelivery-exhausted path, where
+        // RecordDeliveryExhaustedAsync's own append does flush it, that path marks the saga Failed too,
+        // so the row it commits still matches the outcome that was actually recorded.
+        var stagedChildFinished = await StageChildSagaFinishedAsync(state, SagaStatus.Failed, messageId, cancellationToken);
+
         await PersistAsync(state, isNew, expectedVersion, cancellationToken);
         VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
@@ -451,7 +473,7 @@ public sealed class SagaOrchestrator<TState>(
         // An unhandled exception is the other structural gap NotifyParentAsync cannot reach: the step
         // that threw never ran to a point where the child's own code could report back. Always terminal
         // here (state.Status is unconditionally Failed above), unlike the timeout path.
-        await PublishChildSagaFinishedAsync(state, SagaStatus.Failed, messageId, cancellationToken);
+        await PublishChildSagaFinishedAsync(state, stagedChildFinished, cancellationToken);
     }
 
     private async Task HandleStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
@@ -567,6 +589,23 @@ public sealed class SagaOrchestrator<TState>(
     /// and swallowed, never thrown) rather than inventing a second one -- the only difference from a
     /// drain is that these are never sent at all.
     /// </summary>
+    /// <summary>
+    /// The <see cref="DiscardDeferredPublishesAsync"/> counterpart for the engine's own staged
+    /// ChildSagaFinished row: the persist that would have made this saga terminal lost its race, so the
+    /// saga is not in fact finished and announcing otherwise would be a lie the parent acts on.
+    /// </summary>
+    private async Task DiscardStagedChildSagaFinishedAsync(TState state, StagedChildSagaFinished? staged, string forState, CancellationToken cancellationToken)
+    {
+        if (staged is not { } pending)
+            return;
+
+        await outboxStore.DiscardPendingAsync([pending.Envelope.MessageId], cancellationToken);
+
+        logger.LogWarning(
+            "Discarding the engine's ChildSagaFinished for saga {SagaType} correlation {CorrelationId} in state {State}: its timeout lost the persist race, so this saga never actually reached a terminal status",
+            SagaType, state.CorrelationId, forState);
+    }
+
     private async Task DiscardDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, string forState, CancellationToken cancellationToken)
     {
         // Before the LogAsync calls below, not after: those append to the event log through the same
@@ -628,19 +667,47 @@ public sealed class SagaOrchestrator<TState>(
     /// publish.
     /// </para>
     /// </summary>
-    private async Task PublishChildSagaFinishedAsync(TState state, SagaStatus status, string? causationMessageId, CancellationToken cancellationToken)
+    private async Task<StagedChildSagaFinished?> StageChildSagaFinishedAsync(TState state, SagaStatus status, string? causationMessageId, CancellationToken cancellationToken)
     {
         if (state.ParentCorrelationId is not { } parentCorrelationId)
-            return;
+            return null;
 
         var message = new ChildSagaFinished(state.CorrelationId, SagaType, status);
         var envelope = MessageEnvelope.From(SagaType, parentCorrelationId, causationMessageId);
-        await transport.PublishAsync(message, envelope, cancellationToken);
+
+        await outboxStore.EnqueueAsync(SagaType, state.CorrelationId, envelope.MessageId, nameof(ChildSagaFinished),
+            JsonSerializer.SerializeToUtf8Bytes(message), destination: null, envelope.Headers!,
+            timeProvider.GetUtcNow(), cancellationToken);
+
+        return new StagedChildSagaFinished(message, envelope, causationMessageId);
+    }
+
+    /// <summary>
+    /// Sends what <see cref="StageChildSagaFinishedAsync"/> staged, once the persist that made this saga
+    /// terminal has committed its outbox row along with the snapshot. Typed <c>transport.PublishAsync</c>,
+    /// not the raw path, for the same §4.1 reason the deferred drain is typed: an in-memory subscriber
+    /// asserting on <c>PublishedMessage.Message</c> would see null through <c>PublishRawAsync</c>.
+    /// </summary>
+    private async Task PublishChildSagaFinishedAsync(TState state, StagedChildSagaFinished? staged, CancellationToken cancellationToken)
+    {
+        if (staged is not { } pending)
+            return;
+
+        await transport.PublishAsync(pending.Message, pending.Envelope, cancellationToken);
+        await outboxStore.MarkDispatchedAsync(pending.Envelope.MessageId, cancellationToken);
 
         await LogAsync(SagaLogEntry.Create(state.CorrelationId, SagaType, SagaEntryType.ChildSagaFinished,
-            messageType: nameof(ChildSagaFinished), messageId: envelope.MessageId,
-            sourceService: SagaType, causationId: causationMessageId), cancellationToken);
+            messageType: nameof(ChildSagaFinished), messageId: pending.Envelope.MessageId,
+            sourceService: SagaType, causationId: pending.CausationMessageId), cancellationToken);
     }
+
+    /// <summary>
+    /// The engine's own ChildSagaFinished publish, staged into the outbox before the persist that
+    /// justifies it and awaiting its inline send afterwards — the second publish surface §4.3 names.
+    /// Held as a value rather than re-derived after the persist so the row and the send describe one
+    /// message identity, exactly as DeferredPublish does for ctx.PublishAfterCommitAsync.
+    /// </summary>
+    private readonly record struct StagedChildSagaFinished(ChildSagaFinished Message, MessageEnvelope Envelope, string? CausationMessageId);
 
     private async Task LogAsync(SagaLogEntry entry, CancellationToken cancellationToken)
     {
