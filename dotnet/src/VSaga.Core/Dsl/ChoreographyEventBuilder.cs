@@ -37,9 +37,14 @@ public sealed class ChoreographyEventBuilder<TState, TMessage>
     }
 
     /// <summary>
-    /// Extracts a business key from the observed message and stores it on the saga state, for dashboard
-    /// search/traceability. Correlation of subsequent events to this saga instance is done by the
-    /// transport-stamped correlation id, not by this business key.
+    /// Extracts a business key from the observed message and assigns it onto the saga state. For a saga
+    /// that has not called <c>CorrelateOn</c> naming <paramref name="stateKey"/>'s property, this is
+    /// exactly what it always was: a value stored for dashboard search/traceability, with no effect on
+    /// how later events are matched to this instance — correlation stays purely the transport-stamped
+    /// correlation id. For a saga that HAS called <c>CorrelateOn</c> naming that same property, this also
+    /// registers as <typeparamref name="TMessage"/>'s business-key extractor, and the orchestrator falls
+    /// back to a lookup keyed on it whenever the transport correlation id misses
+    /// (production-readiness.md §5.2/§5.3).
     /// </summary>
     public ChoreographyEventBuilder<TState, TMessage> CorrelateBy<TKey>(Func<TMessage, TKey> messageKey, Expression<Func<TState, TKey>> stateKey)
     {

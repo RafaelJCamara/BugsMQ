@@ -9,10 +9,16 @@ record of that analysis; there is no further open work behind it.
 **One claim in the original sketch was wrong, and it bears directly on the §3.4 decision.** §3.4(a)
 said a child publishing its own domain message "works today with no engine change, once the child knows
 its parent id." It does not. `SagaContext.PublishAsync` always stamps the *publishing* saga's
-correlation id, and `SagaOrchestrator.HandleCoreAsync` correlates strictly on the inbound correlation
-id — so a child publishing "I'm done" sends it under the child's own id, where the parent never sees
-it. `CorrelateBy` is not a fallback: it is documented as a business key for dashboard search,
-explicitly not used for routing.
+correlation id, and (at the time this analysis was written) `SagaOrchestrator.HandleCoreAsync` correlated
+strictly on the inbound correlation id — so a child publishing "I'm done" sends it under the child's own
+id, where the parent never sees it. `CorrelateBy` was not a fallback for this: it was documented as a
+business key for dashboard search, explicitly not used for routing. **Since production-readiness.md §5.2/
+§5.3 shipped, that is no longer quite true** — `CorrelateBy`, paired with `CorrelateOn`, now drives a
+business-key lookup when the transport correlation id misses. It still doesn't rescue the case this
+paragraph is about, though: the lookup is scoped to `(SagaType, BusinessKey)`, and a child gets a fresh
+correlation id specifically so it can start its own saga type, so it can only ever resolve to another
+instance of the *same* saga type as the one doing the lookup — never a different saga type's instance,
+which is what addressing a parent needs.
 
 Following that through changed the shape of the §3.4 decision twice over: **(b), not (a), is the option
 needing no new public API** (the orchestrator already holds the transport and can stamp any envelope),

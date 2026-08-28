@@ -330,6 +330,15 @@ strand a stock reservation that nothing will release. Money is authorized first,
 once authorization succeeded, and the saga does not declare itself `Failed` until the reversal is actually
 confirmed — applying the rule from §8 below about compensating loopbacks and terminal states.
 
+This saga never calls `CorrelateOn`, so its `CorrelateBy` below keeps the behaviour it always had:
+`OrderId` is copied onto state for dashboard search/traceability only, with no effect on how later
+messages are matched to this instance — the `.Then(...)` right after it sets `OrderId` again (alongside
+`Amount`) because nothing here should be assumed to depend on `CorrelateBy` for that. Since
+production-readiness.md §5.1/§5.2 (item 13/14), a saga that *does* call `CorrelateOn` naming the same
+property gets a different `CorrelateBy`: it also registers as this message type's business-key
+extractor, and the orchestrator falls back to a business-key lookup when the transport correlation id
+misses.
+
 ```csharp
 During(Start)
     .When<FulfilmentRequested>()

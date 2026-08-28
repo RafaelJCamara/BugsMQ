@@ -974,8 +974,11 @@ indeed already there. The **child** half is not, and this is the one claim in th
 building it disproved: a child cannot address its parent at all today. `ctx.PublishAsync` always
 stamps the publishing saga's own correlation id, and the orchestrator correlates strictly on the
 inbound correlation id, so a child publishing "I'm done" sends it under the child's id, where the
-parent will never see it. `CorrelateBy` does not rescue this — it is a business key for dashboard
-search, explicitly not used for routing. So "child publishes its own domain message", recorded there as
+parent will never see it. `CorrelateBy` does not rescue this either: paired with `CorrelateOn`, it now
+drives a business-key lookup when the transport correlation id misses (production-readiness.md
+§5.2/§5.3) — but that lookup is scoped to `(SagaType, BusinessKey)`, so it can only ever find another
+instance of the *same* saga type. A child and its parent are different saga types by construction, so
+this still can't address the parent. So "child publishes its own domain message", recorded there as
 working today with no engine change, actually needs one: a publish overload that takes a target
 correlation id. That changes the trade-off against an engine-published `ChildSagaFinished`, and the
 decision is still open in the doc rather than quietly settled here.
@@ -1071,9 +1074,11 @@ before any I/O, if this saga has no parent.
 **Why this needed an engine change at all**, corrected from the original design sketch: `PublishAsync`
 always stamps the *publishing* saga's own correlation id, and the orchestrator correlates strictly on
 the inbound id, so a child's `PublishAsync("I'm done")` was never reaching its parent — it addressed the
-child's own instance. `CorrelateBy` doesn't rescue this either; it's a business key for dashboard search,
-not routing. `NotifyParentAsync` is the missing piece: the only new capability is publishing under a
-correlation id this saga did not itself open.
+child's own instance. `CorrelateBy` doesn't rescue this either: paired with `CorrelateOn`, it now drives
+a same-saga-type business-key lookup when the transport correlation id misses, but that lookup is
+scoped to `(SagaType, BusinessKey)` and can never cross into a different saga type — exactly what a
+child addressing its parent needs. `NotifyParentAsync` is the missing piece: the only new capability is
+publishing under a correlation id this saga did not itself open.
 
 **Two options were on the table** (`docs/sub-saga-composition.md` §3.4) — a child publishing its own
 result, or an engine-published `ChildSagaFinished(status)` — and working through them turned up that

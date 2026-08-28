@@ -185,7 +185,7 @@ public sealed class SagaOrchestrator<TState>(
             fromState: existing.CurrentState, messageType: lastFailure.MessageType, messageId: lastFailure.MessageId), cancellationToken);
 
         await RunStepAsync(existing, message, lastFailure.MessageType, lastFailure.MessageId ?? Guid.NewGuid().ToString("N"),
-            new Dictionary<string, string>(StringComparer.Ordinal), isNew: false, cancellationToken);
+            new Dictionary<string, string>(StringComparer.Ordinal), isNew: false, needsInsert: false, cancellationToken);
     }
 
     /// <summary>Invoked by the timeout dispatcher for a due, previously-scheduled state timeout.</summary>
@@ -332,21 +332,18 @@ public sealed class SagaOrchestrator<TState>(
         var message = JsonSerializer.Deserialize(received.Body.Span, clrType)
                       ?? throw new InvalidOperationException($"Failed to deserialize {received.MessageTypeName}.");
 
-        var correlationId = received.CorrelationId;
-        var existing = await snapshotStore.FindAsync(SagaType, correlationId, cancellationToken);
-        var isNew = existing is null;
-
-        if (existing is null)
+        var resolved = await ResolveInstanceAsync(received, message, clrType, cancellationToken);
+        if (resolved is not { } instance)
         {
-            if (!definition.CanInitiate(clrType))
-            {
-                await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.UnexpectedEvent,
-                    messageType: received.MessageTypeName, messageId: received.MessageId), cancellationToken);
-                return;
-            }
+            await LogAsync(SagaLogEntry.Create(received.CorrelationId, SagaType, SagaEntryType.UnexpectedEvent,
+                messageType: received.MessageTypeName, messageId: received.MessageId), cancellationToken);
+            return;
+        }
 
-            existing = NewInstance(correlationId, received.Headers);
+        var (existing, correlationId, isNew, needsInsert) = instance;
 
+        if (isNew)
+        {
             // PayloadJson is recorded here (not just on StepFailed) so a saga that later reaches a
             // terminal Failed state through a normal business transition — no exception, so no
             // StepFailed entry to redrive — can still be retried by the dashboard: it replays this
@@ -362,7 +359,89 @@ public sealed class SagaOrchestrator<TState>(
             return;
         }
 
-        await RunStepAsync(existing, message, received.MessageTypeName, received.MessageId, received.Headers, isNew, cancellationToken);
+        await RunStepAsync(existing, message, received.MessageTypeName, received.MessageId, received.Headers, isNew, needsInsert, cancellationToken);
+    }
+
+    /// <summary>
+    /// The instance <see cref="HandleCoreAsync"/> should run this message's step against, plus how to
+    /// persist it: <see cref="IsNew"/> gates the SagaStarted log entry / duplicate check / SagasStarted
+    /// metric, while <see cref="NeedsInsert"/> — independent of <see cref="IsNew"/> — selects
+    /// PersistAsync's Insert-vs-Update branch at the end of the step. They diverge exactly when the
+    /// business-key reservation in <see cref="CreateAndReserveNewInstanceAsync"/> already inserted the
+    /// row: the saga is still new (for metrics/logging), but the row is already durable, so the
+    /// end-of-step persist must Update it, not Insert it a second time. Null return means neither a
+    /// transport-id nor a business-key lookup found an instance, and <c>CanInitiate</c> refused to start
+    /// one either.
+    /// </summary>
+    private readonly record struct ResolvedInstance(TState State, Guid CorrelationId, bool IsNew, bool NeedsInsert);
+
+    /// <summary>
+    /// production-readiness.md §5.3: tries the transport correlation id first (unchanged), then — on a
+    /// miss — the business key this message may carry (non-null only for a saga that declared
+    /// CorrelateOn and registered a CorrelateBy extractor for this message's CLR type). A business-key
+    /// hit is NOT a new saga: it is the *same* instance observed under a different transport correlation
+    /// id (e.g. a reply published against its own fresh id rather than the id the initiating command
+    /// used), so the returned CorrelationId is the found instance's own — it flows into every LogAsync in
+    /// HandleCoreAsync and, via RunStepAsync's state.CorrelationId, into every outbound envelope.
+    /// Substituting the inbound id instead would fork the timeline. Both lookups missing falls through to
+    /// <see cref="CreateAndReserveNewInstanceAsync"/>, gated by CanInitiate exactly as before.
+    /// </summary>
+    private async Task<ResolvedInstance?> ResolveInstanceAsync(ReceivedMessage received, object message, Type clrType, CancellationToken cancellationToken)
+    {
+        var correlationId = received.CorrelationId;
+        var existing = await snapshotStore.FindAsync(SagaType, correlationId, cancellationToken);
+
+        var businessKey = existing is null ? definition.TryGetCorrelationKey(message) : null;
+        if (existing is null && businessKey is not null)
+        {
+            existing = await snapshotStore.FindByBusinessKeyAsync(SagaType, businessKey, cancellationToken);
+            if (existing is not null)
+                correlationId = existing.CorrelationId;
+        }
+
+        if (existing is not null)
+            return new ResolvedInstance(existing, correlationId, IsNew: false, NeedsInsert: false);
+
+        return definition.CanInitiate(clrType)
+            ? await CreateAndReserveNewInstanceAsync(correlationId, businessKey, received.Headers, cancellationToken)
+            : null;
+    }
+
+    /// <summary>
+    /// §5.2: resolves the double-initiate race by reserving the business key before the step runs, not
+    /// by catching a collision after it already ran — the partial unique index on
+    /// (SagaType, BusinessKey) adjudicates a concurrent double-initiate right here, before either side's
+    /// RunStepAsync has executed a single (possibly non-idempotent) step action. A saga with no business
+    /// key on this message (either it never called CorrelateOn, or this message type has no registered
+    /// extractor) skips the reservation entirely — <c>NeedsInsert: true</c> reproduces the original
+    /// behaviour unchanged: PersistAsync inserts once, at the end of the step.
+    /// </summary>
+    private async Task<ResolvedInstance> CreateAndReserveNewInstanceAsync(Guid correlationId, string? businessKey,
+        IReadOnlyDictionary<string, string> headers, CancellationToken cancellationToken)
+    {
+        var candidate = NewInstance(correlationId, headers);
+
+        if (businessKey is null)
+            return new ResolvedInstance(candidate, correlationId, IsNew: true, NeedsInsert: true);
+
+        candidate.BusinessKey = businessKey;
+
+        try
+        {
+            await snapshotStore.InsertAsync(candidate, cancellationToken);
+            return new ResolvedInstance(candidate, correlationId, IsNew: true, NeedsInsert: false);
+        }
+        catch (SagaAlreadyExistsException)
+        {
+            // Lost the race: a concurrent initiate already reserved this business key first. Not an
+            // infrastructure failure — look the winner up and continue exactly as a business-key hit in
+            // ResolveInstanceAsync would have: this message is not starting a new saga after all.
+            var winner = await snapshotStore.FindByBusinessKeyAsync(SagaType, businessKey, cancellationToken)
+                         ?? throw new InvalidOperationException(
+                             $"Saga '{SagaType}' lost the business-key reservation race for '{businessKey}' but no winning instance could be found.");
+
+            return new ResolvedInstance(winner, winner.CorrelationId, IsNew: false, NeedsInsert: false);
+        }
     }
 
     /// <summary>
@@ -397,7 +476,7 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     private async Task RunStepAsync(TState state, object message, string messageTypeName, string messageId,
-        IReadOnlyDictionary<string, string> headers, bool isNew, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, string> headers, bool isNew, bool needsInsert, CancellationToken cancellationToken)
     {
         var correlationId = state.CorrelationId;
         var expectedVersion = state.Version;
@@ -434,7 +513,7 @@ public sealed class SagaOrchestrator<TState>(
         {
             stopwatch.Stop();
             VSagaDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
-            await HandleStepFailureAsync(state, ex, correlationId, fromState, message, messageTypeName, messageId, isNew, expectedVersion, activity, context, cancellationToken);
+            await HandleStepFailureAsync(state, ex, correlationId, fromState, message, messageTypeName, messageId, needsInsert, expectedVersion, activity, context, cancellationToken);
             return;
         }
 
@@ -442,11 +521,18 @@ public sealed class SagaOrchestrator<TState>(
         VSagaDiagnostics.StepDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
         activity?.SetTag(VSagaDiagnostics.TagToState, outcome.ToState);
 
-        await HandleStepSuccessAsync(state, outcome, correlationId, fromState, messageTypeName, messageId, isNew, expectedVersion, activity, context, cancellationToken);
+        await HandleStepSuccessAsync(state, outcome, correlationId, fromState, messageTypeName, messageId, isNew, needsInsert, expectedVersion, activity, context, cancellationToken);
     }
 
+    /// <summary>
+    /// <paramref name="needsInsert"/> selects PersistAsync's Insert-vs-Update branch — true only when
+    /// this step's instance was neither found by an existing lookup nor already reserved by the
+    /// business-key early insert in <see cref="HandleCoreAsync"/> (§5.2); it is unrelated to whether the
+    /// saga is "new" for metrics purposes, which HandleStepSuccessAsync tracks separately via its own
+    /// <c>isNew</c> parameter.
+    /// </summary>
     private async Task HandleStepFailureAsync(TState state, Exception ex, Guid correlationId, string fromState, object message,
-        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
+        string messageTypeName, string messageId, bool needsInsert, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
     {
         state.Status = SagaStatus.Failed;
         var payloadJson = JsonSerializer.Serialize(message, message.GetType());
@@ -463,7 +549,7 @@ public sealed class SagaOrchestrator<TState>(
         // so the row it commits still matches the outcome that was actually recorded.
         var stagedChildFinished = await StageChildSagaFinishedAsync(state, SagaStatus.Failed, messageId, cancellationToken);
 
-        await PersistAsync(state, isNew, expectedVersion, cancellationToken);
+        await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
         VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
         // Anything queued via ctx.PublishAfterCommitAsync before the throw belongs to a transition that
@@ -481,7 +567,7 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     private async Task HandleStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
-        string messageTypeName, string messageId, bool isNew, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
+        string messageTypeName, string messageId, bool isNew, bool needsInsert, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
     {
         if (!outcome.WasHandled)
         {
@@ -514,7 +600,7 @@ public sealed class SagaOrchestrator<TState>(
         // inline drain just below still leaves a durable Pending row for the recovery poller.
         await EnqueueOutboxRowsAsync(context, cancellationToken);
 
-        await PersistAsync(state, isNew, expectedVersion, cancellationToken);
+        await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
 
         await DrainDeferredPublishesAsync(correlationId, context, cancellationToken);
 
