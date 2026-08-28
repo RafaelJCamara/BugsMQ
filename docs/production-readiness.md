@@ -394,6 +394,45 @@ swallowed somewhere on the way out. If it's swallowed, "document and accept" is 
 an engine-level gate keyed on the resolved saga instance instead of the transport id — a real but
 separable follow-up, not part of this change.
 
+**Verified for item 15: the assumption holds.** Traced in `SagaOrchestrator.cs`:
+`HandleStepSuccessAsync`'s final `PersistAsync` call (`:603`) sits *outside* `RunStepAsync`'s own
+try/catch (`:508-518`), which wraps only `definition.HandleAsync` itself — so a `SagaConcurrencyException`
+thrown there is untouched by that catch and propagates straight through `RunStepAsync`/`HandleCoreAsync`
+into `HandleAsync`'s own try/catch (`:44-55`, catch at `:51-54`), which is exactly what routes to
+`HandleInfrastructureFailureAsync` and its redelivery publish. Confirmed empirically, not just by
+inspection, by two tests exercising the actual race (a controlled-fake interleaving, the same technique
+`SagaOrchestratorBusinessKeyRaceTests`/`SagaOrchestratorTimeoutRaceTests` use, since there is no reliable
+way to force it through real timing):
+- `HttpInboundDispatcherGateHazardTests` (`VSaga.Transport.Http.Tests`) pins the hazard itself: two
+  messages carrying different transport correlation ids run fully concurrently through the dispatcher's
+  gate, proving it does not serialize them — the mirror image of the existing
+  `SyncReply_IsNotDispatchedInlineDuringThePublishingStep`, which proves the gate *does* serialize two
+  dispatches sharing the same correlation id.
+- `SagaOrchestratorConcurrencyRedeliveryTests` (`VSaga.Core.Tests`) reproduces the resulting version race
+  on a shared instance and confirms the exception does reach `HandleInfrastructureFailureAsync`, which
+  does publish a redelivery (delivery-attempt header incremented, same MessageId) rather than swallowing
+  it or misrouting it into an ordinary business-level step failure (`HandleStepFailureAsync`/`StepFailed`).
+
+`SagaOrchestratorConcurrencyRedeliveryTests` caught two things a read of the code alone would have
+gotten wrong, both worth knowing before leaning on this as a "durable guard":
+- The redelivery is a **dead end for the loser, not a retry-to-success**. `HandleInfrastructureFailureAsync`
+  deliberately reuses the original MessageId (`:79`, "so the dedupe check ... will correctly recognize the
+  redelivered copy and skip it"), and `RunStepAsync` already logged a `MessageReceived` entry for that
+  MessageId *before* the failing persist (`:492-494`) — so `HandleCoreAsync`'s `IsDuplicateAsync` check
+  recognizes the redelivered copy as already-seen and silently skips it. The Version check stops the
+  *state* from corrupting; it does not cause the loser's message to eventually apply.
+- A step's ordinary (non-deferred) `.Publish(...)` — `EventBuilder.Publish`, `ctx.PublishAsync` — runs
+  synchronously inside `definition.HandleAsync`, *before* `PersistAsync` is even called. Both racers'
+  publishes go out for real regardless of which one wins the persist. The "durable guard" protects
+  stored state from corruption; it does not deduplicate business-visible side effects from an
+  unserialized concurrent step. (`ctx.PublishAfterCommitAsync`/outbox-staged publishes are the one kind
+  that *is* protected — those are discarded, not sent, when the persist that would have committed them
+  never lands, per `HandleStepFailureAsync`'s and `HandleStepSuccessAsync`'s own comments.)
+
+Scope held to what item 15 asked: this only pins and documents the existing behavior. Building an
+engine-level gate keyed on the resolved saga instance remains the separable follow-up noted above — not
+attempted here.
+
 `typescript/packages/participant/src/participant.ts:24` carries a doc comment that goes stale.
 
 ---

@@ -34,6 +34,17 @@ namespace VSaga.Transport.Http;
 public sealed class HttpInboundDispatcher : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Guid, SubscriberEntry> _subscribers = new();
+
+    // Keyed on the raw transport correlation id, not any resolved saga instance -- production-readiness.md
+    // §5.4's documented, accepted gap: two messages resolving to the same saga via a shared business key
+    // (§5.2/§5.3) but carrying different transport correlation ids get independent gate entries here and
+    // run fully concurrently. Pinned by HttpInboundDispatcherGateHazardTests (VSaga.Transport.Http.Tests).
+    // The backstop for that case -- the snapshot store's optimistic-concurrency Version check, and that a
+    // SagaConcurrencyException from it reliably reaches SagaOrchestrator.HandleInfrastructureFailureAsync's
+    // redelivery rather than being swallowed -- is verified separately by
+    // SagaOrchestratorConcurrencyRedeliveryTests (VSaga.Core.Tests). Change either exception path or this
+    // key without re-checking both; §5.4 has the full account of what that backstop does and does not
+    // actually guarantee.
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _correlationGates = new();
     private readonly Channel<ReceivedMessage> _localDispatchChannel = Channel.CreateUnbounded<ReceivedMessage>();
     private readonly ILogger<HttpInboundDispatcher> _logger;

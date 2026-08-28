@@ -21,7 +21,15 @@ export interface BodyValidator<TBody> {
 }
 
 export interface HandlerContext {
-  /** Dashed Guid. This, not the CorrelationId field inside the body, is what the engine correlates on. */
+  /**
+   * Dashed Guid. This, not the CorrelationId field inside the body, is the transport correlation id
+   * the engine looks up an instance by first. It is no longer the *only* thing the engine correlates
+   * on: a .NET saga that has declared `CorrelateOn` can also resolve an existing instance by a
+   * business key extracted from the message body when this id doesn't match one (production-readiness.md
+   * §5.2/§5.3) -- e.g. a reply published under its own fresh id still reaches the same saga instance
+   * that sent the original request. There is no TS-side equivalent of `CorrelateOn` yet; this field
+   * remains the only correlation key a TS participant itself ever sets.
+   */
   readonly correlationId: string;
   /** The INBOUND message id. Becomes the causation id of anything replied from this context. */
   readonly messageId: string;
