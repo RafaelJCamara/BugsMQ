@@ -136,6 +136,12 @@ internal `ISagaContextLogSink` naming the called host as the service — a naive
 `ctx.PublishAsync` would stamp the *inbound* message's causation id rather than the outbound call's
 own, missing the stitch and showing a bogus self-loop instead of the REST endpoint actually called.
 
+Live verification against the real `docker compose up` stack — not just unit tests with a hand-seeded
+`SagaLogEntry`, which pass even if the orchestrator never actually reads a header back — caught two
+real gaps during the Saga Map's own development: `MessageReceived`/`SagaStarted` entries were stamped
+with `SourceService` but never `CausationId`, so nothing ever stitched a reply back to its request;
+and the business-failure-without-exception case above had no detection path at all until added.
+
 See [`../history/`](history/) for the live-verification history behind each of these mechanisms — most
 of them were built once, found wrong by a real `docker compose up` run (not a unit test with a
 hand-seeded `SagaLogEntry`), and fixed.

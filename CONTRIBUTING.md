@@ -21,7 +21,7 @@ cd typescript/dashboard-web && npm install && npx ng build
 dotnet test dotnet/VSaga.slnx
 ```
 
-222+ tests across every `dotnet/tests/*` project. Five suites are Testcontainers-backed (RabbitMQ,
+300+ tests across every `dotnet/tests/*` project. Five suites are Testcontainers-backed (RabbitMQ,
 MassTransit, Wolverine, Brighter, Postgres) and need Docker; everything else runs without it. If
 Docker isn't available, say so rather than skipping silently — this repo's own history treats "these
 five suites were only compiled, never run" as an explicit, carried-forward caveat, not a pass.
