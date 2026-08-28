@@ -19,10 +19,12 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<SagaOrchestratorOptions>();
+        services.TryAddSingleton<SagaOutboxOptions>();
         services.TryAddSingleton<ISagaChangeNotifier>(NullSagaChangeNotifier.Instance);
         services.AddSingleton<ISagaRetryDispatcher, SagaRetryDispatcher>();
         services.AddHostedService<SagaEngineHostedService>();
         services.AddHostedService<SagaTimeoutDispatcherHostedService>();
+        services.AddHostedService<SagaOutboxDispatcherHostedService>();
 
         configure(new SagaEngineBuilder(services));
 
