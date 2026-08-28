@@ -10,6 +10,12 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>PostgreSQL provider wiring for VSaga.Persistence.EFCore -- migrations and connection setup for running vSaga sagas against Postgres.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VSaga.Persistence.EFCore\VSaga.Persistence.EFCore.csproj" />
   </ItemGroup>

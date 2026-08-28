@@ -23,7 +23,15 @@ internal sealed class HttpCallExecutor<TState>(
     TimeSpan retryDelay)
     where TState : SagaState, new()
 {
-    private readonly string _host = new Uri(url, UriKind.Absolute).Host;
+    private readonly string _host = DeriveDisplayHost(url);
+
+    private static string DeriveDisplayHost(string url)
+    {
+        var uri = new Uri(url, UriKind.Absolute);
+        var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+        var firstSegment = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return firstSegment is null ? host : $"{host}/{firstSegment}";
+    }
 
     /// <param name="context">The saga context this call executes within.</param>
     /// <param name="body">

@@ -37,6 +37,9 @@ export class SagaDetail implements OnInit, OnDestroy {
   readonly confirmingRetry = signal(false);
 
   private subs: Subscription[] = [];
+  /** Whether we've ever joined a hub group yet — guards the unsubscribe-previous-saga step below,
+   *  and ngOnDestroy, from firing before there's anything to unsubscribe from. */
+  private hasSubscribedToHub = false;
 
   constructor(
     private readonly route: ActivatedRoute,
@@ -45,20 +48,33 @@ export class SagaDetail implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
-    this.sagaType = this.route.snapshot.paramMap.get('sagaType') ?? '';
-    this.correlationId = this.route.snapshot.paramMap.get('id') ?? '';
-    this.load();
-
-    void this.hub.subscribeToSaga(this.sagaType, this.correlationId);
     this.subs.push(
+      // The observable, not `.snapshot` — Angular reuses this component instance when navigating
+      // between two routes matched by the same route config (e.g. a sibling-saga or sub-saga link),
+      // so ngOnInit itself does not re-fire. Reading the snapshot once would freeze sagaType/
+      // correlationId on whichever saga was loaded first.
+      this.route.paramMap.subscribe((params) => {
+        if (this.hasSubscribedToHub) {
+          void this.hub.unsubscribeFromSaga(this.sagaType, this.correlationId);
+        }
+
+        this.sagaType = params.get('sagaType') ?? '';
+        this.correlationId = params.get('id') ?? '';
+        this.load();
+
+        void this.hub.subscribeToSaga(this.sagaType, this.correlationId);
+        this.hasSubscribedToHub = true;
+      }),
       this.hub.sagaUpdated$.subscribe((summary) => {
         // Both halves must match: the list group pushes updates for every saga, and another saga
         // type may be tracking this same correlation id.
         if (summary.correlationId === this.correlationId && summary.sagaType === this.sagaType) {
           this.detail.update((current) => (current ? { ...current, summary } : current));
-          // The map isn't pushed incrementally like the timeline (SagaChangePollingService only ever
-          // emits SagaUpdated, never TimelineEntryAdded, across processes) — re-fetch it whole instead.
+          // Neither the map nor the timeline is pushed incrementally here (SagaChangePollingService
+          // only ever emits SagaUpdated, never TimelineEntryAdded, across processes) — re-fetch them
+          // whole instead.
           this.loadMap();
+          this.loadTimeline();
           this.loadRelated();
           this.loadChildren();
         }
@@ -72,7 +88,9 @@ export class SagaDetail implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    void this.hub.unsubscribeFromSaga(this.sagaType, this.correlationId);
+    if (this.hasSubscribedToHub) {
+      void this.hub.unsubscribeFromSaga(this.sagaType, this.correlationId);
+    }
     this.subs.forEach((s) => s.unsubscribe());
   }
 
@@ -80,21 +98,40 @@ export class SagaDetail implements OnInit, OnDestroy {
     this.loading.set(true);
     this.error.set(null);
 
-    this.api.get(this.sagaType, this.correlationId).subscribe({
+    // Captured now, at the moment this call is fired — compared against the live fields when the
+    // response arrives, below. Angular reuses this component instance across same-route-config
+    // navigations (see ngOnInit), so an older, slower request can resolve after a newer one already
+    // repainted the page for a different saga; without this guard its `next`/`error` callback would
+    // silently overwrite the correctly-displayed newer saga with stale data.
+    const sagaType = this.sagaType;
+    const correlationId = this.correlationId;
+
+    this.api.get(sagaType, correlationId).subscribe({
       next: (detail) => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
         this.detail.set(detail);
         this.loading.set(false);
       },
       error: () => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
         this.error.set('Could not load this saga. It may not exist.');
         this.loading.set(false);
       },
     });
 
-    this.api.getTimeline(this.sagaType, this.correlationId).subscribe((entries) => this.timeline.set(entries));
+    this.loadTimeline();
     this.loadMap();
     this.loadRelated();
     this.loadChildren();
+  }
+
+  private loadTimeline(): void {
+    const sagaType = this.sagaType;
+    const correlationId = this.correlationId;
+    this.api.getTimeline(sagaType, correlationId).subscribe((entries) => {
+      if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+      this.timeline.set(entries);
+    });
   }
 
   /**
@@ -108,9 +145,17 @@ export class SagaDetail implements OnInit, OnDestroy {
    * are swallowed rather than blanking a detail page that is otherwise fine.
    */
   loadChildren(): void {
-    this.api.getChildren(this.sagaType, this.correlationId).subscribe({
-      next: (found) => this.children.set(found),
-      error: () => this.children.set([]),
+    const sagaType = this.sagaType;
+    const correlationId = this.correlationId;
+    this.api.getChildren(sagaType, correlationId).subscribe({
+      next: (found) => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+        this.children.set(found);
+      },
+      error: () => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+        this.children.set([]);
+      },
     });
   }
 
@@ -125,25 +170,60 @@ export class SagaDetail implements OnInit, OnDestroy {
    * take down a detail page that is otherwise fine.
    */
   loadRelated(): void {
-    this.api.findByCorrelationId(this.correlationId).subscribe({
-      next: (all) => this.related.set(all.filter((s) => s.sagaType !== this.sagaType)),
-      error: () => this.related.set([]),
+    const sagaType = this.sagaType;
+    const correlationId = this.correlationId;
+    this.api.findByCorrelationId(correlationId).subscribe({
+      next: (all) => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+        this.related.set(all.filter((s) => s.sagaType !== sagaType));
+      },
+      error: () => {
+        if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+        this.related.set([]);
+      },
     });
   }
 
   loadMap(): void {
-    this.api.getMap(this.sagaType, this.correlationId).subscribe((map) => this.map.set(map));
+    const sagaType = this.sagaType;
+    const correlationId = this.correlationId;
+    this.api.getMap(sagaType, correlationId).subscribe((map) => {
+      if (sagaType !== this.sagaType || correlationId !== this.correlationId) return;
+      this.map.set(map);
+    });
   }
 
   setTab(tab: Tab): void {
     this.tab.set(tab);
   }
 
+  /**
+   * The saga's raw persisted state, pretty-printed. `Kind` and `Status` are serialized by the .NET
+   * engine as their underlying enum ints ("Kind": 0, "Status": 2) rather than names — everywhere
+   * else in this UI shows the string form, so this remaps those two fields for display only. The
+   * persisted JSON itself, and anything already using string enums, is left untouched.
+   */
   get prettyDataJson(): string {
     const json = this.detail()?.dataJson;
     if (!json) return '';
+
+    // Index = C#'s SagaKind enum order.
+    const kinds = ['Orchestrated', 'Choreographed'];
+    // Index = C#'s SagaStatus enum order (mirrors STATUSES in the sibling saga-list.ts).
+    const statuses = ['Running', 'Completed', 'Failed', 'Compensating', 'Compensated', 'TimedOut', 'Cancelled'];
+
     try {
-      return JSON.stringify(JSON.parse(json), null, 2);
+      const parsed: unknown = JSON.parse(json);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        if (typeof obj['Kind'] === 'number') {
+          obj['Kind'] = kinds[obj['Kind']] ?? obj['Kind'];
+        }
+        if (typeof obj['Status'] === 'number') {
+          obj['Status'] = statuses[obj['Status']] ?? obj['Status'];
+        }
+      }
+      return JSON.stringify(parsed, null, 2);
     } catch {
       return json;
     }

@@ -9,6 +9,10 @@ running the full reference stack (Postgres, RabbitMQ, the dashboard) instead, se
 > them as project references (`dotnet add reference ../path/to/VSaga.Core/VSaga.Core.csproj`) or via a
 > local `dotnet pack`/`npm pack` until the first release ships — the commands below are the shape usage
 > will take once it has.
+>
+> **Packing locally:** an untagged checkout has no version for MinVer to derive, so a bare
+> `dotnet pack` fails with `MinVer resolved ...'s version to the untagged fallback 0.0.0`. Pass a
+> version explicitly to pack anyway: `dotnet pack -p:MinVerVersionOverride=0.1.0-local`.
 
 ## Install
 

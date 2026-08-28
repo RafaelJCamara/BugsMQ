@@ -35,9 +35,11 @@
   },
   "scripts": {
     "build": "tsup",
+    "postbuild": "node ../../scripts/prepend-node-types-reference.mjs",
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@vsaga/protocol": "0.1.0"
+    "@vsaga/protocol": "0.1.0",
+    "@types/node": "^22.19.0"
   }
 }

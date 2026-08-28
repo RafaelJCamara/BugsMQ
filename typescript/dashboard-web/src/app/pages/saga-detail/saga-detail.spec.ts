@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute, provideRouter } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { ActivatedRoute, ParamMap, convertToParamMap, provideRouter } from '@angular/router';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { vi } from 'vitest';
 import { SagaApiService } from '../../services/saga-api.service';
 import { SagaHubService } from '../../services/saga-hub.service';
@@ -80,6 +80,9 @@ describe('SagaDetail', () => {
     related: SagaSummary[] = [makeDetail().summary],
     // What /children returns: the sagas this one started, each under its own correlation id.
     children: SagaSummary[] = [],
+    // Defaults to a single static emission; pass a Subject to drive multiple param sets through the
+    // same component instance the way Angular's route-reuse does on same-route-config navigation.
+    paramMap$: Observable<ParamMap> = of(convertToParamMap({ sagaType: 'OrderSaga', id: 'saga-1' })),
   ) {
     apiMock = {
       get: vi.fn().mockReturnValue(of(detail)),
@@ -105,9 +108,7 @@ describe('SagaDetail', () => {
         {
           provide: ActivatedRoute,
           useValue: {
-            snapshot: {
-              paramMap: { get: (key: string) => (key === 'sagaType' ? 'OrderSaga' : 'saga-1') },
-            },
+            paramMap: paramMap$,
           },
         },
       ],
@@ -129,6 +130,86 @@ describe('SagaDetail', () => {
     expect(fixture.componentInstance.detail()).toEqual(detail);
     expect(fixture.componentInstance.timeline()).toEqual(entries);
     expect(fixture.componentInstance.loading()).toBe(false);
+  });
+
+  // Angular reuses this component instance when navigating between two routes matched by the same
+  // route config (e.g. clicking a sibling-saga chip or a sub-saga link), so ngOnInit does not re-fire
+  // on that kind of navigation. Reading route params off the paramMap *observable* rather than a
+  // one-shot snapshot is what makes this work.
+  it('re-subscribes for the new saga when the route reuses this component instance', () => {
+    const paramMap$ = new Subject<ParamMap>();
+    setup(makeDetail(), [], makeMap(), [makeDetail().summary], [], paramMap$);
+
+    paramMap$.next(convertToParamMap({ sagaType: 'OrderSaga', id: 'saga-1' }));
+
+    expect(apiMock.get).toHaveBeenLastCalledWith('OrderSaga', 'saga-1');
+    expect(hubMock.subscribeToSaga).toHaveBeenLastCalledWith('OrderSaga', 'saga-1');
+    expect(hubMock.unsubscribeFromSaga).not.toHaveBeenCalled();
+
+    paramMap$.next(convertToParamMap({ sagaType: 'PostShipmentChoreography', id: 'saga-2' }));
+
+    expect(apiMock.get).toHaveBeenLastCalledWith('PostShipmentChoreography', 'saga-2');
+    expect(hubMock.unsubscribeFromSaga).toHaveBeenCalledWith('OrderSaga', 'saga-1');
+    expect(hubMock.subscribeToSaga).toHaveBeenLastCalledWith('PostShipmentChoreography', 'saga-2');
+  });
+
+  // Regression test: `of(...)` mocks resolve synchronously, so a test built on them can never expose
+  // an out-of-order-resolution bug — the first call is always fully processed before the second one
+  // is even triggered. This test drives saga A's response through a Subject so it can be left
+  // in-flight while the route reuses this component instance for saga B, which resolves first.
+  it('does not let a stale in-flight response for the previous saga overwrite the current one', () => {
+    const paramMap$ = new Subject<ParamMap>();
+    const getA$ = new Subject<SagaDetailModel>();
+    const detailB = makeDetail({ correlationId: 'saga-2', sagaType: 'PostShipmentChoreography' });
+
+    apiMock = {
+      get: vi.fn(),
+      getTimeline: vi.fn().mockReturnValue(of([])),
+      getMap: vi.fn().mockReturnValue(of(makeMap())),
+      retry: vi.fn(),
+      findByCorrelationId: vi.fn().mockReturnValue(of([])),
+      getChildren: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      timelineEntryAdded$: new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>(),
+      subscribeToSaga: vi.fn().mockResolvedValue(undefined),
+      unsubscribeFromSaga: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // First navigation (saga A) returns the not-yet-resolved Subject; the second (saga B) resolves
+    // synchronously, the way a fast/cached response legitimately could.
+    apiMock.get.mockReturnValueOnce(getA$).mockReturnValueOnce(of(detailB));
+
+    TestBed.configureTestingModule({
+      imports: [SagaDetail],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+        { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaDetail);
+    fixture.detectChanges();
+
+    // Navigate to saga A — request fires, left unresolved (slow).
+    paramMap$.next(convertToParamMap({ sagaType: 'OrderSaga', id: 'saga-1' }));
+    // Route reuses this instance to navigate to saga B before A resolves — B's request resolves
+    // immediately and correctly renders.
+    paramMap$.next(convertToParamMap({ sagaType: 'PostShipmentChoreography', id: 'saga-2' }));
+
+    expect(fixture.componentInstance.detail()).toEqual(detailB);
+    expect(fixture.componentInstance.sagaType).toBe('PostShipmentChoreography');
+    expect(fixture.componentInstance.correlationId).toBe('saga-2');
+
+    // A's stale response finally arrives — it must be dropped, not applied over B.
+    getA$.next(makeDetail());
+    getA$.complete();
+
+    expect(fixture.componentInstance.detail()).toEqual(detailB);
+    expect(fixture.componentInstance.sagaType).toBe('PostShipmentChoreography');
+    expect(fixture.componentInstance.correlationId).toBe('saga-2');
   });
 
   it('shows an error state when the detail request fails', () => {
@@ -450,6 +531,17 @@ describe('SagaDetail', () => {
     hubMock.sagaUpdated$.next(fixture.componentInstance.detail()!.summary);
 
     expect(apiMock.getMap).toHaveBeenCalledTimes(2);
+  });
+
+  // SignalR only ever pushes a summary-level SagaUpdated, never an incremental timeline diff, across
+  // processes — so after a manual retry the Timeline tab must be re-fetched whole, the same as the map.
+  it('re-fetches the timeline (not incrementally, via a whole re-fetch) when a live saga update arrives', () => {
+    const fixture = setup();
+    expect(apiMock.getTimeline).toHaveBeenCalledTimes(1);
+
+    hubMock.sagaUpdated$.next(fixture.componentInstance.detail()!.summary);
+
+    expect(apiMock.getTimeline).toHaveBeenCalledTimes(2);
   });
 
   it('does not re-fetch the map for a live saga update on a different correlation id', () => {

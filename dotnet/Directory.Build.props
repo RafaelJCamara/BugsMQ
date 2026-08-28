@@ -27,6 +27,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Copyright>Copyright (c) Rafael Camara</Copyright>
+    <PackageTags>vsaga;saga;saga-orchestration;distributed-transactions;dotnet</PackageTags>
   </PropertyGroup>
 
   <!-- Versioning: MinVer derives the version from git tags, with no version string committed
@@ -46,7 +47,7 @@
        build/test verification keeps working before the first tag exists. -->
   <Target Name="VSagaFailOnUnresolvedMinVerVersion" BeforeTargets="GenerateNuspec" DependsOnTargets="MinVer"
           Condition="'$(IsPackable)' == 'true' AND '$(MinVerMajor)' == '0' AND '$(MinVerMinor)' == '0' AND '$(MinVerPatch)' == '0'">
-    <Error Text="MinVer resolved $(MSBuildProjectName)'s version to the untagged fallback 0.0.0 (no reachable git tag). This usually means the checkout is shallow (missing fetch-depth: 0) or the repository has no version tag yet. Refusing to pack a fake 0.0.0 version." />
+    <Error Text="MinVer resolved $(MSBuildProjectName)'s version to the untagged fallback 0.0.0 (no reachable git tag). This usually means the checkout is shallow (missing fetch-depth: 0) or the repository has no version tag yet. Refusing to pack a fake 0.0.0 version. For local testing without a tag, pass -p:MinVerVersionOverride=x.y.z-local to dotnet pack." />
   </Target>
 
   <!-- Static code analysis: built-in .NET analyzers + SonarQube/Meziantu/AsyncFixer, enforced via .editorconfig -->

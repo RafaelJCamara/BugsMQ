@@ -105,7 +105,7 @@ only when the current instance itself updates — not independently live-pushed)
 It is deliberately **not** an npm-workspace member of `typescript/`'s own workspace (the TypeScript
 SDK packages) — see [`typescript-participants.md`](typescript-participants.md) for why the two
 toolchains are kept separate. It is not part of `docker-compose.yml`: run it with `npx ng serve` (see
-[`getting-started.md`](getting-started.md)) against the containerized API.
+["Run the demo"](../README.md#run-the-demo) in the root README) against the containerized API.
 
 ## Saga Map
 

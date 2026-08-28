@@ -1,5 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>SagaTestHarness: an in-process test harness for vSaga saga definitions, with no test-framework dependency of its own -- runs under xUnit, NUnit, or MSTest.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VSaga.Core\VSaga.Core.csproj" />
     <ProjectReference Include="..\VSaga.Persistence.InMemory\VSaga.Persistence.InMemory.csproj" />

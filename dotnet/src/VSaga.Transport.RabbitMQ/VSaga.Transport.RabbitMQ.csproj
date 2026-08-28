@@ -1,5 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>RabbitMQ.Client-based IMessageTransport for vSaga -- the default broker transport, with no MassTransit or Wolverine dependency required.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
     <ProjectReference Include="..\VSaga.Transport.Common\VSaga.Transport.Common.csproj" />

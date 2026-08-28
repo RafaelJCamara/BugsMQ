@@ -36,6 +36,10 @@
   },
   "scripts": {
     "build": "tsup",
+    "postbuild": "node ../../scripts/prepend-node-types-reference.mjs",
     "clean": "rimraf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@types/node": "^22.19.0"
   }
 }

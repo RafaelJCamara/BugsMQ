@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>MassTransit adapter for vSaga's IMessageTransport -- run vSaga sagas over an existing MassTransit-based messaging setup.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
     <ProjectReference Include="..\VSaga.Transport.Common\VSaga.Transport.Common.csproj" />

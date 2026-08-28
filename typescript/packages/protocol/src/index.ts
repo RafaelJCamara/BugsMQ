@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 export * from './headers.js';
 export * from './guid.js';
 export * from './routing-key.js';

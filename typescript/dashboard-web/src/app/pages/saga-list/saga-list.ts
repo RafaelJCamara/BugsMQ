@@ -35,6 +35,9 @@ export class SagaList implements OnInit, OnDestroy {
   pageSize = PAGE_SIZES[0];
   readonly page = signal(1);
   readonly hasNextPage = computed(() => this.page() * this.pageSize < this.totalCount());
+  readonly totalPages = computed(() => Math.max(1, Math.ceil(this.totalCount() / this.pageSize)));
+
+  pageJump: number | null = null;
 
   /** Bumped instead of prepended when a live update matches the filter but we're off page 1 —
    * prepending there would silently show the wrong rows for the page the user is looking at. */
@@ -86,6 +89,22 @@ export class SagaList implements OnInit, OnDestroy {
     if (this.page() <= 1) return;
     this.page.set(this.page() - 1);
     this.refresh();
+  }
+
+  goToPage(): void {
+    const target = this.pageJump;
+    if (
+      target === null ||
+      !Number.isInteger(target) ||
+      target < 1 ||
+      target > this.totalPages() ||
+      target === this.page()
+    ) {
+      return;
+    }
+    this.page.set(target);
+    this.refresh();
+    this.pageJump = null;
   }
 
   /** Sorting reorders the whole server-side result set, not just the rows already on screen — the
@@ -175,6 +194,14 @@ export class SagaList implements OnInit, OnDestroy {
     if (this.status && summary.status !== this.status) return false;
     if (this.kind && summary.kind !== this.kind) return false;
     if (this.sagaType && summary.sagaType !== this.sagaType) return false;
+
+    const term = this.search.trim().toLowerCase();
+    if (term) {
+      const matchesType = summary.sagaType.toLowerCase().includes(term);
+      const matchesCorrelationId = summary.correlationId.toLowerCase().includes(term);
+      if (!matchesType && !matchesCorrelationId) return false;
+    }
+
     return true;
   }
 }

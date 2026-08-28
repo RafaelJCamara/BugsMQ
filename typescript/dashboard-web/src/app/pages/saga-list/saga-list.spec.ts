@@ -140,6 +140,39 @@ describe('SagaList', () => {
     expect(fixture.componentInstance.totalCount()).toBe(0);
   });
 
+  it('ignores a new saga on a live update when it does not match the active search term', () => {
+    const fixture = setup({ items: [], page: 1, pageSize: 25, totalCount: 0 });
+    fixture.componentInstance.search = 'checkout';
+
+    const incoming = makeSummary({ correlationId: 'new-1', sagaType: 'ShippingSaga' });
+    hubMock.sagaUpdated$.next(incoming);
+
+    expect(fixture.componentInstance.sagas()).toEqual([]);
+    expect(fixture.componentInstance.totalCount()).toBe(0);
+  });
+
+  it('prepends a new saga on a live update when it matches the active search term by correlation id', () => {
+    const fixture = setup({ items: [], page: 1, pageSize: 25, totalCount: 0 });
+    fixture.componentInstance.search = 'NEW-1';
+
+    const incoming = makeSummary({ correlationId: 'new-1-abc', sagaType: 'ShippingSaga' });
+    hubMock.sagaUpdated$.next(incoming);
+
+    expect(fixture.componentInstance.sagas()).toEqual([incoming]);
+    expect(fixture.componentInstance.totalCount()).toBe(1);
+  });
+
+  it('prepends a new saga on a live update when it matches the active search term by saga type', () => {
+    const fixture = setup({ items: [], page: 1, pageSize: 25, totalCount: 0 });
+    fixture.componentInstance.search = 'shipping';
+
+    const incoming = makeSummary({ correlationId: 'new-1', sagaType: 'ShippingSaga' });
+    hubMock.sagaUpdated$.next(incoming);
+
+    expect(fixture.componentInstance.sagas()).toEqual([incoming]);
+    expect(fixture.componentInstance.totalCount()).toBe(1);
+  });
+
   it('nextPage() requests the next page and disables itself once there is nothing further to load', () => {
     const fixture = setup({ items: [makeSummary()], page: 1, pageSize: 25, totalCount: 30 });
     apiMock.list.mockClear();
@@ -184,6 +217,16 @@ describe('SagaList', () => {
 
     expect(prevBtn.disabled).toBe(false);
     expect(nextBtn.disabled).toBe(true);
+  });
+
+  it('computes totalPages from totalCount and pageSize, and renders it in the pagination area', () => {
+    const fixture = setup({ items: [makeSummary()], page: 1, pageSize: 25, totalCount: 75 });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.totalPages()).toBe(3);
+
+    const pagination: HTMLElement = fixture.nativeElement.querySelector('.pagination');
+    expect(pagination.textContent).toContain('3');
   });
 
   it('changing a filter resets back to page 1', () => {

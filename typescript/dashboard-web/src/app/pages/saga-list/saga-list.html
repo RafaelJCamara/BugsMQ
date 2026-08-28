@@ -74,7 +74,7 @@
           <td><app-kind-badge [kind]="saga.kind" /></td>
           <td>{{ saga.currentState }}</td>
           <td><app-status-badge [status]="saga.status" /></td>
-          <td class="muted">{{ saga.updatedAtUtc | date: 'short' }}</td>
+          <td class="muted">{{ saga.updatedAtUtc | date: 'M/d/yy, HH:mm' }}</td>
         </tr>
       }
     </tbody>
@@ -88,7 +88,17 @@
       </select>
     </label>
     <button type="button" (click)="prevPage()" [disabled]="page() <= 1">Previous</button>
-    <span class="muted">Page {{ page() }}</span>
+    <span class="muted">Page {{ page() }} of {{ totalPages() }}</span>
     <button type="button" (click)="nextPage()" [disabled]="!hasNextPage()">Next</button>
+    <label class="page-jump">
+      Go to page
+      <input
+        type="number"
+        min="1"
+        [max]="totalPages()"
+        [(ngModel)]="pageJump"
+        (keyup.enter)="goToPage()"
+      />
+    </label>
   </div>
 }

@@ -40,7 +40,9 @@ public sealed class CallHttpSagaMapTests
         // a pre-existing characteristic of how PublishAfterCommitAsync is logged (§5.1), independent of
         // whether HttpCallDefinition's own request/reply pair -- the thing this test pins -- stitches
         // correctly.
-        const string host = "call-target.test";
+        // The map's node id now includes the first path segment (host+port, plus first path segment),
+        // matching the fixture's "https://call-target.test/charge" URL -- default HTTPS port, so no port suffix.
+        const string host = "call-target.test/charge";
         var sagaType = harness.Saga.SagaType;
         Assert.Contains(map.Nodes, n => string.Equals(n.Id, host, StringComparison.Ordinal) && n.Kind != SagaMapNodeKind.Unresolved);
 

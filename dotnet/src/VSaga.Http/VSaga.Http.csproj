@@ -4,6 +4,12 @@
        docs/design/http-based-sagas.md §5.2). This is the DSL half: .CallHttp(...) makes an ordinary outbound
        REST call from inside a step, transport-agnostic, so a RabbitMQ-hosted saga gets it for free. -->
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>The .CallHttp step and transport-agnostic REST integration for vSaga sagas -- call plain HTTP APIs from a saga step without a message broker.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Tests need ServiceCollectionExtensions.ClientName to swap in a stub HttpMessageHandler for the
          named client, the same reason VSaga.Core grants this to VSaga.Http itself. -->

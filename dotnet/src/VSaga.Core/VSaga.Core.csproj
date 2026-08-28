@@ -1,5 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>The vSaga orchestration engine: the fluent saga DSL (states, steps, compensation, timeouts, fan-out/join) and the runtime that drives orchestrated and choreographed sagas.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- .CallHttp (docs/design/http-based-sagas.md §5.2/§5.3) needs ISagaContextLogSink to write its own
          request/reply timeline entries, the same reason VSaga.Dashboard.Api.Tests gets this for

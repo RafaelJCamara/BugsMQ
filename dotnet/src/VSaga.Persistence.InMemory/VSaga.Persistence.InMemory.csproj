@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Package-specific description for nuget.org search results, overriding Directory.Build.props's
+       shared fallback (MSBuild evaluates that file first, so this later value wins). -->
+  <PropertyGroup>
+    <Description>In-memory saga persistence for vSaga -- snapshot storage and event log with no database, for local development and tests.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VSaga.Abstractions\VSaga.Abstractions.csproj" />
   </ItemGroup>

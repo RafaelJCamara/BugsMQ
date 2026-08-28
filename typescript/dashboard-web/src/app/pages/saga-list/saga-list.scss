@@ -160,6 +160,24 @@ button:hover {
   padding: 0.3rem 0.5rem;
 }
 
+.page-jump {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.page-jump input {
+  width: 4rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
 .pagination button:disabled {
   background: var(--bg-elevated);
   color: var(--text-muted);

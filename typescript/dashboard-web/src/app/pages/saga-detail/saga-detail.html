@@ -23,9 +23,9 @@
       <dt>Version</dt>
       <dd>{{ d.summary.version }}</dd>
       <dt>Created</dt>
-      <dd>{{ d.summary.createdAtUtc | date: 'medium' }}</dd>
+      <dd>{{ d.summary.createdAtUtc | date: "M/d/yy, HH:mm:ss" }}</dd>
       <dt>Updated</dt>
-      <dd>{{ d.summary.updatedAtUtc | date: 'medium' }}</dd>
+      <dd>{{ d.summary.updatedAtUtc | date: "M/d/yy, HH:mm:ss" }}</dd>
     </dl>
 
     @if (related().length > 0) {
