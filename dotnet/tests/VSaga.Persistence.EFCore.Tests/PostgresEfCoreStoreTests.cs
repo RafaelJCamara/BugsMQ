@@ -293,4 +293,52 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
         CreatedAtUtc = DateTimeOffset.UtcNow,
         UpdatedAtUtc = DateTimeOffset.UtcNow,
     };
+
+    /// <summary>
+    /// This is the first filtered/partial index in the whole codebase, so -- like
+    /// GetSagaTypesAsync_TranslatesAndReturnsDistinctTypes above -- it deserves its own direct check
+    /// against a real Postgres rather than trusting SQLite's (EfCoreStoreTests) result to generalize.
+    /// Runs against a schema built by MigrateAsync, so this also confirms the AddSagaBusinessKey
+    /// migration's partial-unique filter is valid Postgres DDL, not just a model that compiles.
+    /// </summary>
+    [Fact]
+    public async Task BusinessKey_PartialUniqueIndexSurvivesTheMigration_AndRejectsADuplicateAgainstRealPostgres()
+    {
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaSnapshotStore<TestState>(db);
+
+            // Two null-BusinessKey rows under the same SagaType must still both succeed -- the whole
+            // point of the filter being partial rather than a plain unique index.
+            await store.InsertAsync(new TestState { CorrelationId = Guid.NewGuid(), SagaType = "OrderSaga", CurrentState = "A", CreatedAtUtc = DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow });
+            await store.InsertAsync(new TestState { CorrelationId = Guid.NewGuid(), SagaType = "OrderSaga", CurrentState = "B", CreatedAtUtc = DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow });
+
+            await store.InsertAsync(new TestState
+            {
+                CorrelationId = Guid.NewGuid(),
+                SagaType = "OrderSaga",
+                CurrentState = "Submitted",
+                BusinessKey = "ORD-PG-1",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db2 = NewContext();
+        var store2 = new EfCoreSagaSnapshotStore<TestState>(db2);
+
+        var found = await store2.FindByBusinessKeyAsync("OrderSaga", "ORD-PG-1");
+        Assert.NotNull(found);
+        Assert.Equal("Submitted", found.CurrentState);
+
+        await Assert.ThrowsAsync<SagaAlreadyExistsException>(() => store2.InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "OrderSaga",
+            CurrentState = "Submitted",
+            BusinessKey = "ORD-PG-1",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        }));
+    }
 }

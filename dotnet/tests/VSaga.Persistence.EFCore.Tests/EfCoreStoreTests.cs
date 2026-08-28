@@ -715,4 +715,162 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         CreatedAtUtc = DateTimeOffset.UtcNow,
         UpdatedAtUtc = DateTimeOffset.UtcNow,
     };
+
+    // --- BusinessKey / partial unique index (production-readiness.md §5.2, item 12) --------
+
+    [Fact]
+    public async Task Insert_TwoInstancesOfTheSameSagaTypeWithNullBusinessKey_BothSucceed()
+    {
+        // THE most important test in this file: every one of the 231+ existing tests never sets
+        // BusinessKey, so it stays null on every insert. If the unique index on (SagaType,
+        // BusinessKey) were not partial (WHERE BusinessKey IS NOT NULL), this would be the first
+        // thing to break -- and it must not, since nothing today has any way to populate BusinessKey.
+        await using var db = NewContext();
+        var store = new EfCoreSagaSnapshotStore<TestState>(db);
+
+        await store.InsertAsync(NewState(Guid.NewGuid(), "TestSaga", "Started"));
+        await store.InsertAsync(NewState(Guid.NewGuid(), "TestSaga", "Started"));
+
+        Assert.Equal(2, await db.SagaInstances.CountAsync(x => x.SagaType == "TestSaga"));
+    }
+
+    [Fact]
+    public async Task InsertWithBusinessKey_ThenFindByBusinessKeyAsync_ReturnsTheRightInstance()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+            {
+                CorrelationId = correlationId,
+                SagaType = "OrderSaga",
+                CurrentState = "Submitted",
+                Status = SagaStatus.Running,
+                OrderId = "ORD-BK-1",
+                BusinessKey = "ORD-BK-1",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db2 = NewContext();
+        var found = await new EfCoreSagaSnapshotStore<TestState>(db2).FindByBusinessKeyAsync("OrderSaga", "ORD-BK-1");
+
+        Assert.NotNull(found);
+        Assert.Equal(correlationId, found.CorrelationId);
+        Assert.Equal("ORD-BK-1", found.OrderId);
+        Assert.Equal("Submitted", found.CurrentState);
+    }
+
+    [Fact]
+    public async Task FindByBusinessKeyAsync_ForAnUnclaimedKey_ReturnsNull()
+    {
+        await using var db = NewContext();
+        await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "OrderSaga",
+            CurrentState = "Submitted",
+            BusinessKey = "ORD-BK-2",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Null(await new EfCoreSagaSnapshotStore<TestState>(db).FindByBusinessKeyAsync("OrderSaga", "no-such-key"));
+    }
+
+    [Fact]
+    public async Task Insert_SameSagaTypeAndBusinessKeyAsAnExistingInstance_ThrowsSagaAlreadyExistsException()
+    {
+        await using var db = NewContext();
+        var store = new EfCoreSagaSnapshotStore<TestState>(db);
+
+        await store.InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "OrderSaga",
+            CurrentState = "Submitted",
+            BusinessKey = "ORD-BK-3",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        await Assert.ThrowsAsync<SagaAlreadyExistsException>(() => store.InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "OrderSaga",
+            CurrentState = "Submitted",
+            BusinessKey = "ORD-BK-3",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        }));
+    }
+
+    [Fact]
+    public async Task Insert_SameBusinessKeyUnderADifferentSagaType_Succeeds()
+    {
+        // The index is scoped per SagaType, matching the composite primary key's own
+        // SagaType-first precedent (see Insert_SameCorrelationIdUnderDifferentSagaType_Succeeds above).
+        await using var db = NewContext();
+        var store = new EfCoreSagaSnapshotStore<TestState>(db);
+
+        await store.InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "OrderSaga",
+            CurrentState = "Submitted",
+            BusinessKey = "ORD-BK-4",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        await store.InsertAsync(new TestState
+        {
+            CorrelationId = Guid.NewGuid(),
+            SagaType = "ShippingChoreography",
+            CurrentState = "Tracking",
+            BusinessKey = "ORD-BK-4",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        Assert.NotNull(await store.FindByBusinessKeyAsync("OrderSaga", "ORD-BK-4"));
+        Assert.NotNull(await store.FindByBusinessKeyAsync("ShippingChoreography", "ORD-BK-4"));
+    }
+
+    [Fact]
+    public async Task Update_KeepsBusinessKeyResolvableAfterAnUnrelatedFieldChanges()
+    {
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(new TestState
+            {
+                CorrelationId = correlationId,
+                SagaType = "OrderSaga",
+                CurrentState = "Submitted",
+                OrderId = "ORD-BK-5",
+                BusinessKey = "ORD-BK-5",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using (var db2 = NewContext())
+        {
+            var store = new EfCoreSagaSnapshotStore<TestState>(db2);
+            var state = await store.FindByBusinessKeyAsync("OrderSaga", "ORD-BK-5");
+            state!.CurrentState = "Completed";
+            await store.UpdateAsync(state, expectedVersion: 0);
+        }
+
+        await using var db3 = NewContext();
+        var reloaded = await new EfCoreSagaSnapshotStore<TestState>(db3).FindByBusinessKeyAsync("OrderSaga", "ORD-BK-5");
+        Assert.NotNull(reloaded);
+        Assert.Equal(correlationId, reloaded.CorrelationId);
+        Assert.Equal("Completed", reloaded.CurrentState);
+        Assert.Equal(1, reloaded.Version);
+    }
 }

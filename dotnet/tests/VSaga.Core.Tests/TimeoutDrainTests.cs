@@ -174,6 +174,9 @@ public sealed class TimeoutDrainTests : IAsyncDisposable
                 await trigger();
             }
         }
+
+        public Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default) =>
+            inner.FindByBusinessKeyAsync(sagaType, businessKey, cancellationToken);
     }
 
     [Fact]

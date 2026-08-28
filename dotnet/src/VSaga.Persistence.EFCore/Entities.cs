@@ -33,6 +33,13 @@ public sealed class SagaInstanceEntity
 
     public Guid? ParentCorrelationId { get; set; }
 
+    /// <summary>
+    /// Mirrors <see cref="VSaga.Abstractions.Sagas.SagaState.BusinessKey"/>. A real column (not just
+    /// inside DataJson) because DataJson is an opaque text blob and cannot be queried or indexed --
+    /// see the partial unique index on (SagaType, BusinessKey) in VSagaDbContext.
+    /// </summary>
+    public string? BusinessKey { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
 
     public DateTimeOffset UpdatedAtUtc { get; set; }

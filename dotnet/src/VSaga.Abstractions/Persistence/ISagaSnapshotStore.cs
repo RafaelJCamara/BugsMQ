@@ -23,4 +23,11 @@ public interface ISagaSnapshotStore<TState> where TState : SagaState
 
     /// <summary>Throws <see cref="SagaConcurrencyException"/> if the stored version does not equal <paramref name="expectedVersion"/>.</summary>
     Task UpdateAsync(TState state, int expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Looks up the instance that reserved this business key, or null if none has. At most one instance
+    /// can exist for a given (sagaType, businessKey) pair -- enforced at InsertAsync time by a unique
+    /// constraint, not by this method.
+    /// </summary>
+    Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default);
 }

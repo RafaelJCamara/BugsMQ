@@ -16,6 +16,18 @@ public sealed class EfCoreSagaSnapshotStore<TState>(VSagaDbContext db) : ISagaSn
         return entity is null ? null : JsonSerializer.Deserialize<TState>(entity.DataJson);
     }
 
+    // FirstOrDefaultAsync (not SingleOrDefaultAsync) is correct here and not a bug: the partial unique
+    // index on (SagaType, BusinessKey) already guarantees at most one non-null-BusinessKey row per
+    // SagaType, so "first" and "single" are equivalent, and First avoids an unnecessary extra
+    // uniqueness check EF would run for Single.
+    public async Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default)
+    {
+        var entity = await db.SagaInstances.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.SagaType == sagaType && x.BusinessKey == businessKey, cancellationToken);
+
+        return entity is null ? null : JsonSerializer.Deserialize<TState>(entity.DataJson);
+    }
+
     public async Task InsertAsync(TState state, CancellationToken cancellationToken = default)
     {
         var entity = ToEntity(state);
@@ -59,6 +71,7 @@ public sealed class EfCoreSagaSnapshotStore<TState>(VSagaDbContext db) : ISagaSn
         // make that hold only by argument rather than by construction.
         entity.ParentSagaType = updated.ParentSagaType;
         entity.ParentCorrelationId = updated.ParentCorrelationId;
+        entity.BusinessKey = updated.BusinessKey;
 
         try
         {
@@ -82,6 +95,7 @@ public sealed class EfCoreSagaSnapshotStore<TState>(VSagaDbContext db) : ISagaSn
         DataJson = JsonSerializer.Serialize(state),
         ParentSagaType = state.ParentSagaType,
         ParentCorrelationId = state.ParentCorrelationId,
+        BusinessKey = state.BusinessKey,
         CreatedAtUtc = state.CreatedAtUtc,
         UpdatedAtUtc = state.UpdatedAtUtc,
     };

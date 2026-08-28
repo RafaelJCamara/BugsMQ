@@ -65,6 +65,9 @@ public sealed class SagaOrchestratorTimeoutRaceTests
                 await trigger();
             }
         }
+
+        public Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default) =>
+            inner.FindByBusinessKeyAsync(sagaType, businessKey, cancellationToken);
     }
 
     private static async Task<ServiceProvider> BuildProviderAsync()

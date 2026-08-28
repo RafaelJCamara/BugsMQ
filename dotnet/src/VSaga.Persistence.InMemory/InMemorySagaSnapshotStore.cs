@@ -21,4 +21,7 @@ public sealed class InMemorySagaSnapshotStore<TState>(InMemorySagaStore store) :
         store.Update(state, expectedVersion);
         return Task.CompletedTask;
     }
+
+    public Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default) =>
+        Task.FromResult(store.FindByBusinessKey<TState>(sagaType, businessKey));
 }

@@ -21,6 +21,16 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     // Keyed by (SagaType, CorrelationId), mirroring the EF provider's composite primary key: a
     // correlation id alone does not identify an instance once two saga types may track the same one.
     private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), StoredSnapshot> _snapshots = new();
+    // Mirrors the EF provider's partial unique index on (SagaType, BusinessKey): reserved at Insert
+    // time so two concurrent initiates for the same business key can't both win. A ConcurrentDictionary
+    // has no cross-dictionary transaction, so Insert below reserves here FIRST, then adds to _snapshots,
+    // and rolls the reservation back if the second add somehow fails -- see Insert's comment for why
+    // that path is defense-in-depth rather than reachable today (CorrelationId is always freshly minted,
+    // so _snapshots.TryAdd cannot collide once the business-key reservation has already succeeded).
+    // Update also keeps this in sync when state.BusinessKey changes between reads (see Update's
+    // comment) -- StoredSnapshot.BusinessKey is the source of truth mirrored from DataJson, and this
+    // dictionary is the index over it, so the two must never disagree with each other either.
+    private readonly ConcurrentDictionary<(string SagaType, string BusinessKey), Guid> _businessKeyReservations = new();
     private readonly ConcurrentDictionary<(string SagaType, Guid CorrelationId), ImmutableList<SagaLogEntry>> _timelines = new();
     private readonly ConcurrentDictionary<long, SagaTimeout> _timeouts = new();
     private readonly ConcurrentDictionary<long, SagaOutboxMessage> _outboxMessages = new();
@@ -30,7 +40,7 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     private long _outboxMessageId;
 
     private sealed record StoredSnapshot(string Json, string SagaType, SagaKind Kind, string CurrentState, SagaStatus Status, int Version,
-        string? ParentSagaType, Guid? ParentCorrelationId, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
+        string? ParentSagaType, Guid? ParentCorrelationId, string? BusinessKey, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
 
     private static string Serialize<TState>(TState state) where TState : SagaState => JsonSerializer.Serialize(state);
 
@@ -40,9 +50,30 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
     internal TState? Find<TState>(string sagaType, Guid correlationId) where TState : SagaState =>
         _snapshots.TryGetValue((sagaType, correlationId), out var stored) ? Deserialize<TState>(stored.Json) : null;
 
+    internal TState? FindByBusinessKey<TState>(string sagaType, string businessKey) where TState : SagaState =>
+        _businessKeyReservations.TryGetValue((sagaType, businessKey), out var correlationId) &&
+        _snapshots.TryGetValue((sagaType, correlationId), out var stored)
+            ? Deserialize<TState>(stored.Json)
+            : null;
+
     internal void Insert<TState>(TState state) where TState : SagaState
     {
         var stored = ToStored(state);
+
+        if (state.BusinessKey is { } businessKey)
+        {
+            if (!_businessKeyReservations.TryAdd((state.SagaType, businessKey), state.CorrelationId))
+                throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
+
+            if (!_snapshots.TryAdd((state.SagaType, state.CorrelationId), stored))
+            {
+                _businessKeyReservations.TryRemove((state.SagaType, businessKey), out _);
+                throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
+            }
+
+            return;
+        }
+
         if (!_snapshots.TryAdd((state.SagaType, state.CorrelationId), stored))
             throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
     }
@@ -59,23 +90,52 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
             if (current.Version != expectedVersion)
                 throw new SagaConcurrencyException(state.SagaType, state.CorrelationId, expectedVersion);
 
+            // BusinessKey has a plain public setter on SagaState (nothing enforces "set once at
+            // creation" at the type level), so Update must not assume it is unchanged from Insert --
+            // doing so is exactly how the reservation dictionary and DataJson silently disagreed
+            // before this fix. Mirror the EF provider's unconditional column reassignment
+            // (EfCoreSagaSnapshotStore.UpdateAsync:74), but since this store's "unique index" is a
+            // second ConcurrentDictionary rather than a database constraint, moving the reservation is
+            // this method's job: reserve the new key BEFORE the swap becomes visible (so a concurrent
+            // writer targeting the same new key collides here, the same guarantee Insert gives), and
+            // only release the old key AFTER the swap succeeds (so a losing CAS below can retry while
+            // still holding it, instead of exposing a window where neither writer holds the old key).
+            var oldBusinessKey = current.BusinessKey;
+            var newBusinessKey = state.BusinessKey;
+            var businessKeyChanged = !string.Equals(oldBusinessKey, newBusinessKey, StringComparison.Ordinal);
+
+            if (businessKeyChanged && newBusinessKey is not null &&
+                !_businessKeyReservations.TryAdd((state.SagaType, newBusinessKey), state.CorrelationId))
+                throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
+
             state.Version = expectedVersion + 1;
             state.UpdatedAtUtc = DateTimeOffset.UtcNow;
             var updated = ToStored(state);
 
             if (_snapshots.TryUpdate(key, updated, current))
-                return;
+            {
+                if (businessKeyChanged && oldBusinessKey is not null)
+                    _businessKeyReservations.TryRemove((state.SagaType, oldBusinessKey), out _);
 
-            // another writer beat us to it between the read and the compare-and-swap; loop and re-check version
+                return;
+            }
+
+            // Another writer beat us to it between the read and the compare-and-swap. Release the new
+            // reservation we just took (if any) so it doesn't leak while we retry -- the retry re-reads
+            // current and re-derives businessKeyChanged from scratch, so re-reserving is safe.
+            if (businessKeyChanged && newBusinessKey is not null)
+                _businessKeyReservations.TryRemove((state.SagaType, newBusinessKey), out _);
         }
     }
 
-    // Mirrors the EF provider's real columns, parent pointer included: both stores have to answer the
-    // same saga-type-agnostic queries without deserializing Json, so whatever ISagaSummaryReader can
-    // filter on there has to be projected out here too.
+    // Mirrors the EF provider's real columns, parent pointer and business key included: both stores
+    // have to answer the same saga-type-agnostic queries without deserializing Json, so whatever
+    // ISagaSummaryReader can filter on there has to be projected out here too, and per
+    // production-readiness.md §5.2 this projection -- not the reservation dictionary -- is BusinessKey's
+    // source of truth on this provider, exactly as it is on EF Core's DataJson/column pair.
     private static StoredSnapshot ToStored<TState>(TState state) where TState : SagaState =>
         new(Serialize(state), state.SagaType, state.Kind, state.CurrentState, state.Status, state.Version,
-            state.ParentSagaType, state.ParentCorrelationId, state.CreatedAtUtc, state.UpdatedAtUtc);
+            state.ParentSagaType, state.ParentCorrelationId, state.BusinessKey, state.CreatedAtUtc, state.UpdatedAtUtc);
 
     public Task<PagedResult<SagaSummary>> ListAsync(SagaListFilter filter, CancellationToken cancellationToken = default)
     {

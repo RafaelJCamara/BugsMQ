@@ -34,6 +34,15 @@ public abstract class SagaState
     /// <summary>The correlation id of the instance that started this one — see <see cref="ParentSagaType"/>.</summary>
     public Guid? ParentCorrelationId { get; set; }
 
+    /// <summary>
+    /// This saga type's declared business key (via the future <c>CorrelateOn</c>), or null if the saga
+    /// type hasn't declared one. Engine-owned, set once at creation -- same precedent as
+    /// <see cref="ParentSagaType"/> above. Promoted to a real column in every persistence provider (not
+    /// left inside the serialized state blob) so it can be looked up directly; see
+    /// <c>ISagaSnapshotStore{TState}.FindByBusinessKeyAsync</c>.
+    /// </summary>
+    public string? BusinessKey { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
 
     public DateTimeOffset UpdatedAtUtc { get; set; }

@@ -113,6 +113,14 @@ public sealed class VSagaDbContext(DbContextOptions<VSagaDbContext> options) : D
             // parent pointer. Root sagas leave both null, so on a workload without sub-sagas this index
             // stays effectively empty rather than duplicating the table.
             b.HasIndex(x => new { x.ParentSagaType, x.ParentCorrelationId });
+            b.Property(x => x.BusinessKey).HasMaxLength(400);
+            // Partial: only sagas that declare CorrelateOn (a later item) ever have a non-null BusinessKey, and
+            // every saga today leaves it null -- see EfCoreStoreTests for the regression test this protects.
+            // Unique so two concurrent initiates for the same business key can't both win; the race is resolved
+            // by reserving before the step runs, not by catching after it -- see production-readiness.md S5.2.
+            b.HasIndex(x => new { x.SagaType, x.BusinessKey })
+                .IsUnique()
+                .HasFilter("\"BusinessKey\" IS NOT NULL");
         });
     }
 }
