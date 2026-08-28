@@ -174,6 +174,26 @@ non-deterministic.
 Every existing test keeps its current timing, and the durability hole closes: a crash between commit
 and inline dispatch leaves a `Pending` row the poller picks up.
 
+> **Step 2 is load-bearing, and the first implementation got it wrong.** `ISagaOutboxStore.EnqueueAsync`
+> must *stage* onto the shared context and return without saving; the caller's `PersistAsync` is what
+> commits it. The original commit had it call `SaveChangesAsync` itself — forced, because it keyed
+> `MarkDispatchedAsync` on the EF identity `Id`, which only exists after a save. That committed each row
+> in its own transaction *ahead* of the snapshot's, reopening precisely the dual-write window this
+> section exists to close, and it stayed invisible until the poller of item 9 existed to claim the
+> orphans. Concretely: a timeout whose persist lost its concurrency race had its publishes deliberately
+> discarded, but the rows were already durably `Pending`, so the poller published them a grace period
+> later — `DiscardDeferredPublishesAsync` was reduced to logging. `TimeoutDrainTests.cs:180` kept passing
+> throughout, because it only asserts nothing went out *inline*.
+>
+> The fix keys `MarkDispatchedAsync` on `MessageId` (a minted GUID, indexed) so no database-generated
+> value is needed at enqueue time, and adds `DiscardPendingAsync` for the abandon paths. **That discard
+> must run before the discard path's own `LogAsync` calls** — those append through the same context, and
+> their `SaveChangesAsync` would otherwise commit the very rows being suppressed.
+>
+> The general rule, worth stating once because it bit twice: **every EF store here shares one Scoped
+> `VSagaDbContext` per message, so any store method that calls `SaveChangesAsync` also commits whatever
+> else is staged on that context.** A store's save is never local to that store.
+
 **A second constraint, found by an independent design review and confirmed by reading the code
 directly: the inline dispatch cannot go through `PublishRawAsync`.**
 `InMemoryMessageTransport.PublishRawAsync` passes `message: null` into `DispatchAsync`
@@ -186,7 +206,9 @@ by keeping the inline dispatch strongly typed and letting only the *durability* 
 ### 4.2 New files
 
 - `VSaga.Abstractions/Persistence/ISagaOutboxStore.cs` — modelled on `ISagaTimeoutStore`:
-  `EnqueueAsync`, `MarkDispatchedAsync`, `ClaimPendingAsync(olderThan, batchSize, ct)`.
+  `EnqueueAsync` (stages only, per the callout in §4.1), `MarkDispatchedAsync(messageId, ct)`,
+  `ClaimPendingAsync(olderThan, batchSize, ct)`, and `DiscardPendingAsync(messageIds, ct)` for the
+  paths that abandon a batch instead of draining it.
 - `VSaga.Persistence.EFCore/EfCoreSagaOutboxStore.cs` — reuse the provider branch and the Postgres
   `FOR UPDATE SKIP LOCKED` claim from `EfCoreSagaTimeoutStore` verbatim.
 - `VSaga.Core/Runtime/SagaOutboxDispatcherHostedService.cs` — copy
@@ -216,6 +238,16 @@ since nothing is written to the outbox until commit time (§4.1 step 2) — ther
 boundaries), and `SagaOrchestrator.cs:586-598` — `PublishChildSagaFinishedAsync` calls
 `transport.PublishAsync` directly, bypassing `SagaContext` entirely. **It is a second publish surface**
 and must route through the outbox too; it already runs after the persist in both call paths.
+
+> **"Already runs after the persist" is the obstacle here, not the convenience it sounds like.** Since
+> `EnqueueAsync` only stages (§4.1), a row written at either of those call sites would only ever be
+> committed by `MarkDispatchedAsync`'s own save — inserted already-`Dispatched`, covering no crash
+> window at all. So this surface splits in two: `StageChildSagaFinishedAsync` runs *before* the persist
+> and returns a `StagedChildSagaFinished` (message + envelope), and the send half consumes it
+> afterwards — the same "one row and one dispatch describing one message identity" shape
+> `DeferredPublish` has. The timeout race-loss branch discards the staged row as well: a persist that
+> lost its race means the saga never reached a terminal status, and announcing one is a lie the parent
+> acts on.
 
 Plus `Entities.cs` (copy `SagaTimeoutEntity:77-90`), `VSagaDbContext.cs` (new `DbSet` +
 `OnModelCreating` with a claim index on `(Status, CreatedAtUtc)`; the global `DateTimeOffset` UTC
@@ -497,6 +529,13 @@ features preceding them. `LICENSE` lands with packaging, not with the restructur
 
 One commit each, per this repo's habit, and no commit depending on one not yet verified:
 
+**Progress: items 1–10 committed, plus one unplanned fix between 10 and its predecessors.** That fix
+(`Commit outbox rows atomically with the snapshot`) repaired the §4.1 step 2 violation described in
+that section's callout — it is not an extra feature, it restores the behaviour item 8 was supposed to
+have had. Item 11 is next. Caveat carried forward from items 7–10: Docker was unavailable in those
+sessions, so the five Testcontainers-backed suites (RabbitMQ, MassTransit, Wolverine, Brighter,
+Postgres) were only compiled, never run — **run them before trusting any of items 7–10.**
+
 1. `LICENSE` + `Directory.Build.props` packaging metadata + MinVer, with `fetch-depth: 0` added to
    every CI checkout in the same commit — MinVer silently produces `0.0.0` on a shallow clone, and a
    build assertion should fail loudly if the computed version is ever `0.0.0`.
@@ -522,7 +561,14 @@ One commit each, per this repo's habit, and no commit depending on one not yet v
    `VSaga.Http.Tests` suite are the canaries that catch a regression here.
 9. `SagaOutboxDispatcherHostedService` (the crash-recovery poller), scoped correctly per item 4.
 10. `PublishChildSagaFinishedAsync` routes through the outbox.
-11. `Outbox:Mode=All`.
+11. `Outbox:Mode=All`. **Not a mechanical extension of items 8/10, despite reading like one.** Every row
+    staged so far is atomic with a persist because a committed state transition is what justifies the
+    publish. `ctx.PublishAsync`/`SendAsync` fire *mid-step*, before any persist — there is no committed
+    transition to bind them to, and the step may still throw or retry afterwards (`StepExecutor`'s
+    replay-from-zero). Decide deliberately what `All` means before implementing: staging mid-step rows
+    that a subsequent `ClearDeferredPublishes`-style abandon must then discard, versus accepting that
+    immediate publishes are simply outside the outbox's guarantee and scoping `All` to something
+    narrower. `SagaOutboxOptions.Mode` already exists from item 9 and is deliberately read nowhere.
 12. `SagaState.BusinessKey` + column + partial unique index + migration + both stores + the
     reservation-insert (§5.2).
 13. `CorrelateOn` + the shared `SagaCorrelationModel<TState>` + `ISagaDefinition.TryGetCorrelationKey`
