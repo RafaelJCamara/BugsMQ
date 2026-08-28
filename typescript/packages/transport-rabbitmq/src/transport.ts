@@ -46,6 +46,30 @@ export async function createRabbitMqTransport(
   return new RabbitMqTransport(connection, resolved);
 }
 
+/**
+ * amqplib emits `'error'` on the Channel itself whenever the broker closes it server-side --
+ * PRECONDITION_FAILED on a topology mismatch, a queue deleted underneath a consumer, the channel
+ * teardown that accompanies a dropped connection -- and its promise API attaches no listener of its
+ * own (lib/channel_model.js wires only `'delivery'` and `'cancel'`). An `'error'` event with no
+ * listener is a Node EventEmitter throw, so without this the process dies on what is a recoverable,
+ * per-channel broker error.
+ *
+ * .NET has no equivalent hazard to guard: it opens a fresh publish channel per publish
+ * (RabbitMqTransport.PublishInternalAsync's `await using`) rather than caching one, so it has no
+ * long-lived channel for the broker to kill.
+ *
+ * Warning rather than rethrowing, because by the time this fires the error has already reached
+ * whoever can act on it: a failed publish is rejected by its own confirm callback or by the
+ * `'return'` listener, and a dead publish channel is dropped by the `'close'` listener so the next
+ * publish opens a fresh one. What is left is diagnostics -- including the one case with no promise
+ * to reject onto, an unroutable return whose publish is no longer pending.
+ */
+function guardChannelErrors(channel: Channel, role: string): void {
+  channel.on('error', (error: unknown) => {
+    console.warn(`[vsaga] RabbitMQ ${role} channel error:`, error);
+  });
+}
+
 class RabbitMqTransport implements MessageTransport {
   readonly #connection: ChannelModel;
   readonly #options: ResolvedRabbitMqOptions;
@@ -136,6 +160,7 @@ class RabbitMqTransport implements MessageTransport {
     handler: (message: ReceivedMessage) => Promise<void>,
   ): Promise<Subscription> {
     const channel = await this.#connection.createChannel();
+    guardChannelErrors(channel, 'consumer');
     this.#consumerChannels.push(channel);
 
     await channel.prefetch(this.#options.prefetchCount, false);
@@ -267,6 +292,7 @@ class RabbitMqTransport implements MessageTransport {
     if (this.#publishChannel) return this.#publishChannel;
 
     const channel = await this.#connection.createConfirmChannel();
+    guardChannelErrors(channel, 'publish');
 
     // Without this, a `mandatory` publish to an unbound routing key is returned by the broker and
     // silently dropped -- the confirm callback still reports success.

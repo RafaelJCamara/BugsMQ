@@ -353,4 +353,74 @@ describe('createRabbitMqTransport', () => {
 
     await expect(t.close()).resolves.toBeUndefined();
   });
+
+  /**
+   * The publish channel is cached for the life of the transport (unlike .NET, which opens a fresh
+   * one per publish -- RabbitMqTransport.PublishInternalAsync's `await using`), so this adapter is
+   * the only one of the two with a long-lived channel the broker can kill underneath it: a topology
+   * mismatch, a queue deleted out from under a consumer, or the channel teardown that accompanies a
+   * dropped connection all close it server-side. Both tests below drive that for real by
+   * re-declaring the exchange out-of-band with a conflicting `durable`, which is what a live broker
+   * answers with PRECONDITION_FAILED and a channel close.
+   */
+  describe('publish channel loss', () => {
+    /** Replaces the exchange with one whose `durable` conflicts with what the transport asserts. */
+    async function redeclareExchange(exchangeName: string, durable: boolean): Promise<void> {
+      const connection = await amqp.connect(connectionString);
+      try {
+        const channel = await connection.createChannel();
+        await channel.deleteExchange(exchangeName);
+        await channel.assertExchange(exchangeName, 'topic', { durable, autoDelete: false });
+      } finally {
+        await connection.close();
+      }
+    }
+
+    it('surfaces a broker-side channel error as a rejected publish instead of killing the process', async () => {
+      // amqplib emits 'error' on the Channel itself for a server-initiated close, and its promise
+      // API attaches no listener of its own (lib/channel_model.js wires only 'delivery' and
+      // 'cancel'). An 'error' event with no listener is an EventEmitter throw, so an unguarded
+      // channel takes the whole Node process down on what is a recoverable broker error.
+      const exchangeName = uniqueName('vsaga.test.exchange');
+      const sender = await transport({ exchangeName });
+
+      // Opens the publish channel and asserts the exchange durable, the state the redeclare below
+      // then conflicts with. Unroutable because nothing is bound -- immaterial here.
+      await expect(
+        sender.publish('Whatever', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({ isUnroutable: true });
+
+      await redeclareExchange(exchangeName, false);
+
+      await expect(
+        sender.publish('Whatever', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toThrow(/PRECONDITION_FAILED/i);
+    });
+
+    it('opens a fresh publish channel after the cached one dies, rather than reusing the dead one', async () => {
+      const exchangeName = uniqueName('vsaga.test.exchange');
+      const sender = await transport({ exchangeName });
+
+      await expect(
+        sender.publish('Whatever', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({ isUnroutable: true });
+
+      await redeclareExchange(exchangeName, false);
+      await expect(
+        sender.publish('Whatever', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toThrow(/PRECONDITION_FAILED/i);
+
+      // Broker back to a state the transport agrees with. Reaching an unroutable return again is
+      // the proof: it means the publish got as far as the broker on a working channel. Were the
+      // dead channel still cached, this would fail with amqplib's "Channel closed" instead.
+      await redeclareExchange(exchangeName, true);
+
+      await expect(
+        sender.publish('Whatever', Buffer.from('{}'), newEnvelope(newCorrelationId())),
+      ).rejects.toMatchObject({
+        name: 'MessageTransportPublishError',
+        isUnroutable: true,
+      });
+    });
+  });
 });
