@@ -17,6 +17,7 @@ dotnet new console -n MyFirstSaga && cd MyFirstSaga
 dotnet add package VSaga.Core
 dotnet add package VSaga.Persistence.InMemory
 dotnet add package VSaga.Transport.InMemory
+dotnet add package VSaga.Testing              # for the "Test it" section below
 dotnet add package Microsoft.Extensions.Hosting
 ```
 
@@ -88,10 +89,14 @@ a step to that state; `.Then(...)` runs your logic; `.Publish(...)` sends a mess
 
 ## Run it
 
+This is the complete file — the saga itself writes nothing to the console, so it also reads the
+persisted state back at the end to show the result:
+
 ```csharp
 // Program.cs
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using VSaga.Abstractions.Persistence;
 using VSaga.Abstractions.Transport;
 using VSaga.Core;
 using VSaga.Persistence.InMemory;
@@ -114,22 +119,25 @@ await transport.PublishAsync(
     MessageEnvelope.New(orderId));   // the saga's correlation id -- see concepts.md
 
 await Task.Delay(100);   // the in-memory transport dispatches synchronously, but give the host a beat
-await host.StopAsync();
-```
-
-Run it with `dotnet run`. There's no console output yet because nothing in the saga logs anything —
-that's expected for this minimal example. To actually observe the result, either add a
-`.Then((ctx, msg) => Console.WriteLine($"Order {msg.OrderId} approved"))` to the `OrderApproved`
-handler of a second participant saga, or read the persisted state back directly:
-
-```csharp
-using VSaga.Abstractions.Persistence;
 
 var store = host.Services.GetRequiredService<ISagaSnapshotStore<OrderApprovalState>>();
 var state = await store.FindAsync(nameof(OrderApprovalSaga), orderId, CancellationToken.None);
 Console.WriteLine($"Status: {state?.Status}, State: {state?.CurrentState}");
 // Status: Completed, State: Approved
+
+await host.StopAsync();
 ```
+
+Run it with `dotnet run`. Among the host's own startup logging you'll see:
+
+```
+Status: Completed, State: Approved
+```
+
+The saga itself logs nothing — reading the snapshot back is what makes the result visible here. In a
+real system you'd observe it the way the rest of these docs do: a participant reacting to
+`OrderApproved`, the [event log](observability.md#the-event-log), or the
+[dashboard](dashboard.md).
 
 ## Test it
 
@@ -137,6 +145,9 @@ Console.WriteLine($"Status: {state?.Status}, State: {state?.CurrentState}");
 the natural way to unit-test a saga definition:
 
 ```csharp
+using VSaga.Abstractions.Sagas;   // SagaStatus
+using VSaga.Testing;              // SagaTestHarness
+
 await using var harness = new SagaTestHarness<OrderApprovalSaga, OrderApprovalState>();
 
 await harness.Given(Guid.NewGuid()).WhenAsync(new SubmitOrder(Guid.NewGuid(), Amount: 250m));
@@ -144,6 +155,9 @@ await harness.Given(Guid.NewGuid()).WhenAsync(new SubmitOrder(Guid.NewGuid(), Am
 await harness.AssertStatusAsync(SagaStatus.Completed);
 harness.AssertPublished<OrderApproved>();
 ```
+
+The harness has no test-framework dependency of its own, so this runs under xUnit, NUnit, MSTest, or
+straight from `Program.cs` if you just want to watch it work.
 
 See [`testing.md`](testing.md) for the full harness API.
 

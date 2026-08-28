@@ -1,59 +1,76 @@
-# DashboardWeb
+# vSaga dashboard (Angular SPA)
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.10.
+The web UI for the vSaga ops dashboard: a saga list with filtering and live updates, a per-instance
+detail page with a service map, timeline, and state data, and manual retry for failed sagas. It is
+a thin client over the Dashboard API — every screen here is backed by an endpoint documented in
+[`docs/dashboard.md`](../../docs/dashboard.md).
 
-## Development server
+## Prerequisites
 
-To start a local development server, run:
-
-```bash
-ng serve
-```
-
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
-
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+The API and its dependencies have to be running first — this app has no data of its own:
 
 ```bash
-ng generate component component-name
+docker compose up -d --build      # from the repository root: Postgres, RabbitMQ, dashboard API, sample
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+## Run it
 
 ```bash
-ng generate --help
+npm install
+npx ng serve                      # http://localhost:4200
 ```
 
-## Building
+`npm install` is separate from the SDK's: `typescript/dashboard-web` is deliberately **not** an npm
+workspace member. It has its own lockfile and Angular CLI toolchain, and CI builds it as its own job
+(`angular` in `.github/workflows/ci.yml`). Running `npm install` under `typescript/` does not install
+anything for this app.
 
-To build the project run:
+## Commands
 
-```bash
-ng build
+| Command | What it does |
+| --- | --- |
+| `npx ng serve` | Dev server with hot reload on http://localhost:4200 |
+| `npx ng build` | Production bundle into `dist/` |
+| `npx ng test` | Unit tests (vitest), the same command CI runs |
+
+## How it reaches the API
+
+Both values live in [`src/app/api-config.ts`](src/app/api-config.ts):
+
+```ts
+export const API_BASE_URL = 'http://localhost:5080';
+export const HUB_URL = `${API_BASE_URL}/hubs/saga`;
+export const DASHBOARD_API_KEY = 'dev-local-only-change-me';
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+The key is attached to every request by an HTTP interceptor
+([`src/app/interceptors/api-key.interceptor.ts`](src/app/interceptors/api-key.interceptor.ts)) as the
+`X-Api-Key` header, and passed to the SignalR hub via `accessTokenFactory`.
 
-## Running unit tests
+Two consequences worth knowing before you change anything:
 
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+- **Changing the server's key means editing this file too.** The API reads `Dashboard:ApiKey` from
+  its own configuration (`Dashboard__ApiKey` in `docker-compose.yml`); the two are not wired
+  together, so they have to be changed in both places.
+- **The key ships in the bundle.** It is a build-time constant in client-side JavaScript, so anyone
+  who can load the page can read it. That is an accepted trade-off for an internal ops dashboard on
+  a trusted network — see [`docs/dashboard.md#authentication`](../../docs/dashboard.md#authentication)
+  for the reasoning and what deploying this beyond that setting would require.
 
-```bash
-ng test
+The API also only accepts browser requests from the origin in its `Dashboard__WebOrigin` setting,
+which is `http://localhost:4200` in `docker-compose.yml`. Serve this app on a different port and
+CORS will reject its calls until that setting matches.
+
+## Project layout
+
+```
+src/app/
+  pages/saga-list/      The filterable, sortable, paged saga list
+  pages/saga-detail/    One instance: summary, map/timeline/data tabs, retry
+  components/saga-map/  The service-graph renderer and its replay scrubber
+  services/             HTTP client and the SignalR hub client
+  models/               DTOs mirroring the API's response shapes
 ```
 
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+Generated with Angular CLI 21.2.10; `npx ng generate component <name>` still works as usual for
+adding to it.
