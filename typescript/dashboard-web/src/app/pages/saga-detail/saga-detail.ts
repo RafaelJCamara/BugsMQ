@@ -33,6 +33,8 @@ export class SagaDetail implements OnInit, OnDestroy {
   readonly tab = signal<Tab>('map');
   readonly retrying = signal(false);
   readonly retryMessage = signal<string | null>(null);
+  /** Retry re-drives a real saga against real participants, so the button asks before it fires. */
+  readonly confirmingRetry = signal(false);
 
   private subs: Subscription[] = [];
 
@@ -147,7 +149,28 @@ export class SagaDetail implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * The entry type as the timeline should read it. The engine logs one terminal entry for every
+   * Finalize, so a saga that failed still ends on SagaCompleted — accurate about the lifecycle, but
+   * on screen directly under a red "Failed" badge it reads as a contradiction. "SagaFinalized" says
+   * the same thing without arguing with the status. Presentation only: the persisted SagaEntryType
+   * member is unchanged, and its `toState` already carries the outcome the entry ended on.
+   */
+  entryTypeLabel(entryType: string): string {
+    return entryType === 'SagaCompleted' ? 'SagaFinalized' : entryType;
+  }
+
+  askRetryConfirmation(): void {
+    this.retryMessage.set(null);
+    this.confirmingRetry.set(true);
+  }
+
+  cancelRetry(): void {
+    this.confirmingRetry.set(false);
+  }
+
   retry(): void {
+    this.confirmingRetry.set(false);
     this.retrying.set(true);
     this.retryMessage.set(null);
 

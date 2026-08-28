@@ -133,6 +133,20 @@
   cursor: default;
 }
 
+.retry-confirm-prompt {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* Cancel is the quiet one: the destructive action already carries the red, so giving the way out
+   equal weight would make the pair read as two equally-likely choices. */
+.retry-row button.retry-cancel {
+  background: none;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-weight: 500;
+}
+
 .retry-message {
   font-size: 0.82rem;
   color: var(--text-muted);

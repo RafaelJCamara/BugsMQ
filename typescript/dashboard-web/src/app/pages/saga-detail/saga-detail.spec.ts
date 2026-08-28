@@ -192,6 +192,64 @@ describe('SagaDetail', () => {
     expect(fixture.componentInstance.retryMessage()).toBe('Retry failed.');
   });
 
+  it('the retry button asks for confirmation instead of retrying straight away', () => {
+    const fixture = setup(makeDetail({ status: 'Failed' }));
+    apiMock.retry.mockReturnValue(of(undefined));
+
+    fixture.nativeElement.querySelector('.retry-row button').click();
+    fixture.detectChanges();
+
+    expect(apiMock.retry).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.confirmingRetry()).toBe(true);
+    expect(fixture.nativeElement.querySelector('.retry-confirm')).not.toBeNull();
+  });
+
+  it('confirming the prompt runs the retry and clears the prompt', () => {
+    const fixture = setup(makeDetail({ status: 'Failed' }));
+    apiMock.retry.mockReturnValue(of(undefined));
+
+    fixture.componentInstance.askRetryConfirmation();
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('.retry-confirm').click();
+
+    expect(apiMock.retry).toHaveBeenCalledWith('OrderSaga', 'saga-1');
+    expect(fixture.componentInstance.confirmingRetry()).toBe(false);
+  });
+
+  it('cancelling the prompt leaves the saga untouched', () => {
+    const fixture = setup(makeDetail({ status: 'Failed' }));
+    apiMock.retry.mockReturnValue(of(undefined));
+
+    fixture.componentInstance.askRetryConfirmation();
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('.retry-cancel').click();
+    fixture.detectChanges();
+
+    expect(apiMock.retry).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.confirmingRetry()).toBe(false);
+    expect(fixture.nativeElement.querySelector('.retry-row button').textContent).toContain('Retry this saga');
+  });
+
+  // The engine logs SagaCompleted for any terminal Finalize, so a failed saga's last entry would
+  // otherwise read "SagaCompleted" directly beneath a red "Failed" badge.
+  it('labels the terminal entry SagaFinalized rather than SagaCompleted', () => {
+    const fixture = setup(makeDetail({ status: 'Failed' }), [
+      makeEntry({ sequenceNumber: 1, entryType: 'SagaCompleted', toState: 'Undeliverable' }),
+    ]);
+    fixture.componentInstance.setTab('timeline');
+    fixture.detectChanges();
+
+    const entryText = fixture.nativeElement.querySelector('.entry-type').textContent;
+    expect(entryText).toContain('SagaFinalized');
+    expect(entryText).not.toContain('SagaCompleted');
+  });
+
+  it('leaves every other entry type unchanged', () => {
+    const fixture = setup(makeDetail());
+    expect(fixture.componentInstance.entryTypeLabel('StepFailed')).toBe('StepFailed');
+    expect(fixture.componentInstance.entryTypeLabel('MessageReceived')).toBe('MessageReceived');
+  });
+
   it('prettyDataJson pretty-prints valid JSON', () => {
     const fixture = setup(makeDetail());
     fixture.componentInstance.detail.set({ ...fixture.componentInstance.detail()!, dataJson: '{"a":1}' });

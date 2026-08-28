@@ -78,9 +78,15 @@
 
     @if (d.summary.status === 'Failed' || d.summary.status === 'TimedOut') {
       <div class="retry-row">
-        <button type="button" [disabled]="retrying()" (click)="retry()">
-          {{ retrying() ? 'Retrying…' : 'Retry this saga' }}
-        </button>
+        @if (confirmingRetry()) {
+          <span class="retry-confirm-prompt">Redrive this saga from its failed step?</span>
+          <button type="button" class="retry-confirm" (click)="retry()">Yes, retry</button>
+          <button type="button" class="retry-cancel" (click)="cancelRetry()">Cancel</button>
+        } @else {
+          <button type="button" [disabled]="retrying()" (click)="askRetryConfirmation()">
+            {{ retrying() ? 'Retrying…' : 'Retry this saga' }}
+          </button>
+        }
         @if (retryMessage(); as msg) {
           <span class="retry-message">{{ msg }}</span>
         }
@@ -108,7 +114,7 @@
         @for (entry of timeline(); track entry.sequenceNumber) {
           <li class="timeline-entry" [class.timeline-entry--error]="entry.errorMessage">
             <div class="timeline-entry-header">
-              <span class="entry-type">{{ entry.entryType }}</span>
+              <span class="entry-type">{{ entryTypeLabel(entry.entryType) }}</span>
               <span class="muted">{{ entry.occurredAtUtc | date: 'HH:mm:ss.SSS' }}</span>
             </div>
             @if (entry.fromState || entry.toState) {
