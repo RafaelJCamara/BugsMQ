@@ -36,4 +36,12 @@ public interface ISagaDefinition<TState> where TState : SagaState, new()
 
     /// <summary>Timeout duration configured for a state, if any (used to schedule a timeout on entry).</summary>
     TimeSpan? GetTimeout(string forState);
+
+    /// <summary>
+    /// Extracts <paramref name="message"/>'s business-key correlation value, if this saga declared one via
+    /// <c>CorrelateOn(...)</c> and registered a <c>CorrelateBy</c> extractor for this message's CLR type.
+    /// Null means this message carries no business key — the caller should fall back to the transport
+    /// correlation id, which is every saga's behaviour today.
+    /// </summary>
+    string? TryGetCorrelationKey(object message);
 }

@@ -11,6 +11,8 @@ internal sealed class SagaDefinitionModel<TState> where TState : SagaState, new(
 
     public readonly Dictionary<string, (TimeSpan Delay, StepDefinition<TState> Step)> Timeouts = new(StringComparer.Ordinal);
 
+    public readonly SagaCorrelationModel<TState> Correlation = new();
+
     public string? InitialStateName { get; set; }
 
     public UnhandledEventPolicy UnhandledEventPolicy { get; set; } = UnhandledEventPolicy.LogAndIgnore;

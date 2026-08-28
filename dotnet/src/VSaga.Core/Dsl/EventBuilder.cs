@@ -37,6 +37,8 @@ public sealed class EventBuilder<TState, TMessage> : StateBuilder<TState>
             return Task.CompletedTask;
         });
 
+        Model.Correlation.RegisterExtractor(typeof(TMessage), property, messageKey);
+
         return this;
     }
 

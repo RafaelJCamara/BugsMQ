@@ -52,6 +52,8 @@ public sealed class ChoreographyEventBuilder<TState, TMessage>
             return Task.CompletedTask;
         });
 
+        _model.Correlation.RegisterExtractor(typeof(TMessage), property, messageKey);
+
         return this;
     }
 

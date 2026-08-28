@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using VSaga.Abstractions.Sagas;
 
 namespace VSaga.Core.Dsl;
@@ -85,6 +86,18 @@ public abstract class ChoreographedSagaDefinition<TState> : ISagaDefinition<TSta
     }
 
     protected void OnUnhandledEvent(UnhandledEventPolicy policy) => _model.UnhandledEventPolicy = policy;
+
+    /// <summary>
+    /// Declares which state property is this saga type's business key. Arms correlation: a
+    /// <c>CorrelateBy</c> targeting the same property additionally registers as that message type's key
+    /// extractor. A saga that never calls this is unaffected.
+    /// </summary>
+    protected void CorrelateOn(Expression<Func<TState, object?>> selector)
+    {
+        _model.Correlation.DeclareBusinessKey(CorrelationSelector.ResolveProperty(selector, SagaType));
+    }
+
+    public string? TryGetCorrelationKey(object message) => _model.Correlation.TryExtract(message);
 
     public TimeSpan? GetTimeout(string forState) =>
         _model.Timeouts.TryGetValue(forState, out var timeout) ? timeout.Delay : null;
