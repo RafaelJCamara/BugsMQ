@@ -350,8 +350,17 @@ public sealed class SagaOrchestratorConcurrencyRedeliveryTests
             await hosted.StopAsync(CancellationToken.None);
     }
 
-    /// <summary>Same shape as SagaOrchestratorTracingTests' own private helper -- captures every vsaga.saga.duration recording, unfiltered (this file's fixtures are the only ones using DeferredConcurrencyRaceSaga/ConcurrencyRedeliveryRaceSaga's SagaType, so no cross-test noise to filter out).</summary>
-    private static MeterListener CreateDurationListener(List<double> recorded)
+    /// <summary>
+    /// Same shape as SagaOrchestratorTracingTests' own private helper -- and, on reflection, for the
+    /// exact same reason that one filters by tag: MeterListener is process-wide, and xUnit runs test
+    /// classes in parallel by default, so an unfiltered listener here doesn't just risk collisions with
+    /// this file's own two saga fixtures -- it captures a SagaDuration recording from *any* saga in
+    /// *any* concurrently-running test that happens to reach a terminal status while this listener is
+    /// registered. Missing this filter is exactly what made
+    /// LostRaceOnATerminalTransition_DoesNotRecordAPhantomSagaDuration flaky in CI (passed locally,
+    /// failed there with 2 recordings instead of 1) -- a real bug in the test, not the fix it exercises.
+    /// </summary>
+    private static MeterListener CreateDurationListener(string sagaType, List<double> recorded)
     {
         var listener = new MeterListener
         {
@@ -364,10 +373,17 @@ public sealed class SagaOrchestratorConcurrencyRedeliveryTests
                 }
             },
         };
-        listener.SetMeasurementEventCallback<double>((_, measurement, _, _) =>
+        listener.SetMeasurementEventCallback<double>((_, measurement, tags, _) =>
         {
-            lock (recorded)
-                recorded.Add(measurement);
+            foreach (var tag in tags)
+            {
+                if (string.Equals(tag.Key, VSagaDiagnostics.TagSagaType, StringComparison.Ordinal) && Equals(tag.Value, sagaType))
+                {
+                    lock (recorded)
+                        recorded.Add(measurement);
+                    return;
+                }
+            }
         });
         listener.Start();
         return listener;
@@ -392,6 +408,7 @@ public sealed class SagaOrchestratorConcurrencyRedeliveryTests
 
         await using var provider = await BuildDeferredProviderAsync();
         var transport = (InMemoryMessageTransport)provider.GetRequiredService<IMessageTransport>();
+        var sagaType = provider.GetRequiredService<DeferredConcurrencyRaceSaga>().SagaType;
         var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<DeferredRaceSagaState>>();
 
         await transport.PublishAsync(new DeferredOrderOpened(businessKey), MessageEnvelope.New(openCorrelationId));
@@ -401,7 +418,7 @@ public sealed class SagaOrchestratorConcurrencyRedeliveryTests
             transport.PublishAsync(new DeferredConfirmationReceived(businessKey), MessageEnvelope.New(correlationIdC));
 
         var recorded = new List<double>();
-        using var listener = CreateDurationListener(recorded);
+        using var listener = CreateDurationListener(sagaType, recorded);
 
         // Both B and C's steps reach outcome.FinalStatus == Completed (both transitions call
         // .Finalize(SagaStatus.Completed)) -- only C's persist actually commits, though, so if the fix
