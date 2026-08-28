@@ -23,6 +23,12 @@ judged against this one's shape.
   limitation where the recovered channel's restarted delivery-tag numbering can no longer ack it (a
   transient, auto-recovering condition also seen on the Brighter adapter's gateway; see
   [`brighter.md`](brighter.md)).
+- **Delivery bodies are copied, not passed through.** RabbitMQ.Client 7.x backs a delivery's body with
+  pooled/rented memory valid only for the duration of the event handler; the client can reuse that
+  buffer for a later frame the moment a handler awaits something or returns while `ReceivedMessage` is
+  still retained. `DispatchReceivedAsync` copies into a freshly-owned array before handing it off, so
+  every caller sees a stable body regardless of how long it holds onto it (see
+  [`../history/`](../history/) for the corrupted-payload bug this closes).
 
 Options: [`../configuration.md#rabbitmqoptions-vsagatransportrabbitmq`](../configuration.md#rabbitmqoptions-vsagatransportrabbitmq).
 
