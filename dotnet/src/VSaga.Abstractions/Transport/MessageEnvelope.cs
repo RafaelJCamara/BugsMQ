@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using VSaga.Abstractions.Diagnostics;
+
 namespace VSaga.Abstractions.Transport;
 
 /// <summary>Metadata stamped onto every outbound message alongside its payload.</summary>
@@ -26,7 +29,7 @@ public sealed record MessageEnvelope(
     public static MessageEnvelope New(Guid correlationId, IReadOnlyDictionary<string, string>? headers = null) =>
         new(correlationId, Guid.NewGuid().ToString("N"), headers);
 
-    /// <summary>Stamps the publisher's service identity (and, if this publish was caused by handling an inbound message, that message's id) onto the envelope's headers.</summary>
+    /// <summary>Stamps the publisher's service identity (and, if this publish was caused by handling an inbound message, that message's id) onto the envelope's headers, plus the current <see cref="Activity"/>'s W3C trace context, if any.</summary>
     public static MessageEnvelope From(string sourceService, Guid correlationId, string? causationId = null, IReadOnlyDictionary<string, string>? headers = null)
     {
         var merged = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -40,6 +43,9 @@ public sealed record MessageEnvelope(
         merged[SourceServiceHeader] = sourceService;
         if (causationId is not null)
             merged[CausationIdHeader] = causationId;
+
+        if (Activity.Current is { } activity)
+            VSagaDiagnostics.Inject(activity.Context, merged);
 
         return new MessageEnvelope(correlationId, Guid.NewGuid().ToString("N"), merged);
     }

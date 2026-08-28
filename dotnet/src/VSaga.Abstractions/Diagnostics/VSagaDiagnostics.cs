@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Globalization;
 
 namespace VSaga.Abstractions.Diagnostics;
 
@@ -30,4 +31,105 @@ public static class VSagaDiagnostics
     public const string TagCorrelationId = "saga.correlation_id";
     public const string TagFromState = "saga.from_state";
     public const string TagToState = "saga.to_state";
+
+    /// <summary>The W3C Trace Context header carrying trace id, parent span id, and trace flags. Bare name, not `x-vsaga-`-prefixed -- interoperability with non-vSaga consumers is the point.</summary>
+    public const string TraceParentHeader = "traceparent";
+
+    /// <summary>The W3C Trace Context header carrying vendor-specific trace state, alongside <see cref="TraceParentHeader"/>.</summary>
+    public const string TraceStateHeader = "tracestate";
+
+    private const string TraceParentVersion = "00";
+
+    // "00-{32 hex trace id}-{16 hex span id}-{2 hex flags}" = 2 + 1 + 32 + 1 + 16 + 1 + 2.
+    private const int TraceParentLength = 55;
+    private const int TraceIdOffset = 3;
+    private const int TraceIdHexLength = 32;
+    private const int SpanIdOffset = 36;
+    private const int SpanIdHexLength = 16;
+    private const int FlagsOffset = 53;
+    private const int FlagsHexLength = 2;
+
+    /// <summary>
+    /// Writes <paramref name="context"/> onto <paramref name="headers"/> as the standard W3C
+    /// `traceparent` header (plus `tracestate`, if the context carries one). Hand-rolled rather than
+    /// pulled from OpenTelemetry.Api, so this dependency-free leaf stays that way -- `traceparent` is
+    /// a fixed 55-character string, cheap to format directly. A default/no-op <paramref name="context"/>
+    /// (no current <see cref="Activity"/>) writes nothing.
+    /// </summary>
+    public static void Inject(ActivityContext context, IDictionary<string, string> headers)
+    {
+        if (context.TraceId == default || context.SpanId == default)
+            return;
+
+        headers[TraceParentHeader] =
+            $"{TraceParentVersion}-{context.TraceId.ToHexString()}-{context.SpanId.ToHexString()}-{(byte)context.TraceFlags:x2}";
+
+        if (!string.IsNullOrEmpty(context.TraceState))
+            headers[TraceStateHeader] = context.TraceState;
+    }
+
+    /// <summary>
+    /// Parses a `traceparent`/`tracestate` header pair back into an <see cref="ActivityContext"/>.
+    /// Returns <see langword="false"/> -- and never throws -- when the header is absent or malformed,
+    /// since most inbound messages today carry none.
+    /// </summary>
+    public static bool TryExtractActivityContext(IReadOnlyDictionary<string, string> headers, out ActivityContext context)
+    {
+        context = default;
+
+        if (!headers.TryGetValue(TraceParentHeader, out var traceParent) || traceParent is null)
+            return false;
+
+        if (traceParent.Length != TraceParentLength)
+            return false;
+
+        if (traceParent[2] != '-' || traceParent[TraceIdOffset + TraceIdHexLength] != '-' ||
+            traceParent[SpanIdOffset + SpanIdHexLength] != '-')
+            return false;
+
+        if (traceParent.AsSpan(0, 2) is not "00") // only version 00 is defined today; a future version's extra fields need different parsing
+            return false;
+
+        var traceIdSpan = traceParent.AsSpan(TraceIdOffset, TraceIdHexLength);
+        var spanIdSpan = traceParent.AsSpan(SpanIdOffset, SpanIdHexLength);
+        var flagsSpan = traceParent.AsSpan(FlagsOffset, FlagsHexLength);
+
+        if (!IsLowercaseHex(traceIdSpan) || !IsLowercaseHex(spanIdSpan) || !IsLowercaseHex(flagsSpan))
+            return false;
+
+        ActivityTraceId traceId;
+        ActivitySpanId spanId;
+        try
+        {
+            // All-hex-zero is the W3C spec's own invalid-id sentinel; CreateFromString throws for it
+            // rather than returning a zero id, so that case is caught here alongside genuinely malformed input.
+            traceId = ActivityTraceId.CreateFromString(traceIdSpan);
+            spanId = ActivitySpanId.CreateFromString(spanIdSpan);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+
+        if (traceId == default || spanId == default)
+            return false;
+
+        if (!byte.TryParse(flagsSpan, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var flagsByte))
+            return false;
+
+        var traceState = headers.TryGetValue(TraceStateHeader, out var ts) ? ts : null;
+        context = new ActivityContext(traceId, spanId, (ActivityTraceFlags)flagsByte, traceState, isRemote: true);
+        return true;
+    }
+
+    private static bool IsLowercaseHex(ReadOnlySpan<char> span)
+    {
+        foreach (var c in span)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                return false;
+        }
+
+        return true;
+    }
 }
