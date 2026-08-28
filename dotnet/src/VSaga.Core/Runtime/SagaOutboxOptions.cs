@@ -15,8 +15,9 @@ public sealed class SagaOutboxOptions
     /// <summary>
     /// <c>Deferred</c> (default): only <c>ctx.PublishAfterCommitAsync</c> calls get an outbox row —
     /// production-readiness.md §4's crash-recovery backstop for the deferred-publish queue. <c>All</c>
-    /// additionally covers <c>ctx.PublishAsync</c>/<c>SendAsync</c>'s immediate publishes (§8 item 11);
-    /// not yet wired to anything, so setting it today has no effect.
+    /// additionally covers <c>ctx.PublishAsync</c>/<c>SendAsync</c>'s immediate publishes, by making
+    /// them join the same deferred queue rather than firing inline (§8 item 11, wired via
+    /// <c>SagaOrchestrator.DeferAllPublishes</c>/<c>SagaContext.RouteAsync</c>).
     /// </summary>
     public SagaOutboxMode Mode { get; set; } = SagaOutboxMode.Deferred;
 

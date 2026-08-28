@@ -14,12 +14,29 @@ public class SagaConcurrencyException(string sagaType, Guid correlationId, int e
     public int ExpectedVersion { get; } = expectedVersion;
 }
 
-public class SagaAlreadyExistsException(string sagaType, Guid correlationId)
-    : Exception($"A '{sagaType}' saga instance with correlation id '{correlationId}' already exists.")
+public class SagaAlreadyExistsException : Exception
 {
-    public string SagaType { get; } = sagaType;
+    public SagaAlreadyExistsException(string sagaType, Guid correlationId)
+        : this(sagaType, correlationId, innerException: null)
+    {
+    }
 
-    public Guid CorrelationId { get; } = correlationId;
+    // production-readiness.md §8.14's review: EfCoreSagaSnapshotStore.InsertAsync converts ANY
+    // DbUpdateException from the reservation insert into this exception, not just the (SagaType,
+    // BusinessKey) unique-constraint violation it's meant to signal -- a genuinely unrelated infra
+    // failure (deadlock, transient connection drop) gets mislabelled as "lost the business-key race".
+    // Preserving the original exception here, rather than discarding it the way the 2-arg constructor
+    // always did, at least keeps the real cause diagnosable when that misclassification happens.
+    public SagaAlreadyExistsException(string sagaType, Guid correlationId, Exception? innerException)
+        : base($"A '{sagaType}' saga instance with correlation id '{correlationId}' already exists.", innerException)
+    {
+        SagaType = sagaType;
+        CorrelationId = correlationId;
+    }
+
+    public string SagaType { get; }
+
+    public Guid CorrelationId { get; }
 }
 
 public class SagaNotFoundException(string sagaType, Guid correlationId)

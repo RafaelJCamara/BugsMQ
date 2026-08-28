@@ -43,14 +43,21 @@ public sealed class SagaOrchestrator<TState>(
 
     public async Task HandleAsync(ReceivedMessage received, CancellationToken cancellationToken)
     {
+        // Starts as the transport id and is updated the moment HandleCoreAsync resolves an instance
+        // (including via a business-key hit, §5.3) -- captured here, outside the try, so a later
+        // exception (e.g. a lost persist race) still has it available in the catch below. See
+        // RecordDeliveryExhaustedAsync's own note: this is NOT used for the redelivery envelope itself,
+        // only for the dead-letter bookkeeping once attempts are exhausted.
+        var resolvedCorrelationId = received.CorrelationId;
+
         try
         {
-            await HandleCoreAsync(received, cancellationToken);
+            await HandleCoreAsync(received, id => resolvedCorrelationId = id, cancellationToken);
             await received.Ack.AckAsync(cancellationToken);
         }
         catch (Exception ex)
         {
-            await HandleInfrastructureFailureAsync(received, ex, cancellationToken);
+            await HandleInfrastructureFailureAsync(received, resolvedCorrelationId, ex, cancellationToken);
         }
     }
 
@@ -63,7 +70,7 @@ public sealed class SagaOrchestrator<TState>(
     /// reaches RabbitMqTransport's own dispatch-level catch, which nacks without requeue, so a
     /// redelivery that can't even be attempted still fails safe into the dead-letter queue.
     /// </summary>
-    private async Task HandleInfrastructureFailureAsync(ReceivedMessage received, Exception ex, CancellationToken cancellationToken)
+    private async Task HandleInfrastructureFailureAsync(ReceivedMessage received, Guid resolvedCorrelationId, Exception ex, CancellationToken cancellationToken)
     {
         var attempt = GetDeliveryAttempt(received.Headers);
 
@@ -90,7 +97,7 @@ public sealed class SagaOrchestrator<TState>(
         logger.LogError(ex, "Infrastructure error processing {MessageType} for saga {SagaType} after {MaxAttempts} delivery attempts; dead-lettering",
             received.MessageTypeName, SagaType, options.MaxDeliveryAttempts);
 
-        await RecordDeliveryExhaustedAsync(received, ex, cancellationToken);
+        await RecordDeliveryExhaustedAsync(received, resolvedCorrelationId, ex, cancellationToken);
         await received.Ack.NackAsync(requeue: false, cancellationToken);
     }
 
@@ -99,26 +106,48 @@ public sealed class SagaOrchestrator<TState>(
     /// DLQ by the NackAsync that follows this call regardless of whether this succeeds, so failures
     /// here are logged and swallowed rather than left to interfere with that.
     /// </summary>
-    private async Task RecordDeliveryExhaustedAsync(ReceivedMessage received, Exception ex, CancellationToken cancellationToken)
+    /// <param name="received">The dead-lettered inbound message; only its MessageTypeName/MessageId are used here.</param>
+    /// <param name="resolvedCorrelationId">
+    /// The saga instance HandleCoreAsync actually resolved this message against, not necessarily
+    /// <paramref name="received"/>'s own transport correlation id — a business-key hit (§5.3) can
+    /// resolve to a *different* existing instance's id. Keying this method's bookkeeping on
+    /// received.CorrelationId instead (the pre-item-14 behaviour) would log a DeliveryExhausted entry
+    /// under an id no row was ever stored against, and the FindAsync/PersistAsync below would then find
+    /// nothing to mark Failed -- the saga that actually kept losing its persist race never gets its
+    /// terminal state recorded. Falls back to received.CorrelationId when resolution never got that far
+    /// (e.g. a deserialize failure), which is the correct id in that case.
+    /// </param>
+    /// <param name="ex">The infrastructure exception that exhausted redelivery, recorded as the DeliveryExhausted entry's error message.</param>
+    /// <param name="cancellationToken">Cancellation token for the log/persist/notify calls below.</param>
+    private async Task RecordDeliveryExhaustedAsync(ReceivedMessage received, Guid resolvedCorrelationId, Exception ex, CancellationToken cancellationToken)
     {
         try
         {
-            await LogAsync(SagaLogEntry.Create(received.CorrelationId, SagaType, SagaEntryType.DeliveryExhausted,
+            await LogAsync(SagaLogEntry.Create(resolvedCorrelationId, SagaType, SagaEntryType.DeliveryExhausted,
                 messageType: received.MessageTypeName, messageId: received.MessageId, errorMessage: ex.Message), cancellationToken);
 
-            var state = await snapshotStore.FindAsync(SagaType, received.CorrelationId, cancellationToken);
+            var state = await snapshotStore.FindAsync(SagaType, resolvedCorrelationId, cancellationToken);
             if (state is not null && state.Status is not (SagaStatus.Completed or SagaStatus.Failed or SagaStatus.TimedOut))
             {
                 var expectedVersion = state.Version;
                 state.Status = SagaStatus.Failed;
                 await PersistAsync(state, isNew: false, expectedVersion, cancellationToken);
+
+                // production-readiness.md §6/§8.18's terminal-status wiring missed this third site --
+                // HandleStepSuccessAsync and RecordTimeoutOutcomeAsync are the other two -- because this
+                // dead-letter path predates it. Recorded only after the persist above actually commits,
+                // same reasoning as the other two sites.
+                VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+                VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+
                 await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
             }
         }
         catch (Exception loggingEx)
         {
             logger.LogError(loggingEx, "Failed to record delivery-exhausted state for saga {SagaType} correlation {CorrelationId}; message is still being dead-lettered",
-                SagaType, received.CorrelationId);
+                SagaType, resolvedCorrelationId);
         }
     }
 
@@ -328,7 +357,7 @@ public sealed class SagaOrchestrator<TState>(
         }
     }
 
-    private async Task HandleCoreAsync(ReceivedMessage received, CancellationToken cancellationToken)
+    private async Task HandleCoreAsync(ReceivedMessage received, Action<Guid> onResolved, CancellationToken cancellationToken)
     {
         if (!_messageTypesByName.TryGetValue(received.MessageTypeName, out var clrType))
         {
@@ -348,6 +377,11 @@ public sealed class SagaOrchestrator<TState>(
         }
 
         var (existing, correlationId, isNew, needsInsert) = instance;
+
+        // Reports the resolved instance's own id back to HandleAsync before anything below can throw,
+        // so RecordDeliveryExhaustedAsync keys its dead-letter bookkeeping on the right instance even
+        // when a business-key hit (§5.3) means correlationId != received.CorrelationId.
+        onResolved(correlationId);
 
         if (isNew)
         {
@@ -393,6 +427,17 @@ public sealed class SagaOrchestrator<TState>(
     /// Substituting the inbound id instead would fork the timeline. Both lookups missing falls through to
     /// <see cref="CreateAndReserveNewInstanceAsync"/>, gated by CanInitiate exactly as before.
     /// </summary>
+    /// <remarks>
+    /// A business key is bound to the instance that first reserved it for the lifetime of that instance
+    /// -- the partial unique index (§5.2) never releases a key when its saga reaches a terminal status,
+    /// so this lookup does not check <c>existing.Status</c>. A later message carrying the same business
+    /// key therefore always routes back to that same (possibly Completed/Failed) instance rather than
+    /// starting a fresh one; if the definition has no transition out of a terminal state for that
+    /// message type, HandleCoreAsync logs it as UnexpectedEvent, exactly as a stale transport-id hit
+    /// against a terminal instance already did before this method existed. Whether a business key
+    /// *should* become reusable once its saga terminates is a product decision this plan does not make
+    /// (production-readiness.md is silent on it); this is documented behaviour, not an oversight.
+    /// </remarks>
     private async Task<ResolvedInstance?> ResolveInstanceAsync(ReceivedMessage received, object message, Type clrType, CancellationToken cancellationToken)
     {
         var correlationId = received.CorrelationId;
@@ -438,14 +483,20 @@ public sealed class SagaOrchestrator<TState>(
             await snapshotStore.InsertAsync(candidate, cancellationToken);
             return new ResolvedInstance(candidate, correlationId, IsNew: true, NeedsInsert: false);
         }
-        catch (SagaAlreadyExistsException)
+        catch (SagaAlreadyExistsException ex)
         {
             // Lost the race: a concurrent initiate already reserved this business key first. Not an
             // infrastructure failure — look the winner up and continue exactly as a business-key hit in
             // ResolveInstanceAsync would have: this message is not starting a new saga after all.
+            //
+            // ex may instead be an unrelated infra failure the store mislabelled as a collision
+            // (production-readiness.md §8.14's review; see SagaAlreadyExistsException's own note) -- if
+            // so there genuinely is no winner to find, and ex.InnerException (chained by
+            // EfCoreSagaSnapshotStore.InsertAsync) is included below so the real cause stays diagnosable
+            // instead of being discarded behind a generic "no winner found" message.
             var winner = await snapshotStore.FindByBusinessKeyAsync(SagaType, businessKey, cancellationToken)
                          ?? throw new InvalidOperationException(
-                             $"Saga '{SagaType}' lost the business-key reservation race for '{businessKey}' but no winning instance could be found.");
+                             $"Saga '{SagaType}' lost the business-key reservation race for '{businessKey}' but no winning instance could be found.", ex.InnerException ?? ex);
 
             return new ResolvedInstance(winner, winner.CorrelationId, IsNew: false, NeedsInsert: false);
         }
@@ -592,8 +643,28 @@ public sealed class SagaOrchestrator<TState>(
         // so the row it commits still matches the outcome that was actually recorded.
         var stagedChildFinished = await StageChildSagaFinishedAsync(state, SagaStatus.Failed, messageId, cancellationToken);
 
-        await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
+        try
+        {
+            await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
+        }
+        catch (SagaConcurrencyException)
+        {
+            // Symmetric with HandleStepSuccessAsync's own race-loss branch below: this persist lost the
+            // optimistic-concurrency check, so the Failed transition just logged above was never
+            // actually recorded. The staged ChildSagaFinished row above is discarded the same way the
+            // timeout path's DiscardStagedChildSagaFinishedAsync does -- left uncommitted it would tell
+            // this saga's parent it finished Failed when the snapshot never actually recorded that,
+            // exactly the class of bug production-readiness.md §8.15's review caught in
+            // HandleStepSuccessAsync. Re-throw (don't swallow, unlike the timeout path) so HandleAsync's
+            // catch drives the usual infrastructure-failure redelivery -- §5.4/§8.15 confirmed this
+            // exception reliably reaches it.
+            await DiscardStagedChildSagaFinishedAsync(state, stagedChildFinished, fromState, cancellationToken);
+            throw;
+        }
+
         VSagaDiagnostics.SagasFailed.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+        VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
+            new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
         // Anything queued via ctx.PublishAfterCommitAsync before the throw belongs to a transition that
         // was never reached -- the persist just above records Failed, not the outcome those publishes
@@ -636,21 +707,53 @@ public sealed class SagaOrchestrator<TState>(
         }
 
         if (outcome.FinalStatus is not null)
-        {
             await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.SagaCompleted, toState: outcome.ToState), cancellationToken);
 
-            // production-readiness.md §6/§8.18: wired at the two places a saga already reaches a
-            // terminal status -- this one, and RecordTimeoutOutcomeAsync's own timeout-outcome path.
-            VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
-                new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
-        }
+        await PersistAndFinalizeStepSuccessAsync(state, outcome, correlationId, fromState, isNew, needsInsert, expectedVersion, context, cancellationToken);
+    }
 
+    /// <summary>
+    /// The persist/metrics/dispatch tail of <see cref="HandleStepSuccessAsync"/> — split out to stay
+    /// under the analyzer's method-length cap, like <see cref="CommitAndDispatchTimeoutAsync"/> and
+    /// <see cref="RecordTimeoutOutcomeAsync"/> are for <see cref="HandleTimeoutAsync"/>.
+    /// </summary>
+    private async Task PersistAndFinalizeStepSuccessAsync(TState state, SagaStepOutcome outcome, Guid correlationId, string fromState,
+        bool isNew, bool needsInsert, int expectedVersion, SagaContext<TState> context, CancellationToken cancellationToken)
+    {
         // production-readiness.md §4.1 step 2: staged immediately before this persist, which commits
         // them with the snapshot in one implicit transaction, so a crash between that commit and the
         // inline drain just below still leaves a durable Pending row for the recovery poller.
         await EnqueueOutboxRowsAsync(context, cancellationToken);
 
-        await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
+        try
+        {
+            await PersistAsync(state, needsInsert, expectedVersion, cancellationToken);
+        }
+        catch (SagaConcurrencyException)
+        {
+            // Lost the race after this step's own side effects (a non-deferred ctx.Publish/SendAsync,
+            // if any) already ran -- see production-readiness.md §5.4's note that only outbox-staged
+            // publishes are protected here. The transition this method logged above was never actually
+            // recorded, so the outbox rows staged immediately above must be discarded, not left Pending:
+            // production-readiness.md §8.15's review built a live repro proving that on the in-memory
+            // provider (whose EnqueueAsync commits non-transactionally, unlike EF Core's change-tracker
+            // staging), an undiscarded row here survives the lost race and the recovery poller later
+            // sends it for a transition the snapshot never recorded -- a duplicate/phantom side effect.
+            // Re-throw (don't swallow, unlike the timeout path's TryPersistOrLogRaceLossAsync) so
+            // HandleAsync's catch drives the usual infrastructure-failure redelivery -- §5.4/§8.15
+            // confirmed this exception reliably reaches it.
+            await DiscardDeferredPublishesAsync(correlationId, context, fromState, cancellationToken);
+            throw;
+        }
+
+        // Only recorded once the persist above has actually committed -- recording it earlier (where
+        // this call used to live, right after HandleStepSuccessAsync's own SagaCompleted log entry)
+        // would emit a phantom SagaDuration for a transition a lost concurrency race then discarded,
+        // the sibling bug to the outbox one just above that production-readiness.md §8.18's review
+        // independently caught.
+        if (outcome.FinalStatus is not null)
+            VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
+                new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
         await DrainDeferredPublishesAsync(correlationId, context, cancellationToken);
 
@@ -678,6 +781,20 @@ public sealed class SagaOrchestrator<TState>(
     /// uncommitted, and DiscardDeferredPublishesAsync drops them from the unit of work before anything
     /// else can flush them.
     /// </summary>
+    /// <remarks>
+    /// The row's headers are <c>publish.Envelope.Headers</c> as it stood when the publish was queued
+    /// (item 16's injection of whatever consumer-span context was ambient then) -- not the producer
+    /// span <see cref="SagaContext{TState}"/>'s <c>PublishInternalAsync</c> creates and re-stamps the
+    /// envelope with, since that span does not exist until the closure actually runs (the inline drain
+    /// right after this method's caller persists, or -- for a row that survives to be claimed later --
+    /// never, because a crash-recovery replay resends the durable bytes/headers directly rather than
+    /// re-invoking PublishInternalAsync). A producer span cannot be created before it is known whether
+    /// the publish will even survive this persist, so there is no earlier point at which to capture its
+    /// context instead. A crash-recovery replay therefore names the consumer span (or whatever was
+    /// ambient at enqueue time) as its trace parent rather than a producer span that, on the crashed
+    /// process, never got the chance to complete either -- arguably the more honest parent to record for
+    /// that case, not a bug to fix.
+    /// </remarks>
     private async Task EnqueueOutboxRowsAsync(ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
     {
         foreach (var publish in publisher.DeferredPublishes)

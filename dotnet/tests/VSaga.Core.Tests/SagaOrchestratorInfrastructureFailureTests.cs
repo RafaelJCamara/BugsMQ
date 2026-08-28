@@ -1,6 +1,7 @@
 using VSaga.Abstractions.Persistence;
 using VSaga.Abstractions.Sagas;
 using VSaga.Abstractions.Transport;
+using VSaga.Core.Dsl;
 using VSaga.Core.Runtime;
 using VSaga.Persistence.InMemory;
 using VSaga.Transport.InMemory;
@@ -110,6 +111,128 @@ public sealed class SagaOrchestratorInfrastructureFailureTests
         var timeline = await eventLog.GetTimelineAsync(sagaType, correlationId);
         var exhausted = Assert.Single(timeline, e => e.EntryType == SagaEntryType.DeliveryExhausted);
         Assert.Equal(nameof(OrderSubmitted), exhausted.MessageType);
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Like <see cref="FlakyEventLogStore"/>, but its remaining-failure budget is settable after construction, so a test can let one message through cleanly before arming failures for a later one.</summary>
+    private sealed class ArmableFlakyEventLogStore(ISagaEventLogStore inner) : ISagaEventLogStore
+    {
+        public int RemainingFailures { get; set; }
+
+        public Task<long> AppendAsync(SagaLogEntry entry, CancellationToken cancellationToken = default)
+        {
+            if (RemainingFailures > 0)
+            {
+                RemainingFailures--;
+                throw new InvalidOperationException("simulated transient infrastructure failure");
+            }
+
+            return inner.AppendAsync(entry, cancellationToken);
+        }
+
+        public Task<bool> IsDuplicateAsync(string sagaType, Guid correlationId, string messageId, CancellationToken cancellationToken = default) =>
+            inner.IsDuplicateAsync(sagaType, correlationId, messageId, cancellationToken);
+
+        public Task<IReadOnlyList<SagaLogEntry>> GetTimelineAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
+            inner.GetTimelineAsync(sagaType, correlationId, cancellationToken);
+    }
+
+    public sealed class ExhaustedBusinessKeySagaState : SagaState
+    {
+        public string? OrderId { get; set; }
+    }
+
+    public sealed record ExhaustedBusinessKeyOpen(string OrderId);
+    public sealed record ExhaustedBusinessKeyPing(string OrderId);
+
+    /// <summary>Minimal CorrelateOn-capable fixture, kept separate from TestOrderSaga for the same reason the race-test files keep their own — see SagaOrchestratorBusinessKeyRaceTests.</summary>
+    public sealed class ExhaustedBusinessKeySaga : OrchestratedSagaDefinition<ExhaustedBusinessKeySagaState>
+    {
+        public State<ExhaustedBusinessKeySagaState> Open { get; }
+        public State<ExhaustedBusinessKeySagaState> Pinged { get; }
+
+        public ExhaustedBusinessKeySaga()
+        {
+            Open = InitialState(nameof(Open));
+            Pinged = State(nameof(Pinged));
+
+            CorrelateOn(s => s.OrderId);
+
+            During(Open)
+                .When<ExhaustedBusinessKeyOpen>()
+                    .CorrelateBy(m => m.OrderId, s => s.OrderId)
+                .When<ExhaustedBusinessKeyPing>()
+                    .CorrelateBy(m => m.OrderId, s => s.OrderId)
+                    .TransitionTo(Pinged);
+        }
+    }
+
+    /// <summary>
+    /// production-readiness.md §8.14's review: RecordDeliveryExhaustedAsync used to key its bookkeeping
+    /// on received.CorrelationId unconditionally -- correct before business-key resolution existed, but
+    /// wrong the moment a message reaches an EXISTING instance via a business key while carrying its
+    /// own, different transport correlation id (§5.3). The fix threads the instance HandleCoreAsync
+    /// actually resolved through to this dead-letter path instead.
+    /// </summary>
+    [Fact]
+    public async Task DeliveryExhaustedViaBusinessKeyResolution_RecordsAgainstTheResolvedInstance_NotTheTransportId()
+    {
+        const string businessKey = "ORD-INFRA-BK-1";
+        var openCorrelationId = Guid.NewGuid();
+        var freshTransportCorrelationId = Guid.NewGuid();
+        const int maxDeliveryAttempts = 2;
+
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddVSagaInMemoryPersistence();
+        services.AddVSagaInMemoryTransport();
+        services.AddSingleton(new SagaOrchestratorOptions { MaxDeliveryAttempts = maxDeliveryAttempts });
+        services.AddVSagaEngine(o => o.AddSaga<ExhaustedBusinessKeySaga, ExhaustedBusinessKeySagaState>());
+
+        ArmableFlakyEventLogStore? flaky = null;
+        services.AddSingleton<ISagaEventLogStore>(sp =>
+        {
+            flaky = new ArmableFlakyEventLogStore(sp.GetRequiredService<InMemorySagaStore>());
+            return flaky;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        var transport = (InMemoryMessageTransport)provider.GetRequiredService<IMessageTransport>();
+        var sagaType = provider.GetRequiredService<ExhaustedBusinessKeySaga>().SagaType;
+        var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<ExhaustedBusinessKeySagaState>>();
+
+        // Creates the instance cleanly -- not flaky yet.
+        await transport.PublishAsync(new ExhaustedBusinessKeyOpen(businessKey), MessageEnvelope.New(openCorrelationId));
+        Assert.NotNull(await snapshotStore.FindAsync(sagaType, openCorrelationId));
+
+        // Exactly enough failures to exhaust every redelivery attempt for the next message (one per
+        // delivery, attempts 0..maxDeliveryAttempts), then let RecordDeliveryExhaustedAsync's own
+        // LogAsync succeed -- same accounting SagaOrchestratorInfrastructureFailureTests' sibling test
+        // above uses for its failuresBeforeSuccess.
+        flaky!.RemainingFailures = maxDeliveryAttempts + 1;
+
+        // A fresh transport correlation id, never seen before: the transport-id lookup misses, so this
+        // can only ever reach the existing instance through the business key.
+        await transport.PublishAsync(new ExhaustedBusinessKeyPing(businessKey), MessageEnvelope.New(freshTransportCorrelationId));
+
+        var eventLog = provider.GetRequiredService<ISagaEventLogStore>();
+
+        // The bug this pins: before the fix, this bookkeeping was keyed on received.CorrelationId
+        // (freshTransportCorrelationId), a timeline no row was ever stored under.
+        var timelineUnderTransportId = await eventLog.GetTimelineAsync(sagaType, freshTransportCorrelationId);
+        Assert.DoesNotContain(timelineUnderTransportId, e => e.EntryType == SagaEntryType.DeliveryExhausted);
+
+        var timelineUnderResolvedId = await eventLog.GetTimelineAsync(sagaType, openCorrelationId);
+        Assert.Contains(timelineUnderResolvedId, e => e.EntryType == SagaEntryType.DeliveryExhausted);
+
+        var finalState = await snapshotStore.FindAsync(sagaType, openCorrelationId);
+        Assert.NotNull(finalState);
+        Assert.Equal(SagaStatus.Failed, finalState.Status);
 
         foreach (var hosted in provider.GetServices<IHostedService>())
             await hosted.StopAsync(CancellationToken.None);

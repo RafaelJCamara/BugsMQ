@@ -276,7 +276,12 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
             await new EfCoreSagaSnapshotStore<TestState>(db).InsertAsync(makeState());
 
         await using var db2 = NewContext();
-        await Assert.ThrowsAsync<SagaAlreadyExistsException>(() => new EfCoreSagaSnapshotStore<TestState>(db2).InsertAsync(makeState()));
+        var ex = await Assert.ThrowsAsync<SagaAlreadyExistsException>(() => new EfCoreSagaSnapshotStore<TestState>(db2).InsertAsync(makeState()));
+
+        // production-readiness.md §8.14's review: InsertAsync converts ANY DbUpdateException into this
+        // exception, not just a genuine unique-constraint collision -- preserving the original as
+        // InnerException keeps an unrelated infra failure's real cause diagnosable instead of discarding it.
+        Assert.IsType<DbUpdateException>(ex.InnerException);
     }
 
     [Fact]

@@ -96,7 +96,7 @@ public static class VSagaDiagnostics
             traceParent[SpanIdOffset + SpanIdHexLength] != '-')
             return false;
 
-        if (traceParent.AsSpan(0, 2) is not "00") // only version 00 is defined today; a future version's extra fields need different parsing
+        if (!traceParent.AsSpan(0, 2).SequenceEqual(TraceParentVersion)) // only this version is defined today; a future version's extra fields need different parsing
             return false;
 
         var traceIdSpan = traceParent.AsSpan(TraceIdOffset, TraceIdHexLength);

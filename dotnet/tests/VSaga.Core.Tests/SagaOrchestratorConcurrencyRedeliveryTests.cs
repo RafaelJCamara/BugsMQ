@@ -1,3 +1,5 @@
+using System.Diagnostics.Metrics;
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Persistence;
 using VSaga.Abstractions.Sagas;
 using VSaga.Abstractions.Transport;
@@ -234,5 +236,181 @@ public sealed class SagaOrchestratorConcurrencyRedeliveryTests
     {
         Assert.Single(timeline, e => e.EntryType == SagaEntryType.MessageReceived &&
             string.Equals(e.MessageId, messageIdB, StringComparison.Ordinal));
+    }
+
+    public sealed class DeferredRaceSagaState : SagaState
+    {
+        public string? OrderId { get; set; }
+    }
+
+    public sealed record DeferredOrderOpened(string OrderId);
+    public sealed record DeferredConfirmationReceived(string OrderId);
+    public sealed record DeferredOrderConfirmed(string OrderId);
+
+    /// <summary>
+    /// Same shape as <see cref="ConcurrencyRedeliveryRaceSaga"/>, except its racing step queues via
+    /// <c>ctx.PublishAfterCommitAsync</c> (outbox-staged) instead of an ordinary, immediate
+    /// <c>.Publish(...)</c> -- production-readiness.md §8.15's review built its repro of the "lost race
+    /// doesn't discard the staged outbox row" bug specifically against a deferred publish, since an
+    /// ordinary Publish already fires before PersistAsync ever runs (see
+    /// AssertDurableBackstopHeld) and so was never at risk of this particular bug.
+    /// </summary>
+    public sealed class DeferredConcurrencyRaceSaga : OrchestratedSagaDefinition<DeferredRaceSagaState>
+    {
+        public State<DeferredRaceSagaState> Open { get; }
+        public State<DeferredRaceSagaState> Confirmed { get; }
+
+        public DeferredConcurrencyRaceSaga()
+        {
+            Open = InitialState(nameof(Open));
+            Confirmed = State(nameof(Confirmed));
+
+            CorrelateOn(s => s.OrderId);
+
+            During(Open)
+                .When<DeferredOrderOpened>()
+                    .CorrelateBy(m => m.OrderId, s => s.OrderId)
+                .When<DeferredConfirmationReceived>()
+                    .CorrelateBy(m => m.OrderId, s => s.OrderId)
+                    .Then(async (ctx, m) => await ctx.PublishAfterCommitAsync(new DeferredOrderConfirmed(m.OrderId), ctx.CancellationToken))
+                    .TransitionTo(Confirmed)
+                    .Finalize(SagaStatus.Completed);
+        }
+    }
+
+    private static async Task<ServiceProvider> BuildDeferredProviderAsync()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddVSagaInMemoryPersistence();
+        services.AddVSagaInMemoryTransport();
+        services.AddVSagaEngine(o => o.AddSaga<DeferredConcurrencyRaceSaga, DeferredRaceSagaState>());
+
+        services.AddSingleton<ISagaSnapshotStore<DeferredRaceSagaState>>(sp =>
+            new RaceInjectingSnapshotStore<DeferredRaceSagaState>(new InMemorySagaSnapshotStore<DeferredRaceSagaState>(sp.GetRequiredService<InMemorySagaStore>())));
+
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        return provider;
+    }
+
+    /// <summary>
+    /// production-readiness.md §8.15's own review finding, turned into a repo test: on the in-memory
+    /// provider, <c>ISagaOutboxStore.EnqueueAsync</c> commits non-transactionally (unlike EF Core's
+    /// change-tracker staging, which only flushes on the same <c>SaveChangesAsync</c> the snapshot
+    /// persist uses), so before the fix, a lost race in <c>HandleStepSuccessAsync</c> left the loser's
+    /// staged outbox row durably Pending -- the recovery poller would later claim and dispatch it,
+    /// sending a message for a transition the snapshot never actually recorded. The fix wraps that
+    /// persist in a try/catch that discards the staged rows before re-throwing (SagaOrchestrator.cs,
+    /// HandleStepSuccessAsync's SagaConcurrencyException branch).
+    /// </summary>
+    [Fact]
+    public async Task LostRaceOnDeferredPublish_DiscardsTheStagedOutboxRow_NotClaimableByTheRecoveryPoller()
+    {
+        const string businessKey = "ORD-DEFERRED-CONCURRENCY-1";
+        var openCorrelationId = Guid.NewGuid();
+        var correlationIdC = Guid.NewGuid();
+        var correlationIdB = Guid.NewGuid();
+        var messageIdB = Guid.NewGuid().ToString("N");
+
+        await using var provider = await BuildDeferredProviderAsync();
+        var transport = (InMemoryMessageTransport)provider.GetRequiredService<IMessageTransport>();
+        var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<DeferredRaceSagaState>>();
+        var outboxStore = provider.GetRequiredService<ISagaOutboxStore>();
+
+        await transport.PublishAsync(new DeferredOrderOpened(businessKey), MessageEnvelope.New(openCorrelationId));
+
+        var racingStore = (RaceInjectingSnapshotStore<DeferredRaceSagaState>)snapshotStore;
+        racingStore.OnNextFindByBusinessKey = () =>
+            transport.PublishAsync(new DeferredConfirmationReceived(businessKey), MessageEnvelope.New(correlationIdC));
+
+        // B loses the race exactly as in the sibling test above: C's persist lands first, B's own
+        // PersistAsync then throws SagaConcurrencyException against the stale version it captured --
+        // but B's own step already queued a DeferredOrderConfirmed via PublishAfterCommitAsync, which
+        // EnqueueOutboxRowsAsync staged as a durable row immediately before that failing persist.
+        await transport.PublishAsync(new DeferredConfirmationReceived(businessKey), new MessageEnvelope(correlationIdB, messageIdB));
+
+        // Bypasses the recovery poller's grace-period wait entirely -- ClaimPendingAsync itself applies
+        // no grace period (that's the poller's own concern), so any cutoff at or after "now" claims
+        // everything still Pending. Before the fix, this returned B's DeferredOrderConfirmed row.
+        var claimable = await outboxStore.ClaimPendingAsync(DateTimeOffset.UtcNow.AddDays(1), batchSize: 100);
+        Assert.DoesNotContain(claimable, row => string.Equals(row.MessageTypeName, nameof(DeferredOrderConfirmed), StringComparison.Ordinal));
+
+        // The winner's own DeferredOrderConfirmed, staged and drained inline right after its own
+        // successful persist, was already marked Dispatched by the time B's race even resolves -- so it
+        // must not still be sitting Pending either. The claim above returning nothing at all (not just
+        // "nothing for B") confirms both: the winner's row was legitimately dispatched, and B's was
+        // discarded rather than left durably queued.
+        Assert.Empty(claimable);
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Same shape as SagaOrchestratorTracingTests' own private helper -- captures every vsaga.saga.duration recording, unfiltered (this file's fixtures are the only ones using DeferredConcurrencyRaceSaga/ConcurrencyRedeliveryRaceSaga's SagaType, so no cross-test noise to filter out).</summary>
+    private static MeterListener CreateDurationListener(List<double> recorded)
+    {
+        var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (string.Equals(instrument.Meter.Name, VSagaDiagnostics.MeterName, StringComparison.Ordinal) &&
+                    string.Equals(instrument.Name, "vsaga.saga.duration", StringComparison.Ordinal))
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<double>((_, measurement, _, _) =>
+        {
+            lock (recorded)
+                recorded.Add(measurement);
+        });
+        listener.Start();
+        return listener;
+    }
+
+    /// <summary>
+    /// production-readiness.md §8.18's review: the sibling bug to the outbox one above, in the same
+    /// HandleStepSuccessAsync race-loss branch. Before the fix, SagaDuration.Record() ran before the
+    /// persist that can throw SagaConcurrencyException, so B's lost race would still emit a phantom
+    /// "this saga completed" duration recording even though its transition to Completed was never
+    /// actually persisted. The fix moves the recording to after a successful persist, guarded by the
+    /// same try/catch as the outbox discard above.
+    /// </summary>
+    [Fact]
+    public async Task LostRaceOnATerminalTransition_DoesNotRecordAPhantomSagaDuration()
+    {
+        const string businessKey = "ORD-DEFERRED-CONCURRENCY-2";
+        var openCorrelationId = Guid.NewGuid();
+        var correlationIdC = Guid.NewGuid();
+        var correlationIdB = Guid.NewGuid();
+        var messageIdB = Guid.NewGuid().ToString("N");
+
+        await using var provider = await BuildDeferredProviderAsync();
+        var transport = (InMemoryMessageTransport)provider.GetRequiredService<IMessageTransport>();
+        var snapshotStore = provider.GetRequiredService<ISagaSnapshotStore<DeferredRaceSagaState>>();
+
+        await transport.PublishAsync(new DeferredOrderOpened(businessKey), MessageEnvelope.New(openCorrelationId));
+
+        var racingStore = (RaceInjectingSnapshotStore<DeferredRaceSagaState>)snapshotStore;
+        racingStore.OnNextFindByBusinessKey = () =>
+            transport.PublishAsync(new DeferredConfirmationReceived(businessKey), MessageEnvelope.New(correlationIdC));
+
+        var recorded = new List<double>();
+        using var listener = CreateDurationListener(recorded);
+
+        // Both B and C's steps reach outcome.FinalStatus == Completed (both transitions call
+        // .Finalize(SagaStatus.Completed)) -- only C's persist actually commits, though, so if the fix
+        // holds, exactly one recording happens despite two terminal-status outcomes being computed.
+        await transport.PublishAsync(new DeferredConfirmationReceived(businessKey), new MessageEnvelope(correlationIdB, messageIdB));
+
+        Assert.Single(recorded);
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StopAsync(CancellationToken.None);
     }
 }

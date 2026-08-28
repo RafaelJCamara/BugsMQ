@@ -239,4 +239,99 @@ public sealed class ChildSagaFinishedTests : IAsyncDisposable
         var child = Assert.Single(await reader.FindChildrenAsync(nameof(TestRacyFailureParentSaga), parentId));
         Assert.Equal(SagaStatus.Failed, child.Status);
     }
+
+    /// <summary>Forces the next UpdateAsync call to lose the optimistic-concurrency check, once, then delegates normally.</summary>
+    private sealed class ThrowOnNextUpdateSnapshotStore<TState>(ISagaSnapshotStore<TState> inner) : ISagaSnapshotStore<TState>
+        where TState : SagaState
+    {
+        public bool ArmedToThrow { get; set; }
+
+        public Task<TState?> FindAsync(string sagaType, Guid correlationId, CancellationToken cancellationToken = default) =>
+            inner.FindAsync(sagaType, correlationId, cancellationToken);
+
+        public Task InsertAsync(TState state, CancellationToken cancellationToken = default) =>
+            inner.InsertAsync(state, cancellationToken);
+
+        public Task<TState?> FindByBusinessKeyAsync(string sagaType, string businessKey, CancellationToken cancellationToken = default) =>
+            inner.FindByBusinessKeyAsync(sagaType, businessKey, cancellationToken);
+
+        public Task UpdateAsync(TState state, int expectedVersion, CancellationToken cancellationToken = default)
+        {
+            if (ArmedToThrow)
+            {
+                ArmedToThrow = false;
+                throw new SagaConcurrencyException(state.SagaType, state.CorrelationId, expectedVersion);
+            }
+
+            return inner.UpdateAsync(state, expectedVersion, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The HandleStepFailureAsync counterpart to
+    /// SagaOrchestratorConcurrencyRedeliveryTests.LostRaceOnDeferredPublish_DiscardsTheStagedOutboxRow --
+    /// a lost race on THIS persist (a step that threw, not one that succeeded) stages a ChildSagaFinished
+    /// outbox row the same way (StageChildSagaFinishedAsync, before the persist), and it must be
+    /// discarded on a lost race too, or the recovery poller would later tell this child's parent it
+    /// finished Failed for a transition the snapshot never actually recorded. Self-identified while
+    /// fixing the sibling success-path bug (production-readiness.md §8.15/§8.18's reviews caught that
+    /// one; this one shares the exact same root cause and was fixed alongside it).
+    /// </summary>
+    [Fact]
+    public async Task ChildSagaFinished_LostRaceOnTheFailurePersist_DiscardsTheStagedOutboxRow()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddVSagaInMemoryPersistence();
+        services.AddVSagaInMemoryTransport();
+        services.AddVSagaEngine(o => o
+            .AddSaga<TestChildSafetyNetParentSaga, TestChildSafetyNetParentState>()
+            .AddSaga<TestRiskyChildSaga, TestRiskyChildState>());
+
+        ThrowOnNextUpdateSnapshotStore<TestRiskyChildState>? racingStore = null;
+        services.AddSingleton<ISagaSnapshotStore<TestRiskyChildState>>(sp =>
+        {
+            racingStore = new ThrowOnNextUpdateSnapshotStore<TestRiskyChildState>(
+                new InMemorySagaSnapshotStore<TestRiskyChildState>(sp.GetRequiredService<InMemorySagaStore>()));
+            return racingStore;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        var transport = (InMemoryMessageTransport)provider.GetRequiredService<IMessageTransport>();
+        var reader = provider.GetRequiredService<ISagaSummaryReader>();
+
+        var parentId = Guid.NewGuid();
+        await transport.PublishAsync(new BeginSafeguardedJob("JOB-RACE"), MessageEnvelope.New(parentId));
+        var child = Assert.Single(await reader.FindChildrenAsync(nameof(TestChildSafetyNetParentSaga), parentId));
+
+        racingStore!.ArmedToThrow = true;
+
+        // TriggerFailure's step throws, HandleStepFailureAsync stages ChildSagaFinished then calls
+        // PersistAsync -- UpdateAsync throws SagaConcurrencyException once, per the arm above. That
+        // reaches HandleAsync's own catch and triggers ordinary infrastructure-failure redelivery (same
+        // MessageId) -- but per SagaOrchestratorConcurrencyRedeliveryTests'
+        // AssertRedeliveryWasADeadEndForTheLoser, this redelivery is a dead end, not a retry-to-success:
+        // RunStepAsync had already durably logged a MessageReceived entry for this exact MessageId
+        // before the failing persist, so HandleCoreAsync's IsDuplicateAsync check recognizes the
+        // redelivered copy and silently skips it. The child's Failed transition is therefore lost for
+        // good -- confirmed empirically below, not assumed -- which is exactly why the discard matters:
+        // nothing else will ever retry this, so a surviving outbox row would be the only trace left, and
+        // it would be a false one.
+        await transport.PublishAsync(new TriggerFailure("JOB-RACE"), MessageEnvelope.New(child.CorrelationId));
+
+        var childState = await provider.GetRequiredService<ISagaSnapshotStore<TestRiskyChildState>>()
+            .FindAsync(nameof(TestRiskyChildSaga), child.CorrelationId);
+        Assert.NotNull(childState);
+        Assert.Equal(SagaStatus.Running, childState.Status); // the Failed transition never actually committed
+
+        var outbox = provider.GetRequiredService<ISagaOutboxStore>();
+        var claimable = await outbox.ClaimPendingAsync(DateTimeOffset.UtcNow.AddYears(1), batchSize: 100);
+        Assert.DoesNotContain(claimable, m => string.Equals(m.MessageTypeName, nameof(ChildSagaFinished), StringComparison.Ordinal));
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StopAsync(CancellationToken.None);
+    }
 }

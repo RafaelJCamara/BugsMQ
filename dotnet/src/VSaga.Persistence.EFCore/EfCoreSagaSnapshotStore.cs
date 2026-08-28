@@ -37,9 +37,13 @@ public sealed class EfCoreSagaSnapshotStore<TState>(VSagaDbContext db) : ISagaSn
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
-            throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId);
+            // Not necessarily the (SagaType, BusinessKey) unique-constraint violation this is meant to
+            // signal -- any DbUpdateException lands here. Chained as InnerException (production-readiness.md
+            // §8.14's review) so a caller that finds this was actually an unrelated infra failure, not a
+            // real collision, can still see what really happened instead of a bare "already exists".
+            throw new SagaAlreadyExistsException(state.SagaType, state.CorrelationId, ex);
         }
     }
 
