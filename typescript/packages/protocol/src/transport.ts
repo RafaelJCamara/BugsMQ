@@ -65,22 +65,29 @@ export interface Subscription {
   close(): Promise<void>;
 }
 
-/** Thrown when the broker nacks a publish or returns it as unroutable. Mirrors MessageTransportPublishException. */
+/** Thrown when a publish is rejected or cannot be routed. Mirrors MessageTransportPublishException. */
 export class MessageTransportPublishError extends Error {
   readonly messageTypeName: string;
   readonly correlationId: string;
   readonly isUnroutable: boolean;
 
+  /**
+   * `detail` lets each transport say what actually rejected the publish. Without it the message
+   * blames "the broker", which is a false lead in a brokerless transport: @vsaga/transport-http
+   * reporting a refused TCP connection as a broker nack sends the reader looking for a RabbitMQ
+   * that was never in the picture.
+   */
   constructor(
     messageTypeName: string,
     correlationId: string,
     isUnroutable: boolean,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; detail?: string },
   ) {
+    const outcome = isUnroutable ? 'returned as unroutable' : 'rejected';
     super(
-      `Publish of ${messageTypeName} for correlation id ${correlationId} was ${
-        isUnroutable ? 'returned as unroutable' : 'rejected'
-      } by the broker.`,
+      options?.detail
+        ? `Publish of ${messageTypeName} for correlation id ${correlationId} was ${outcome}: ${options.detail}`
+        : `Publish of ${messageTypeName} for correlation id ${correlationId} was ${outcome} by the broker.`,
       options,
     );
     this.name = 'MessageTransportPublishError';

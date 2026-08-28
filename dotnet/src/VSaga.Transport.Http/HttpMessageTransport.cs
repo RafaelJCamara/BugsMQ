@@ -86,6 +86,7 @@ public sealed class HttpMessageTransport(
                 return;
 
             throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: true,
+                $"no HTTP route or local subscriber is configured for message type '{messageTypeName}'.",
                 new InvalidOperationException($"No HTTP route or local subscriber is configured for message type '{messageTypeName}'."));
         }
 
@@ -125,7 +126,8 @@ public sealed class HttpMessageTransport(
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
             logger.LogWarning(ex, "{ServiceName}: publish of {MessageType} to {BaseUrl} failed", options.ServiceName, messageTypeName, baseUrl);
-            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: false, ex);
+            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: false,
+                $"POST to {BuildRequestUri(baseUrl)} failed: {DescribeRequestFailure(ex)}", ex);
         }
 
         using (response)
@@ -135,8 +137,9 @@ public sealed class HttpMessageTransport(
 
             if (!response.IsSuccessStatusCode)
             {
+                var detail = $"POST to {BuildRequestUri(baseUrl)} returned {(int)response.StatusCode} {response.StatusCode}.";
                 throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: false,
-                    new HttpRequestException($"POST to {baseUrl} for '{messageTypeName}' returned {(int)response.StatusCode} {response.StatusCode}."));
+                    detail, new HttpRequestException(detail));
             }
 
             await HandleSyncReplyAsync(response, messageTypeName, envelope.CorrelationId, cancellationToken);
@@ -158,8 +161,9 @@ public sealed class HttpMessageTransport(
 
         if (replyTypeName is null || replyMessageId is null || !Guid.TryParse(replyCorrelationIdText, out var replyCorrelationId))
         {
+            const string detail = "the HTTP 200 reply is missing one of the required x-vsaga- headers (message-type/correlation-id/message-id).";
             throw new MessageTransportPublishException(originalMessageType, originalCorrelationId, isUnroutable: false,
-                new InvalidOperationException("HTTP 200 reply is missing one of the required x-vsaga- headers (message-type/correlation-id/message-id)."));
+                detail, new InvalidOperationException(detail));
         }
 
         var replyBody = await response.Content.ReadAsByteArrayAsync(cancellationToken);
@@ -174,6 +178,20 @@ public sealed class HttpMessageTransport(
         var relativePath = options.InboundPath.TrimStart('/');
         return new Uri(baseUri, relativePath);
     }
+
+    /// <summary>
+    /// HttpRequestException's own message ("No connection could be made because the target machine
+    /// actively refused it") buries the one word the reader needs behind a platform-specific sentence,
+    /// and a cancelled send is ambiguous between the caller's token and this transport's own timeout.
+    /// </summary>
+    private static string DescribeRequestFailure(Exception exception) => exception switch
+    {
+        HttpRequestException { HttpRequestError: HttpRequestError.ConnectionError } => "connection refused",
+        HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError } => "host not found",
+        HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError } => "TLS handshake failed",
+        TaskCanceledException or OperationCanceledException => "the request timed out or was cancelled",
+        _ => exception.Message,
+    };
 
     /// <summary>Writes the three reserved headers plus every envelope header, rejecting any value containing a raw CR/LF (docs/design/http-based-sagas.md §3.3: MessageEnvelope.Headers is open, and a saga author's value must never be able to inject a header/request-smuggle its way onto the wire).</summary>
     internal static void ApplyVSagaHeaders(Action<string, string> setHeader, string messageTypeName, MessageEnvelope envelope)

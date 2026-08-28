@@ -29,6 +29,37 @@ import {
 } from './options.js';
 import { type HttpRouteTable, createConfigRouteTable } from './route-table.js';
 
+/**
+ * Node's fetch reports every network failure as a bare `TypeError: fetch failed` and hides the
+ * real reason (ECONNREFUSED, DNS failure, TLS error) one or two `cause` levels down -- often
+ * inside an AggregateError holding one entry per address the host resolved to. Digging that out
+ * here is what turns "was rejected" into a message naming the actual problem.
+ */
+function describeFetchFailure(error: unknown): string {
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'the request timed out';
+  if (error instanceof DOMException && error.name === 'AbortError') return 'the request was aborted';
+
+  for (let current: unknown = error, depth = 0; current !== undefined && depth < 4; depth++) {
+    if (current instanceof AggregateError && current.errors.length > 0) {
+      current = current.errors[0];
+      continue;
+    }
+    if (current instanceof Error) {
+      const code = (current as NodeJS.ErrnoException).code;
+      if (code === 'ECONNREFUSED') return 'connection refused';
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'host not found';
+      if (code === 'ETIMEDOUT') return 'the connection timed out';
+      if (code !== undefined) return code;
+      if (current.cause === undefined) return current.message;
+      current = current.cause;
+      continue;
+    }
+    break;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** One inbound HTTP request to `inboundPath`, in a shape any Node HTTP framework's own request object can be adapted to. */
 export interface InboundHttpRequest {
   readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
@@ -195,7 +226,9 @@ class HttpMessageTransportImpl implements HttpTransport {
       const collector = currentSyncReplyCollector();
       if (collector?.tryCapture({ messageTypeName, body, envelope })) return;
 
-      throw new MessageTransportPublishError(messageTypeName, envelope.correlationId, true);
+      throw new MessageTransportPublishError(messageTypeName, envelope.correlationId, true, {
+        detail: `no HTTP route or local subscriber is configured for message type '${messageTypeName}'.`,
+      });
     }
 
     if (hasLocalSubscriber) {
@@ -246,6 +279,7 @@ class HttpMessageTransportImpl implements HttpTransport {
     } catch (error) {
       throw new MessageTransportPublishError(messageTypeName, envelope.correlationId, false, {
         cause: error,
+        detail: `POST to ${this.#buildRequestUrl(baseUrl)} failed: ${describeFetchFailure(error)}`,
       });
     }
 
@@ -256,10 +290,10 @@ class HttpMessageTransportImpl implements HttpTransport {
 
     if (!response.ok) {
       await response.body?.cancel();
+      const detail = `POST to ${this.#buildRequestUrl(baseUrl)} returned ${response.status} ${response.statusText}.`;
       throw new MessageTransportPublishError(messageTypeName, envelope.correlationId, false, {
-        cause: new Error(
-          `POST to ${baseUrl} for '${messageTypeName}' returned ${response.status} ${response.statusText}.`,
-        ),
+        cause: new Error(detail),
+        detail,
       });
     }
 
@@ -294,10 +328,11 @@ class HttpMessageTransportImpl implements HttpTransport {
       !replyCorrelationId ||
       !isDashedGuid(replyCorrelationId)
     ) {
+      const detail =
+        'the HTTP 200 reply is missing one of the required x-vsaga- headers (message-type/correlation-id/message-id).';
       throw new MessageTransportPublishError(originalMessageType, originalCorrelationId, false, {
-        cause: new Error(
-          'HTTP 200 reply is missing one of the required x-vsaga- headers (message-type/correlation-id/message-id).',
-        ),
+        cause: new Error(detail),
+        detail,
       });
     }
 
