@@ -1,13 +1,21 @@
 # vSaga
 
-vSaga is an orchestration-first saga library for .NET 10, built directly on `RabbitMQ.Client` (no
-MassTransit/Wolverine dependency required — though adapters for both exist if you're already
-standardized on one). It gives you a fluent saga DSL for both orchestrated and choreographed sagas, a
-persisted event log, EF Core (Postgres) and in-memory persistence, six interchangeable
-`IMessageTransport` adapters, a transport-agnostic `.CallHttp` step for calling plain REST APIs, an
-in-memory testing harness, OpenTelemetry instrumentation, a chaos-engineering fault-injection package,
-a TypeScript SDK for cross-runtime participants, and a saga-type-agnostic ops dashboard (ASP.NET Core
-API + Angular SPA) with live updates, a visual service map, and manual retry.
+vSaga is an orchestration-first saga library with two first-class runtimes: a .NET 10 engine, built
+directly on `RabbitMQ.Client` (no MassTransit/Wolverine dependency required — though adapters for both
+exist if you're already standardized on one), and a TypeScript SDK for writing Node.js **participants**
+that react to those sagas without running the engine itself. Both sides speak the same wire protocol,
+so a Node participant and a .NET saga exchange messages with neither side aware of the other's
+language.
+
+The .NET engine gives you a fluent saga DSL for both orchestrated and choreographed sagas, a persisted
+event log, EF Core (Postgres) and in-memory persistence, six interchangeable `IMessageTransport`
+adapters, a transport-agnostic `.CallHttp` step for calling plain REST APIs, an in-memory testing
+harness, OpenTelemetry instrumentation, and a chaos-engineering fault-injection package. The TypeScript
+SDK — seven `@vsaga/*` packages — gives Node participants the same dispatch/dedupe/reply-with-causation
+semantics, a broker transport (`transport-rabbitmq`) and a brokerless HTTP transport (`transport-http`)
+with Express/Fastify/NestJS hosting adapters, wire-compatible with their .NET counterparts. A
+saga-type-agnostic ops dashboard (ASP.NET Core API + Angular SPA) gives both runtimes live updates, a
+visual service map, and manual retry.
 
 ## Install
 
@@ -18,14 +26,16 @@ dotnet add package VSaga.Transport.InMemory     # or VSaga.Transport.RabbitMQ / 
 ```
 
 ```bash
-npm install @vsaga/participant @vsaga/protocol @vsaga/transport-rabbitmq   # Node.js participants
+npm install @vsaga/participant @vsaga/protocol @vsaga/transport-rabbitmq   # or @vsaga/transport-http + @vsaga/express / .fastify / .nestjs
 ```
 
 > No tagged release exists yet, so these aren't published to nuget.org/npm as of this commit — see
 > [`docs/getting-started.md`](docs/getting-started.md) for how to reference them locally in the
 > meantime. The commands above are the shape usage will take once the first release ships.
 
-## A first saga
+## Quick start
+
+### A first saga (.NET)
 
 ```csharp
 public sealed class OrderApprovalSaga : OrchestratedSagaDefinition<OrderApprovalState>
@@ -54,6 +64,34 @@ in `.Then(...)`, publish onward, transition, finalize. See
 state class, host wiring, and a test) and [`docs/saga-dsl.md`](docs/saga-dsl.md) for the full DSL
 reference, including compensation, timeouts, fan-out/join, sub-saga composition, and choreographed
 sagas.
+
+### A first participant (TypeScript)
+
+```ts
+import { createParticipant } from '@vsaga/participant';
+import { message } from '@vsaga/protocol';
+import { createRabbitMqTransport } from '@vsaga/transport-rabbitmq';
+
+const ChargeCard = message<{ CorrelationId: string; OrderId: string; Amount: number }>('ChargeCard');
+const CardCharged = message<{ CorrelationId: string; OrderId: string }>('CardCharged');
+
+const transport = await createRabbitMqTransport({ connectionString: 'amqp://localhost' });
+const payments = createParticipant({ serviceName: 'payments', queue: 'vsaga.participant.payments', transport });
+
+payments.on(ChargeCard, async (body, ctx) => {
+  // ... charge the card ...
+  await ctx.reply(CardCharged, { CorrelationId: body.CorrelationId, OrderId: body.OrderId });
+});
+
+await payments.start();
+```
+
+A participant isn't a saga — it holds no persisted state and never talks to the orchestrator directly —
+but it exchanges messages with one over the exact same wire format, message-type-name for
+message-type-name, with no translation layer. Swap `@vsaga/transport-rabbitmq` for
+`@vsaga/transport-http` (plus `@vsaga/express`, `@vsaga/fastify`, or `@vsaga/nestjs` to receive inbound
+requests) to run the same participant over a broker-free HTTP topology instead. See
+[`docs/typescript-participants.md`](docs/typescript-participants.md) for the full SDK reference.
 
 ## Run the demo
 
@@ -112,6 +150,9 @@ Full index: [`docs/README.md`](docs/README.md). Straight to the reference docs:
   full.
 - [`docs/concepts.md`](docs/concepts.md) — orchestrated vs. choreographed, correlation (including
   business-key correlation), compensation, timeouts.
+- [`docs/typescript-participants.md`](docs/typescript-participants.md) — the Node.js SDK: the seven
+  `@vsaga/*` packages, wire compatibility with the .NET side, dispatch semantics, and the HTTP hosting
+  adapters.
 - [`docs/saga-dsl.md`](docs/saga-dsl.md) — the complete DSL method reference.
 - [`docs/configuration.md`](docs/configuration.md) — every options class, including the transactional
   outbox and transport options.
@@ -123,7 +164,6 @@ Full index: [`docs/README.md`](docs/README.md). Straight to the reference docs:
 - [`docs/chaos.md`](docs/chaos.md) — `VSaga.Chaos` fault injection.
 - [`docs/transports/index.md`](docs/transports/index.md) — the transport contract and all six
   adapters (RabbitMQ, Wolverine, MassTransit, Brighter, HTTP, in-memory).
-- [`docs/typescript-participants.md`](docs/typescript-participants.md) — the Node.js SDK.
 - [`docs/design/`](docs/design/) — design records for features as they were planned.
 - [`docs/history/`](docs/history/) — the project's changelog, preserved by topic — live-verification
   traces, mutation-testing results, and bugs found and fixed along the way.
