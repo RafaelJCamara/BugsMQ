@@ -278,6 +278,13 @@ public sealed class SagaOrchestrator<TState>(
         else if (outcome.FinalStatus == SagaStatus.Completed)
             VSagaDiagnostics.SagasCompleted.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
 
+        // production-readiness.md §6/§8.18: the timeout-outcome counterpart to HandleStepSuccessAsync's
+        // own SagaDuration recording -- this is the other of the two places a saga already reaches a
+        // terminal status.
+        if (outcome.FinalStatus is not null)
+            VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
+                new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+
         await notifier.SagaUpdatedAsync(ToSummary(state), cancellationToken);
 
         // A timeout that goes terminal is one of the two structural gaps ctx.NotifyParentAsync cannot
@@ -475,6 +482,40 @@ public sealed class SagaOrchestrator<TState>(
         };
     }
 
+    /// <summary>
+    /// production-readiness.md §6/§8.18: ActivityKind.Consumer with an explicitly extracted parent
+    /// context, not the plain StartActivity(string) overload that used to adopt Activity.Current. That
+    /// mattered because Activity.Current is unreliable two different ways depending on transport: null
+    /// on a broker transport (so every hop rooted a fresh trace), and on HTTP's inline dispatch path
+    /// (HttpInboundDispatcher.DispatchInlineAsync) it is ASP.NET Core's own *server* activity for the
+    /// inbound request -- silently attaching this span to the wrong trace rather than the one carried by
+    /// the message itself. HTTP's pump path never had this problem: PumpLoopAsync runs on its own
+    /// long-lived background loop, decoupled from any request's ExecutionContext, so Activity.Current
+    /// there was already null, same as a broker. Passing an explicit parentContext sidesteps
+    /// Activity.Current entirely and fixes both paths uniformly. Split out of RunStepAsync purely for
+    /// length.
+    /// </summary>
+    private Activity? StartConsumerSpan(string fromState, Guid correlationId, IReadOnlyDictionary<string, string> headers)
+    {
+        VSagaDiagnostics.TryExtractActivityContext(headers, out var parentContext);
+        var activity = VSagaDiagnostics.ActivitySource.StartActivity(
+            $"saga.step {SagaType}.{fromState}", ActivityKind.Consumer, parentContext);
+        activity?.SetTag(VSagaDiagnostics.TagSagaType, SagaType);
+        activity?.SetTag(VSagaDiagnostics.TagSagaKind, definition.Kind.ToString());
+        activity?.SetTag(VSagaDiagnostics.TagCorrelationId, correlationId.ToString());
+        activity?.SetTag(VSagaDiagnostics.TagFromState, fromState);
+
+        // A retry of the same logical delivery belongs in the same trace, not a fresh linked span. The
+        // redelivery headers already carry the original traceparent forward -- HandleInfrastructureFailureAsync
+        // copies every inbound header across as-is -- so the extraction above already keeps this in the
+        // same trace; this tag just makes the retry visible on the span itself.
+        var deliveryAttempt = GetDeliveryAttempt(headers);
+        if (deliveryAttempt > 0)
+            activity?.SetTag(VSagaDiagnostics.TagDeliveryAttempt, deliveryAttempt);
+
+        return activity;
+    }
+
     private async Task RunStepAsync(TState state, object message, string messageTypeName, string messageId,
         IReadOnlyDictionary<string, string> headers, bool isNew, bool needsInsert, CancellationToken cancellationToken)
     {
@@ -496,11 +537,7 @@ public sealed class SagaOrchestrator<TState>(
         var visitedStates = await GetVisitedStatesAsync(correlationId, cancellationToken);
         var context = new SagaContext<TState>(state, correlationId, headers, visitedStates, services, transport, SagaType, messageId, LogAsync, DeferAllPublishes, cancellationToken);
 
-        using var activity = VSagaDiagnostics.ActivitySource.StartActivity($"saga.step {SagaType}.{fromState}");
-        activity?.SetTag(VSagaDiagnostics.TagSagaType, SagaType);
-        activity?.SetTag(VSagaDiagnostics.TagSagaKind, definition.Kind.ToString());
-        activity?.SetTag(VSagaDiagnostics.TagCorrelationId, correlationId.ToString());
-        activity?.SetTag(VSagaDiagnostics.TagFromState, fromState);
+        using var activity = StartConsumerSpan(fromState, correlationId, headers);
 
         var stopwatch = Stopwatch.StartNew();
         SagaStepOutcome outcome;
@@ -535,6 +572,12 @@ public sealed class SagaOrchestrator<TState>(
         string messageTypeName, string messageId, bool needsInsert, int expectedVersion, Activity? activity, SagaContext<TState> context, CancellationToken cancellationToken)
     {
         state.Status = SagaStatus.Failed;
+
+        // Marks the span itself failed, not just the log entry below -- an OTel backend filtering by
+        // status wouldn't otherwise see this as an error at all, only the trace/span ids the log entry
+        // already records for cross-referencing.
+        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+
         var payloadJson = JsonSerializer.Serialize(message, message.GetType());
 
         await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.StepFailed,
@@ -593,7 +636,14 @@ public sealed class SagaOrchestrator<TState>(
         }
 
         if (outcome.FinalStatus is not null)
+        {
             await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.SagaCompleted, toState: outcome.ToState), cancellationToken);
+
+            // production-readiness.md §6/§8.18: wired at the two places a saga already reaches a
+            // terminal status -- this one, and RecordTimeoutOutcomeAsync's own timeout-outcome path.
+            VSagaDiagnostics.SagaDuration.Record((timeProvider.GetUtcNow() - state.CreatedAtUtc).TotalMilliseconds,
+                new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
+        }
 
         // production-readiness.md §4.1 step 2: staged immediately before this persist, which commits
         // them with the snapshot in one implicit transaction, so a crash between that commit and the

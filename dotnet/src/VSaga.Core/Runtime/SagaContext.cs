@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json;
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Persistence;
 using VSaga.Abstractions.Sagas;
 using VSaga.Abstractions.Transport;
@@ -173,6 +175,32 @@ internal sealed class SagaContext<TState>(
     private async Task PublishInternalAsync<TMessage>(TMessage message, string? destination, MessageEnvelope envelope, CancellationToken cancellationToken, SagaEntryType? entryTypeOverride = null) where TMessage : notnull
     {
         var effectiveCt = cancellationToken == default ? CancellationToken : cancellationToken;
+
+        // production-readiness.md §6/§8.18: the producer span, new here -- this is the single publish
+        // chokepoint all five ISagaContext publish paths funnel into (RouteAsync/QueueAsync's closure
+        // both land here), so it's the one place that can stamp every outbound message uniformly,
+        // including ones a step queues from a context that never had a consumer span at all (e.g.
+        // HandleTimeoutAsync's own SagaContext). MessageEnvelope.From already injects whatever
+        // Activity.Current happens to be at envelope-construction time (item 16) -- but that happens at
+        // each call site, before RouteAsync/QueueAsync is even invoked, so it can only ever see an
+        // *ambient* activity (the enclosing consumer span, or nothing). This span is what that
+        // injection was missing: it re-stamps the envelope's headers with its own context right before
+        // the message actually goes out, so the header on the wire names this producer span -- not the
+        // grandparent consumer span -- as the next hop's parent, which is what W3C trace context expects.
+        using var activity = VSagaDiagnostics.ActivitySource.StartActivity(
+            $"saga.publish {typeof(TMessage).Name}", ActivityKind.Producer);
+
+        if (activity is not null)
+        {
+            activity.SetTag(VSagaDiagnostics.TagSagaType, sagaType);
+            activity.SetTag(VSagaDiagnostics.TagCorrelationId, CorrelationId.ToString());
+
+            var outboundHeaders = envelope.Headers is null
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : new Dictionary<string, string>(envelope.Headers, StringComparer.Ordinal);
+            VSagaDiagnostics.Inject(activity.Context, outboundHeaders);
+            envelope = envelope with { Headers = outboundHeaders };
+        }
 
         if (destination is null)
             await transport.PublishAsync(message, envelope, effectiveCt);

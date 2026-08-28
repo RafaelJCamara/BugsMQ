@@ -24,13 +24,22 @@ public static class VSagaDiagnostics
     public static readonly Counter<long> StepRetries = Meter.CreateCounter<long>("vsaga.saga.step.retries");
     public static readonly Histogram<double> StepDuration = Meter.CreateHistogram<double>("vsaga.saga.step.duration", "ms");
     public static readonly Histogram<double> SagaDuration = Meter.CreateHistogram<double>("vsaga.saga.duration", "ms");
-    public static readonly UpDownCounter<long> RunningSagas = Meter.CreateUpDownCounter<long>("vsaga.saga.running");
+
+    // Deliberately NOT an UpDownCounter<long> "vsaga.saga.running" -- production-readiness.md §6/§8.18
+    // calls that a trap: an UpDownCounter is process-local and non-idempotent, so a restart, a
+    // redelivery, or a second replica desynchronizes it permanently with no way to self-correct. "How
+    // many sagas are running right now" needs an ObservableGauge backed by
+    // `COUNT(*) WHERE Status = Running` against the store instead, which needs scoped-store access from
+    // a meter callback that doesn't exist yet -- a named follow-up for VSaga.Observability, not built here.
 
     public const string TagSagaType = "saga.type";
     public const string TagSagaKind = "saga.kind";
     public const string TagCorrelationId = "saga.correlation_id";
     public const string TagFromState = "saga.from_state";
     public const string TagToState = "saga.to_state";
+
+    /// <summary>Tagged on a consumer span only when this delivery is a retry (production-readiness.md §6's "redelivery keeps the same trace" -- a retried delivery gets this tag instead of a fresh linked span).</summary>
+    public const string TagDeliveryAttempt = "delivery.attempt";
 
     /// <summary>The W3C Trace Context header carrying trace id, parent span id, and trace flags. Bare name, not `x-vsaga-`-prefixed -- interoperability with non-vSaga consumers is the point.</summary>
     public const string TraceParentHeader = "traceparent";
