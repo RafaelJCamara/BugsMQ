@@ -20,7 +20,8 @@ import { resolve } from 'node:path';
 const REFERENCE = '/// <reference types="node" />';
 
 const explicitTargets = process.argv.slice(2);
-const files = explicitTargets.length > 0 ? explicitTargets : ['dist/index.d.ts', 'dist/index.d.cts'];
+const files =
+  explicitTargets.length > 0 ? explicitTargets : ['dist/index.d.ts', 'dist/index.d.cts'];
 
 for (const file of files) {
   const path = resolve(process.cwd(), file);
