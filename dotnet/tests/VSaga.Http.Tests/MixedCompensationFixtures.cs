@@ -24,7 +24,7 @@ public sealed class MixedCompensationTestState : SagaState
 }
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9: a compensation delegate performing a broker publish and a
+/// docs/design/mixed-sagas.md §4/§9: a compensation delegate performing a broker publish and a
 /// <c>ctx.CallHttpAsync</c> in order, asserting both happened -- the two-hop shape a mixed saga's own
 /// compensation needs, at the smallest scale that exercises it. <c>Reversing</c> is deliberately non-
 /// terminal (§8's rule): the loopback from <c>ctx.CallHttpAsync</c> is what finally drives the saga to

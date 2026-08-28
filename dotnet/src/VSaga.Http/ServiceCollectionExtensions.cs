@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Named distinctly from <c>VSaga.Transport.Http</c>'s own <c>AddVSagaHttp</c> -- the two packages
-    /// are unrelated (docs/http-based-sagas.md §1) and a host can easily need both (an inbound HTTP
+    /// are unrelated (docs/design/http-based-sagas.md §1) and a host can easily need both (an inbound HTTP
     /// transport plus outbound <c>.CallHttp</c> calls), so sharing a name would force a using-directive
     /// collision on any caller that wants both.
     /// </summary>

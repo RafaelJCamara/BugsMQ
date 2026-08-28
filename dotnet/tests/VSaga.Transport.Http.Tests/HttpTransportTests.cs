@@ -19,7 +19,7 @@ public sealed record RedeliverableCommand(string Text);
 /// <summary>
 /// Structural mirror of the other adapters' own Tests projects (RabbitMqTransportTests,
 /// WolverineTransportTests, ...): the same four canonical test names, so the family reads as one, plus
-/// five specific to this adapter, each pinning one constraint from docs/http-based-sagas.md §3. Unlike
+/// five specific to this adapter, each pinning one constraint from docs/design/http-based-sagas.md §3. Unlike
 /// those siblings, there's no broker container here -- each test hosts one or more in-memory
 /// TestServer-backed "nodes" wired together by <see cref="NodeRegistry"/>, since this adapter's whole
 /// point is that two vSaga services can talk without one.
@@ -73,7 +73,7 @@ public sealed class HttpTransportTests
             (received, _) => { tcs.TrySetResult(received); return Task.CompletedTask; });
 
         // No Routes entry for PingMessage at all -- SendAsync resolves "receiver" as an endpoint name
-        // directly, bypassing Routes entirely (docs/http-based-sagas.md §4.3's AMQP-default-exchange analogue).
+        // directly, bypassing Routes entirely (docs/design/http-based-sagas.md §4.3's AMQP-default-exchange analogue).
         var correlationId = Guid.NewGuid();
         await senderTransport.SendAsync("receiver", new PingMessage("direct"), MessageEnvelope.New(correlationId));
 

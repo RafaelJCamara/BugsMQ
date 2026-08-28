@@ -22,7 +22,7 @@ public sealed class TestChildSafetyNetParentState : SagaState
 
 /// <summary>
 /// A parent that starts a child and parks, having declared a handler for ChildSagaFinished — the
-/// declaration itself is what opts it in (docs/sub-saga-composition.md's Slice 2b design). Two states for
+/// declaration itself is what opts it in (docs/design/sub-saga-composition.md's Slice 2b design). Two states for
 /// the same reason every other awaiting-state sample in this repo uses two: the orchestrator only
 /// schedules a timeout on a real transition.
 /// </summary>

@@ -26,7 +26,7 @@ public sealed class TimeoutBuilder<TState> where TState : SagaState, new()
     }
 
     /// <summary>
-    /// docs/mixed-sagas.md §5: the async counterpart, needed for a timeout step that awaits something
+    /// docs/design/mixed-sagas.md §5: the async counterpart, needed for a timeout step that awaits something
     /// (e.g. <c>ctx.CallHttpAsync(...)</c>) directly rather than through <see cref="Compensate"/>.
     /// Mirrors <see cref="EventBuilder{TState,TMessage}"/>'s existing <c>Then(Action)</c>/<c>Then(Func{...,Task})</c>
     /// pair; <c>ChoreographyEventBuilder</c> already has this, so this gap exists only on TimeoutBuilder.

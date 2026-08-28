@@ -1,0 +1,74 @@
+# Transports
+
+Every message vSaga sends or receives goes through one `IMessageTransport` implementation
+(`VSaga.Abstractions.Transport`). `VSaga.Core` depends on nothing else to move messages, and no
+adapter uses the underlying bus's own saga/state-machine or handler-discovery machinery — only its
+raw publish/consume primitives. That rule is the load-bearing constraint behind every adapter's design;
+see each adapter's own page for how it plays out concretely.
+
+## The contract
+
+```csharp
+public interface IMessageTransport
+{
+    Task PublishAsync<TMessage>(TMessage message, MessageEnvelope envelope, CancellationToken ct = default);
+    Task SendAsync<TMessage>(string destination, TMessage message, MessageEnvelope envelope, CancellationToken ct = default);
+    Task PublishRawAsync(string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken ct = default);
+    Task SendRawAsync(string destination, string messageTypeName, ReadOnlyMemory<byte> body, MessageEnvelope envelope, CancellationToken ct = default);
+    Task<IDisposable> SubscribeAsync(TransportSubscription subscription, Func<ReceivedMessage, CancellationToken, Task> handler, CancellationToken ct = default);
+}
+```
+
+- **`PublishAsync`/`SendAsync`** — the typed entry points every saga step actually calls (via
+  `ISagaContext`). `Publish` broadcasts to whatever subscribes to the message type; `Send` addresses
+  one named destination directly, bypassing topic routing.
+- **`PublishRawAsync`/`SendRawAsync`** — untyped counterparts, publishing pre-serialized JSON by
+  message-type name rather than CLR type. Used by callers that know a message's stored type name and
+  payload but aren't compiled against the assembly that defines it — the dashboard's manual-retry
+  endpoint (see [`dashboard.md`](../dashboard.md#manual-retry)) is the main one. `SendRawAsync`
+  defaults to falling back to a broadcast via `PublishRawAsync` for an adapter that predates the
+  method; every adapter shipped in this repo overrides it with a real addressed send.
+- **`SubscribeAsync`** — registers a handler for a runtime-declared set of message types
+  (`TransportSubscription`), returning a disposable that stops it. Async because a real broker adapter
+  needs to declare exchanges/queues/bindings and start consuming *before returning* — topology must
+  exist by the time the call completes, not lazily on first use (a gap the Brighter adapter had to work
+  around; see [`brighter.md`](brighter.md)).
+
+Every adapter is wrapped in `MiddlewarePipelineTransport` (`VSaga.Transport.Common`), the shared
+decorator that `VSaga.Chaos`'s fault injection and topology recording both plug into — this is why
+chaos and the Saga Map's topology registry work identically across every adapter with zero
+adapter-specific code.
+
+## Choosing an adapter
+
+| Adapter | Underlying bus | When to reach for it |
+| --- | --- | --- |
+| [`rabbitmq.md`](rabbitmq.md) | `RabbitMQ.Client` directly | The reference implementation. Default choice for a real broker with no other constraint. |
+| [`wolverine.md`](wolverine.md) | WolverineFx.RabbitMQ | Already standardized on Wolverine elsewhere in your stack. |
+| [`masstransit.md`](masstransit.md) | MassTransit 8.x + RabbitMQ | Already standardized on MassTransit 8.x (Apache-2.0; v9 is commercially licensed — this adapter is deliberately pinned below `9.0.0`). |
+| [`brighter.md`](brighter.md) | Paramore.Brighter's RabbitMQ gateway | Already standardized on Brighter elsewhere in your stack. |
+| [`http.md`](http.md) | Plain HTTP, no broker | No broker infrastructure available or wanted at all — trades parallel fan-out for synchronous request/response and an in-process (non-durable) local-dispatch path. |
+| [`in-memory.md`](in-memory.md) | None (single process) | Local development and `SagaTestHarness`-based unit testing. Not for production. |
+
+All four RabbitMQ-family adapters (RabbitMQ, Wolverine, MassTransit, Brighter) share one topic
+exchange (`vsaga.saga.events` by default) and route by message-type name, so the *shape* of a
+deployment looks the same regardless of which one is chosen — see [`configuration.md`](../configuration.md#transport-options)
+for each adapter's options.
+
+## What every adapter guarantees
+
+- **All four vSaga envelope headers round-trip losslessly**: `x-vsaga-source-service`,
+  `x-vsaga-causation-id`, `x-vsaga-parent-saga-type`, `x-vsaga-parent-correlation-id` — plus, since
+  production-readiness §8.17, the W3C `traceparent`/`tracestate` pair (bare names, not
+  `x-vsaga-`-prefixed — see [`../observability.md`](../observability.md#traces)). Every adapter's own
+  test suite includes a dedicated round-trip test for these; several were added specifically because an
+  earlier version of this repo shipped header-threading code with tests that hand-built the field and
+  proved nothing (see [`../history/sub-saga-parent-linkage.md`](../history/sub-saga-parent-linkage.md)).
+- **An unroutable publish is detected where the underlying package supports it.** RabbitMQ, MassTransit,
+  and HTTP all surface it as `MessageTransportPublishException.IsUnroutable`. Wolverine's and Brighter's
+  underlying gateway packages have no equivalent as of the pinned versions — confirmed absent by
+  reflecting over the packages' publish paths, not merely undocumented — see [`wolverine.md`](wolverine.md)
+  and [`brighter.md`](brighter.md) for the tests that pin the verified absence directly.
+- **`SagaOrchestrator` owns all retry/redelivery/dedup**, never the underlying bus's own retry policy —
+  every adapter configures the underlying bus for zero (or broker-native at-least-once only) retries so
+  it doesn't fight the engine's own bounded, application-level redelivery.

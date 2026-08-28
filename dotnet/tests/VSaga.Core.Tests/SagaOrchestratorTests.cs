@@ -234,7 +234,7 @@ public sealed class SagaOrchestratorTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// docs/mixed-sagas.md §3.2: a step queues a loopback (ctx.PublishAfterCommitAsync) then throws on
+    /// docs/design/mixed-sagas.md §3.2: a step queues a loopback (ctx.PublishAfterCommitAsync) then throws on
     /// its first attempt. Without StepExecutor clearing the queue before the retry replays the step from
     /// index 0, the second attempt would queue a second LoopbackAck with a fresh MessageId -- invisible
     /// to IsDuplicateAsync's MessageId-keyed dedupe -- and the drain would publish both.

@@ -5,7 +5,7 @@ namespace VSaga.Http;
 
 /// <summary>
 /// What to do with one resolved HTTP outcome (2xx / an explicit status / everything else) -- either
-/// shape from docs/http-based-sagas.md §5.2. <see cref="DescribeReply"/> names the outcome for this
+/// shape from docs/design/http-based-sagas.md §5.2. <see cref="DescribeReply"/> names the outcome for this
 /// call's own reply timeline entry (§5.3), independent of whether applying it publishes anything.
 /// </summary>
 internal interface IHttpOutcomeAction<TState> where TState : SagaState, new()

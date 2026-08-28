@@ -5,7 +5,7 @@ using VSaga.Abstractions.Sagas;
 namespace VSaga.Http.Tests;
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9: a compensation delegate performing a broker publish (<c>ctx.PublishAsync</c>)
+/// docs/design/mixed-sagas.md §4/§9: a compensation delegate performing a broker publish (<c>ctx.PublishAsync</c>)
 /// and a <c>ctx.CallHttpAsync</c> in order, asserting both happened -- the two-hop compensation shape
 /// MixedFulfilmentSaga's own §7 compensation needs, at the smallest scale that proves it out ahead of the
 /// sample existing.

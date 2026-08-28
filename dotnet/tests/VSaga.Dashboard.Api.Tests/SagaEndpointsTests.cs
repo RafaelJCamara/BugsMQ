@@ -496,7 +496,7 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// docs/mixed-sagas.md §6: a compensating REST call's reply is an inbound entry (MessageReceived),
+    /// docs/design/mixed-sagas.md §6: a compensating REST call's reply is an inbound entry (MessageReceived),
     /// and before this fix ProcessInboundEntry hardcoded IsCompensation: false for every inbound edge --
     /// invisible until now because no compensation in this repo produced an inbound timeline entry (a
     /// broker participant never replies to a compensating command in the existing sample).

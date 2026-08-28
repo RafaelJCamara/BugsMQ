@@ -33,7 +33,7 @@ const ACCEPTED: InlineDispatchResult = {};
 /**
  * Ambient collector installed by dispatchInline() for the duration of one inline dispatch -- the
  * only seam available to intercept a handler's ordinary publish() call and capture it as that
- * same request's synchronous reply (docs/http-based-sagas.md §3.2). Always a fresh instance per
+ * same request's synchronous reply (docs/design/http-based-sagas.md §3.2). Always a fresh instance per
  * request, never shared, and sealed once every subscriber handler's own *awaited* chain has
  * settled, so a publish a handler genuinely awaits (however many ticks it takes) is always seen
  * before sealing.
@@ -83,7 +83,7 @@ interface SubscriberEntry {
 /**
  * Bound on acquiring the correlation gate for a genuine inbound request before giving up and
  * deferring to a background dispatch instead of continuing to block the HTTP connection. Found
- * live (docs/http-based-sagas.md §4.4a): a fan-out reply that routes back to its own originating
+ * live (docs/design/http-based-sagas.md §4.4a): a fan-out reply that routes back to its own originating
  * service can deadlock that service's own gate against itself -- the saga's dispatch holds the
  * gate while awaiting a step's HTTP response, and the participant handling that step can't finish
  * answering until its own nested reply back to the saga host is accepted, which needs the very
@@ -96,7 +96,7 @@ const INLINE_GATE_ACQUIRE_TIMEOUT_MS = 5000;
  * A per-correlation-id mutex. Node has no threads, so unlike .NET's SemaphoreSlim this exists
  * purely to serialize *interleaving* across await points, not true concurrency -- but the
  * correctness property (two dispatches for the same correlation id never run overlapping) is the
- * same one docs/http-based-sagas.md §3.1 needs.
+ * same one docs/design/http-based-sagas.md §3.1 needs.
  */
 class AsyncGate {
   #locked = false;
@@ -152,7 +152,7 @@ class AsyncGate {
 
 /**
  * Owns the local subscriber registry (populated by subscribe()) and the per-correlation-id
- * dispatch gate that is this adapter's whole answer to docs/http-based-sagas.md §3.1: a reply
+ * dispatch gate that is this adapter's whole answer to docs/design/http-based-sagas.md §3.1: a reply
  * must never re-enter a saga while its own step is still running.
  *
  * Exactly two entry points ever reach a local subscriber, and the asymmetry between them is the
@@ -195,7 +195,7 @@ export class HttpInboundDispatcher {
     };
   }
 
-  /** Whether any locally-registered subscription declares this message type -- the local half of the routing union (docs/http-based-sagas.md §3.3a). */
+  /** Whether any locally-registered subscription declares this message type -- the local half of the routing union (docs/design/http-based-sagas.md §3.3a). */
   hasLocalSubscriber(messageTypeName: string): boolean {
     for (const entry of this.#subscribers.values()) {
       if (entry.subscription.messageTypeNames.includes(messageTypeName)) return true;

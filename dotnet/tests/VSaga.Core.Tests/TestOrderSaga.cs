@@ -54,7 +54,7 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
 
     public int AlwaysFailsWithPolicyAttempts { get; set; }
 
-    /// <summary>docs/mixed-sagas.md §3.2's dedupe fix: counts real attempts of the step below, distinct from how many times its queued loopback actually gets published.</summary>
+    /// <summary>docs/design/mixed-sagas.md §3.2's dedupe fix: counts real attempts of the step below, distinct from how many times its queued loopback actually gets published.</summary>
     public int FlakyWithLoopbackAttempts { get; set; }
 
     public TestOrderSaga()
@@ -126,7 +126,7 @@ public sealed class TestOrderSaga : OrchestratedSagaDefinition<TestOrderSagaStat
                 })
                 .Retry(RetryPolicy.Exponential(maxAttempts: 2, baseDelay: TimeSpan.FromMilliseconds(1)))
                 .TransitionTo(AwaitingPayment)
-            // docs/mixed-sagas.md §3.2: a loopback queued via PublishAfterCommitAsync, then a throw --
+            // docs/design/mixed-sagas.md §3.2: a loopback queued via PublishAfterCommitAsync, then a throw --
             // exactly the shape a .CallHttp-then-.Publish step under .Retry would have. Without
             // StepExecutor clearing the queue on retry, the replayed attempt would queue a second
             // LoopbackAck (a fresh MessageId each time) and the drain would publish both.

@@ -53,11 +53,11 @@ public sealed record InvoiceCopyStorageFailed(Guid CorrelationId, string OrderId
 // Published by InvoiceArchivalSaga back to InvoiceFollowUpSaga via ctx.NotifyParentAsync — carries the
 // actual result, which is exactly what NotifyParentAsync exists to carry and an engine-published
 // completion event could not. Deliberately never sent from the child's own timeout branch: that gap
-// is real (see docs/sub-saga-composition.md §3.4) and InvoiceFollowUpSaga's own timeout is what
+// is real (see docs/design/sub-saga-composition.md §3.4) and InvoiceFollowUpSaga's own timeout is what
 // covers it, not this message.
 public sealed record InvoiceArchivalFinished(string OrderId, bool Archived);
 
-// --- Mixed fulfilment (docs/mixed-sagas.md): REST authorization + broker stock reservation in one saga ---
+// --- Mixed fulfilment (docs/design/mixed-sagas.md): REST authorization + broker stock reservation in one saga ---
 // Deliberately new message types, not ReserveInventory/InventoryReserved: RabbitMQ's topic exchange fans
 // a published message out to every subscriber of that type, so reusing OrderSaga's own types would
 // deliver copies to OrderSaga under a correlation id it has no instance for, logging UnexpectedEvent

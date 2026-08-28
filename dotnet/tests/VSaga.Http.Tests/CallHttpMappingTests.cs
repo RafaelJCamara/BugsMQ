@@ -4,7 +4,7 @@ using VSaga.Abstractions.Sagas;
 namespace VSaga.Http.Tests;
 
 /// <summary>
-/// docs/http-based-sagas.md §5.4's mapping table: 2xx -> success message, an explicit status -> its own
+/// docs/design/http-based-sagas.md §5.4's mapping table: 2xx -> success message, an explicit status -> its own
 /// mapped message, 5xx -> failure message, and a network-level failure/timeout (no response at all) ->
 /// failure message too. Every one of these runs through VSaga.Testing's SagaTestHarness, which drives
 /// the real publish -> receive -> orchestrator path over InMemoryMessageTransport -- and every one of

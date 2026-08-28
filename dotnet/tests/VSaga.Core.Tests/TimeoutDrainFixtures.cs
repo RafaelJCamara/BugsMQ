@@ -16,7 +16,7 @@ public sealed class TimeoutDrainTestState : SagaState
 }
 
 /// <summary>
-/// docs/mixed-sagas.md §3.1/§5: a timeout step that queues a loopback (ctx.PublishAfterCommitAsync,
+/// docs/design/mixed-sagas.md §3.1/§5: a timeout step that queues a loopback (ctx.PublishAfterCommitAsync,
 /// through the new async TimeoutBuilder.Then overload) and transitions onward to a state that handles
 /// the reply. Before HandleTimeoutAsync's own drain, this loopback was silently dropped and the saga sat
 /// in <see cref="Draining"/> forever -- see TimeoutDrainTests.

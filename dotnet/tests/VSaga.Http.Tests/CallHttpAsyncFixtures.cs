@@ -20,7 +20,7 @@ public sealed class CallHttpAsyncTestState : SagaState
 }
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9's mapping-table mirror of <see cref="CallHttpTestSaga"/>, but reached via
+/// docs/design/mixed-sagas.md §4/§9's mapping-table mirror of <see cref="CallHttpTestSaga"/>, but reached via
 /// <c>ctx.CallHttpAsync(...)</c> from an ordinary <c>.Then(Func&lt;...,Task&gt;)</c> step instead of the
 /// declarative <c>.CallHttp(...)</c> -- proving the shared executor maps every outcome identically
 /// regardless of which DSL entry point drives it.

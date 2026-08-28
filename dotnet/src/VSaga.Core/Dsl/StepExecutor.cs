@@ -29,7 +29,7 @@ internal static class StepExecutor
             }
             catch when (attempt < step.RetryPolicy.MaxAttempts)
             {
-                // docs/mixed-sagas.md §3.2: a replay from index 0 re-runs every action, including any
+                // docs/design/mixed-sagas.md §3.2: a replay from index 0 re-runs every action, including any
                 // ctx.PublishAfterCommitAsync call that already queued before the throw -- each mints a
                 // fresh MessageId, so without this the drain would publish one copy per attempt and
                 // IsDuplicateAsync's MessageId-keyed dedupe check would catch none of them. Pattern-match

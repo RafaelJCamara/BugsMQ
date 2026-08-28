@@ -114,7 +114,7 @@ describe('createHttpTransport', () => {
     );
 
     // No routes entry for PingMessage at all -- send() resolves "receiver" as an endpoint name
-    // directly (docs/http-based-sagas.md §4.3's AMQP-default-exchange analogue).
+    // directly (docs/design/http-based-sagas.md §4.3's AMQP-default-exchange analogue).
     const correlationId = newCorrelationId();
     await sender.send(
       'receiver',
@@ -179,7 +179,7 @@ describe('createHttpTransport', () => {
   });
 
   /**
-   * docs/http-based-sagas.md §4.2: x-vsaga-message-type has no home in the envelope, and the
+   * docs/design/http-based-sagas.md §4.2: x-vsaga-message-type has no home in the envelope, and the
    * response path is exactly where it's easy to forget to stamp it. If missing, the sender can't
    * identify the reply and throws from inside the awaited publish() below.
    */
@@ -234,7 +234,7 @@ describe('createHttpTransport', () => {
   });
 
   /**
-   * docs/http-based-sagas.md §3.1: the reply must not re-enter while its own publishing step is
+   * docs/design/http-based-sagas.md §3.1: the reply must not re-enter while its own publishing step is
    * still running. Proven deterministically, not by timing -- the reply's dispatch needs the same
    * correlation id's gate that the trigger's still-running dispatch is holding, so it cannot have
    * run by the time the trigger handler (which awaited the full HTTP round trip) makes its
@@ -305,7 +305,7 @@ describe('createHttpTransport', () => {
     expect(await replySeen.promise).toBe(true);
   });
 
-  /** docs/http-based-sagas.md §3.3a: local subscriptions are part of the route table, exactly like the orchestrator's own-type redelivery relies on over RabbitMQ's routing table. */
+  /** docs/design/http-based-sagas.md §3.3a: local subscriptions are part of the route table, exactly like the orchestrator's own-type redelivery relies on over RabbitMQ's routing table. */
   it('re-enters a local subscriber for its own type even with no remote route configured (redelivery)', async () => {
     const solo = (await node()).bind();
 
@@ -333,7 +333,7 @@ describe('createHttpTransport', () => {
     expect(message.messageTypeName).toBe('RedeliverableCommand');
   });
 
-  /** docs/http-based-sagas.md §3.3b: header names are case-insensitive on the wire; Node's http parser normalizes them to lowercase on receipt, which is what satisfies this without any explicit casing logic. */
+  /** docs/design/http-based-sagas.md §3.3b: header names are case-insensitive on the wire; Node's http parser normalizes them to lowercase on receipt, which is what satisfies this without any explicit casing logic. */
   it('a mixed-case delivery-attempt header survives the round trip', async () => {
     const receiverNode = await node();
     const senderNode = await node();
@@ -431,7 +431,7 @@ describe('createHttpTransport', () => {
   });
 
   /**
-   * docs/http-based-sagas.md §3.2: a message with a real route (the ShipOrder case) must go out
+   * docs/design/http-based-sagas.md §3.2: a message with a real route (the ShipOrder case) must go out
    * as a normal POST, never be swallowed as the currently-in-flight inbound request's own
    * synchronous reply, even though both are published from inside the very same inline dispatch.
    */

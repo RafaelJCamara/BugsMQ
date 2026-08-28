@@ -58,7 +58,7 @@ export interface HttpTransport extends MessageTransport {
 
 /**
  * vSaga-aware, symmetric MessageTransport over plain HTTP: publish()/send() POST to
- * docs/http-based-sagas.md §4.2's wire format, and a 200 response with a full header set + body
+ * docs/design/http-based-sagas.md §4.2's wire format, and a 200 response with a full header set + body
  * is itself the reply, fed back into whichever local subscriber the reply's own message type
  * resolves to. No broker underneath -- see dispatcher.ts for how a reply is kept from re-entering
  * a saga while its own publishing step is still running, and how the ambient sync-reply collector
@@ -165,7 +165,7 @@ class HttpMessageTransportImpl implements HttpTransport {
 
   /**
    * Resolves targets to the union of configured remote routes and local subscribers
-   * (docs/http-based-sagas.md §3.3a) -- unroutable only when both are empty, in which case an
+   * (docs/design/http-based-sagas.md §3.3a) -- unroutable only when both are empty, in which case an
    * ambient sync-reply collector (present only while this call is running underneath a genuine
    * inbound HTTP request) gets first refusal at capturing it as that request's synchronous reply
    * (§3.2); only a message with a real destination, or one published outside any inline dispatch,
@@ -267,7 +267,7 @@ class HttpMessageTransportImpl implements HttpTransport {
   }
 
   /**
-   * A 200 IS the reply (docs/http-based-sagas.md §1, §4.2) -- fed back to whatever local
+   * A 200 IS the reply (docs/design/http-based-sagas.md §1, §4.2) -- fed back to whatever local
    * subscriber the reply's own type resolves to via enqueueLocalDispatch, never dispatched
    * inline: this call is itself running inside whatever gated dispatch published the original
    * message, so dispatching the reply inline would either deadlock on that same correlation's
@@ -328,7 +328,7 @@ class HttpMessageTransportImpl implements HttpTransport {
  * The three reserved headers plus every envelope header that arrived on the wire, filtered to the
  * `x-vsaga-` prefix -- mirrors HttpMessageTransport.ExtractVSagaHeaders /
  * VSagaHttpEndpointExtensions.ExtractVSagaHeaders. Node's http headers are already lower-cased by
- * the parser, which is what satisfies docs/http-based-sagas.md §3.3b's case-insensitivity
+ * the parser, which is what satisfies docs/design/http-based-sagas.md §3.3b's case-insensitivity
  * requirement without an explicit OrdinalIgnoreCase lookup -- the `.toLowerCase()` below is only
  * a defensive normalization for a hand-built (e.g. test) headers object.
  *

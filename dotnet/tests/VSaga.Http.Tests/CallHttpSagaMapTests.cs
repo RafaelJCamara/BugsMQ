@@ -5,7 +5,7 @@ using VSaga.Dashboard.Api;
 namespace VSaga.Http.Tests;
 
 /// <summary>
-/// Pins docs/http-based-sagas.md §5.3: a naive ctx.PublishAsync loopback stamps the *inbound* message's
+/// Pins docs/design/http-based-sagas.md §5.3: a naive ctx.PublishAsync loopback stamps the *inbound* message's
 /// causationId rather than the outbound call's own MessageId, so SagaMapBuilder's stitch misses, the
 /// outbound entry falls through to ResolveUnstitchedDestinations and resolves to the saga's own type
 /// (it *is* subscribed to the loopback message), rendering a bogus unanswered self-loop -- and the REST

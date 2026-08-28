@@ -4,7 +4,7 @@ using VSaga.Abstractions.Sagas;
 namespace VSaga.Http.Tests;
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9: the same mapping table CallHttpMappingTests pins for the declarative
+/// docs/design/mixed-sagas.md §4/§9: the same mapping table CallHttpMappingTests pins for the declarative
 /// <c>.CallHttp</c>, mirrored for the imperative <c>ctx.CallHttpAsync</c> -- proving both DSL entry
 /// points drive the identical shared executor identically.
 /// </summary>

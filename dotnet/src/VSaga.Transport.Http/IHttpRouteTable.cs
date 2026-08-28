@@ -3,7 +3,7 @@ namespace VSaga.Transport.Http;
 /// <summary>
 /// Resolves a message type name (PublishAsync/PublishRawAsync) or an explicit destination name
 /// (SendAsync) to the base URL(s) of the remote endpoint(s) to POST to. Deliberately does not know
-/// about local subscribers -- that union (§3.3a of docs/http-based-sagas.md) is
+/// about local subscribers -- that union (§3.3a of docs/design/http-based-sagas.md) is
 /// <see cref="HttpMessageTransport"/>'s job, so this interface stays a pure function of config and can
 /// be swapped for e.g. a service-discovery-backed implementation without touching dispatch logic.
 /// </summary>

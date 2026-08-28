@@ -13,7 +13,7 @@ public sealed class CallHttpAsyncRetryTestState : SagaState
 }
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9: pins that a retried <c>ctx.CallHttpAsync</c> call re-invokes its
+/// docs/design/mixed-sagas.md §4/§9: pins that a retried <c>ctx.CallHttpAsync</c> call re-invokes its
 /// <c>.Body(...)</c> value's serialization once per attempt, not once total -- see
 /// <see cref="CountingPayload"/> and CallHttpAsyncRetryTests.
 /// </summary>

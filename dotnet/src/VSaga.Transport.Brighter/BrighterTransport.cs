@@ -135,7 +135,7 @@ public sealed class BrighterTransport : IMessageTransport
             ((ISupportPublishConfirmationAsync)producer).OnMessagePublishedAsync -= OnConfirmed;
         }
 
-        // Known gap, see docs/readme-section-brighter.md: Brighter's RmqMessageProducer never sets AMQP's
+        // Known gap, see docs/transports/brighter.md: Brighter's RmqMessageProducer never sets AMQP's
         // "mandatory" flag, so a message routed to zero bound queues is still confirmed successfully by
         // the broker (Success stays true) — there is, as of Paramore.Brighter.MessagingGateway.RMQ.Async
         // 10.7.0, no equivalent of RabbitMqTransport's mandatory-plus-publisher-confirms unroutable-return

@@ -5,7 +5,7 @@ using VSaga.Abstractions.Sagas;
 namespace VSaga.Http.Tests;
 
 /// <summary>
-/// docs/mixed-sagas.md §4/§9: pins that <c>ctx.CallHttpAsync</c>'s own <c>.WithRetry(...)</c> re-invokes
+/// docs/design/mixed-sagas.md §4/§9: pins that <c>ctx.CallHttpAsync</c>'s own <c>.WithRetry(...)</c> re-invokes
 /// (re-serializes) its <c>.Body(...)</c> value once per attempt, exactly as the pre-refactor <c>.CallHttp</c>
 /// re-invoked its message-aware body factory per attempt. This is what the manual mutation test in this
 /// commit's message targets: hoisting the shared executor's <c>body()</c> call out of the retry loop

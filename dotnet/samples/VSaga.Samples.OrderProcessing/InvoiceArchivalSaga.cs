@@ -22,7 +22,7 @@ public sealed class InvoiceArchivalState : SagaState
 /// <b>Reports back via <c>ctx.NotifyParentAsync</c></b> on both terminal endings that reach a real
 /// step — <see cref="StoreInvoiceCopy"/> succeeding or failing. Deliberately not on timeout: a child
 /// that never hears back from the archive store never reaches any step to call NotifyParentAsync from,
-/// which is exactly the structural gap docs/sub-saga-composition.md §3.4 attributes to option (a). As of
+/// which is exactly the structural gap docs/design/sub-saga-composition.md §3.4 attributes to option (a). As of
 /// Slice 2b, that gap has an engine-level answer instead of an author-level one: this saga's own
 /// <c>SagaOrchestrator</c> publishes <c>ChildSagaFinished</c> to <see cref="InvoiceFollowUpSaga"/> when
 /// this timeout fires, without this saga's own code doing anything — see that class's doc comment.

@@ -8,7 +8,7 @@ namespace VSaga.Transport.Http;
 /// <summary>
 /// Owns the local subscriber registry (populated by SubscribeAsync, matched exactly like
 /// InMemoryMessageTransport.DispatchAsync) and the per-correlation-id dispatch gate that is this
-/// adapter's whole answer to docs/http-based-sagas.md §3.1: a reply must never re-enter a saga while
+/// adapter's whole answer to docs/design/http-based-sagas.md §3.1: a reply must never re-enter a saga while
 /// its own step is still running.
 /// <para>
 /// Exactly two entry points ever reach a local subscriber, and the asymmetry between them is the
@@ -202,7 +202,7 @@ public sealed class HttpInboundDispatcher : IAsyncDisposable
         gate.Release();
 
         // Best-effort cleanup: only removes the entry if it's uncontended at this exact moment, which
-        // is safe either way -- see the type's remarks in docs/http-based-sagas.md §4.4 for why a
+        // is safe either way -- see the type's remarks in docs/design/http-based-sagas.md §4.4 for why a
         // benign TOCTOU race here can't strand a waiter (an uncontended semaphore has none).
         if (gate.CurrentCount == 1)
             _correlationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(correlationId, gate));
@@ -243,7 +243,7 @@ public readonly struct InlineDispatchResult
 /// <summary>
 /// Ambient (AsyncLocal) collector installed by the receive endpoint for the duration of one inline
 /// dispatch -- the only seam available to intercept a handler's ordinary PublishAsync call and capture
-/// it as that same request's synchronous reply (docs/http-based-sagas.md §3.2). Always a fresh instance
+/// it as that same request's synchronous reply (docs/design/http-based-sagas.md §3.2). Always a fresh instance
 /// per request, never shared/static, and sealed once the response has been written so a handler's
 /// `_ = Task.Run(...)` fire-and-forget -- which inherits the AsyncLocal via its captured
 /// ExecutionContext -- falls through to a real publish attempt afterward instead of writing into a
@@ -287,7 +287,7 @@ public static class SyncReplyCollectorAccessor
     }
 }
 
-/// <summary>No broker underneath means no delivery guarantee to ack/nack against -- see docs/http-based-sagas.md §4.4: the in-process channel is not durable, and a saga's own state timeout is the safety net, exactly as it already is for a lost broker message.</summary>
+/// <summary>No broker underneath means no delivery guarantee to ack/nack against -- see docs/design/http-based-sagas.md §4.4: the in-process channel is not durable, and a saga's own state timeout is the safety net, exactly as it already is for a lost broker message.</summary>
 public sealed class NoOpAckContext : IMessageAckContext
 {
     public static readonly NoOpAckContext Instance = new();

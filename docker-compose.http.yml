@@ -1,11 +1,11 @@
 # HTTP-transport overlay: layer this on top of docker-compose.yml to run the OrderProcessing sample
-# against VSaga.Transport.Http (docs/http-based-sagas.md) instead of a broker-backed adapter, for that
+# against VSaga.Transport.Http (docs/design/http-based-sagas.md) instead of a broker-backed adapter, for that
 # adapter's own live-verification pass.
 #
 #   docker compose -p vsaga-http -f docker-compose.yml -f docker-compose.http.yml up -d --build
 #
 # Unlike every other adapter overlay, this one cannot be a pure config-swap on the existing
-# order-processing service: because local subscriptions count as routes (docs/http-based-sagas.md
+# order-processing service: because local subscriptions count as routes (docs/design/http-based-sagas.md
 # §3.3a), a single process over HTTP would resolve every message locally and perform zero HTTP — the
 # stack would come up green while proving nothing. So this overlay turns order-processing into the
 # "Sagas" role (the engine + the order-submitting front door) and adds a second, brand-new service,
@@ -58,7 +58,7 @@ services:
       HttpSagas__Routes__ShipOrder__0: "participants"
       HttpSagas__Routes__SendInvoiceEmail__0: "participants"
       HttpSagas__Routes__StoreInvoiceCopy__0: "participants"
-      # docs/mixed-sagas.md §7/§8: MixedFulfilmentSaga's broker hop, same as every other route above --
+      # docs/design/mixed-sagas.md §7/§8: MixedFulfilmentSaga's broker hop, same as every other route above --
       # its REST hop (ctx.CallHttpAsync to this same process's /payments endpoints) is unrelated to
       # whichever IMessageTransport is active and needs no route entry of its own.
       HttpSagas__Routes__ReserveStock__0: "participants"

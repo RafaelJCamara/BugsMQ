@@ -5,7 +5,7 @@ namespace VSaga.Http;
 /// <summary>
 /// Fluent configuration for one <c>.CallHttp(...)</c> call, built by the delegate passed to
 /// <see cref="EventBuilderHttpExtensions.CallHttp{TState,TMessage}"/>. Mirrors
-/// docs/http-based-sagas.md §5.2's target shape: <c>.Post(url).Body(...)</c> plus either result shape —
+/// docs/design/http-based-sagas.md §5.2's target shape: <c>.Post(url).Body(...)</c> plus either result shape —
 /// <c>.OnSuccess&lt;TOut&gt;()</c>/<c>.OnStatus(code).As&lt;TOut&gt;()</c>/<c>.OnFailure&lt;TOut&gt;()</c>
 /// for message-loopback, or the <see cref="Action{TState}"/> overloads for inline.
 /// </summary>

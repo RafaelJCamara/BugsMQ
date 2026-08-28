@@ -46,7 +46,7 @@ internal readonly record struct DeferredPublish(
 /// Lets SagaOrchestrator.HandleStepSuccessAsync drain a step's ctx.PublishAfterCommitAsync queue once
 /// its own PersistAsync has committed, through the same kind of internal cast ISagaContextLogSink already
 /// uses, without widening the public ISagaContext&lt;TState&gt; DSL surface with an engine-internal concern.
-/// <see cref="ClearDeferredPublishes"/> is docs/mixed-sagas.md §3.2's fix: StepExecutor calls it on a
+/// <see cref="ClearDeferredPublishes"/> is docs/design/mixed-sagas.md §3.2's fix: StepExecutor calls it on a
 /// step's retry so a replay from index 0 discards side effects queued but never committed by the
 /// attempt that just threw, rather than accumulating one entry per attempt with no way to dedupe them
 /// (each mints a fresh MessageId, so ISagaEventLogStore.IsDuplicateAsync can't catch the extras).

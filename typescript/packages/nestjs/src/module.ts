@@ -45,7 +45,7 @@ class VSagaHttpPathRegistration implements OnModuleDestroy {
  *  - `req.rawBody` itself is only populated for requests whose Content-Type is
  *    `application/json` (Nest's underlying `express.json()` `verify` hook does not run for any
  *    other content-type) -- a sender must send `Content-Type: application/json`, matching every
- *    example in docs/http-based-sagas.md §4.2. A Nest app needing to accept other content-types
+ *    example in docs/design/http-based-sagas.md §4.2. A Nest app needing to accept other content-types
  *    on this same endpoint should use `@vsaga/express`'s router directly instead, which reads the
  *    raw body regardless of Content-Type.
  */

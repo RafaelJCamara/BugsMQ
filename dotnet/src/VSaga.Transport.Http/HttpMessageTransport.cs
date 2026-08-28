@@ -9,7 +9,7 @@ namespace VSaga.Transport.Http;
 
 /// <summary>
 /// vSaga-aware, symmetric IMessageTransport over plain HTTP: PublishAsync/SendAsync POST to
-/// docs/http-based-sagas.md §4.2's wire format, and a 200 response with a full header set + body is
+/// docs/design/http-based-sagas.md §4.2's wire format, and a 200 response with a full header set + body is
 /// itself the reply, fed back into whichever local subscriber the reply's own message type resolves
 /// to. No broker underneath -- see <see cref="HttpInboundDispatcher"/> for how a reply is kept from
 /// re-entering a saga while its own publishing step is still running (§3.1), and how the ambient
@@ -175,7 +175,7 @@ public sealed class HttpMessageTransport(
         return new Uri(baseUri, relativePath);
     }
 
-    /// <summary>Writes the three reserved headers plus every envelope header, rejecting any value containing a raw CR/LF (docs/http-based-sagas.md §3.3: MessageEnvelope.Headers is open, and a saga author's value must never be able to inject a header/request-smuggle its way onto the wire).</summary>
+    /// <summary>Writes the three reserved headers plus every envelope header, rejecting any value containing a raw CR/LF (docs/design/http-based-sagas.md §3.3: MessageEnvelope.Headers is open, and a saga author's value must never be able to inject a header/request-smuggle its way onto the wire).</summary>
     internal static void ApplyVSagaHeaders(Action<string, string> setHeader, string messageTypeName, MessageEnvelope envelope)
     {
         setHeader(MessageTypeHeader, messageTypeName);

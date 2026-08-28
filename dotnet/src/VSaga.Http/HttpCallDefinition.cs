@@ -88,7 +88,7 @@ internal sealed class HttpCallExecutor<TState>(
         return (null, ReadOnlyMemory<byte>.Empty, lastError);
     }
 
-    /// <summary>Exact status first, then the 2xx/everything-else buckets — see docs/http-based-sagas.md §5.4's mapping table. Unconfigured is a DSL error, not a silent no-op.</summary>
+    /// <summary>Exact status first, then the 2xx/everything-else buckets — see docs/design/http-based-sagas.md §5.4's mapping table. Unconfigured is a DSL error, not a silent no-op.</summary>
     private IHttpOutcomeAction<TState> ResolveAction(int? statusCode)
     {
         if (statusCode is { } code && statusActions.TryGetValue(code, out var exact))

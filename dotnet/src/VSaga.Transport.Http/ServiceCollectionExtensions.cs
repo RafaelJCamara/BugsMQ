@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers the HTTP-based transport, wrapped in the (currently empty) outbound/inbound
     /// middleware pipeline -- same one-call shape as AddVSagaRabbitMq, and for the same reason
-    /// (docs/http-based-sagas.md §4.5): AddVSagaTopologyRecording requires the last IMessageTransport
+    /// (docs/design/http-based-sagas.md §4.5): AddVSagaTopologyRecording requires the last IMessageTransport
     /// registration to carry a factory, so this must be a factory registration too, never a bare
     /// instance/type registration.
     /// </summary>

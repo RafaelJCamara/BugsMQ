@@ -25,7 +25,7 @@ public sealed class LoyaltyLookupSagaState : SagaState
 }
 
 /// <summary>
-/// Live-verification vehicle for docs/http-based-sagas.md §5.2/§5.3's <c>.CallHttp(...)</c>: reacts to
+/// Live-verification vehicle for docs/design/http-based-sagas.md §5.2/§5.3's <c>.CallHttp(...)</c>: reacts to
 /// the same <see cref="LoyaltyPointsAwarded"/> event <see cref="PostShipmentChoreography"/> already
 /// tracks (a second, independent subscriber -- ordinary fan-out, nothing shared between the two), and
 /// makes a real synchronous REST call to this same process's own <c>/loyalty/lookup</c> endpoint (an

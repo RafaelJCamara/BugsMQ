@@ -13,7 +13,7 @@ public sealed class InvoiceFollowUpState : SagaState
 }
 
 /// <summary>
-/// Slice 2a's live demonstration of a parent that actually waits (docs/sub-saga-composition.md §4,
+/// Slice 2a's live demonstration of a parent that actually waits (docs/design/sub-saga-composition.md §4,
 /// Slice 2a), alongside <see cref="PostShipmentChoreography"/>'s Slice 1 demonstration of one that
 /// deliberately does not. Both react to <see cref="InvoiceIssued"/>, and both therefore run under the
 /// same shared order correlation id — the ordinary consequence of that id being shared by every saga
@@ -24,7 +24,7 @@ public sealed class InvoiceFollowUpState : SagaState
 /// saga's own doc comment is explicit that its leg must complete once all three post-shipment services
 /// have reported, and an undeliverable invoice must not hold it open — correct, and not something this
 /// pass changes. Waiting needs a state that parks, which is the orchestrated DSL's
-/// <c>During(state).When&lt;T&gt;().TransitionTo(...)</c> shape (docs/sub-saga-composition.md §3.3), not
+/// <c>During(state).When&lt;T&gt;().TransitionTo(...)</c> shape (docs/design/sub-saga-composition.md §3.3), not
 /// the choreography's <c>On&lt;T&gt;().Finalize(Func)</c> join — retrofitting a park onto the
 /// choreography would mean either blocking its completion on archival (contradicting its own
 /// documented invariant) or reacting to a message after the instance is already terminal, which is not
@@ -96,7 +96,7 @@ public sealed class InvoiceFollowUpSaga : OrchestratedSagaDefinition<InvoiceFoll
             // only thing that can rescue this wait before ArchivalWaitTimeout — 15s into this state
             // instead of 30. Declaring this handler is what opts InvoiceFollowUpSaga in at all: the
             // engine only ever delivers ChildSagaFinished to a parent that asked for it somewhere in its
-            // own DSL, per docs/sub-saga-composition.md's Slice 2b design.
+            // own DSL, per docs/design/sub-saga-composition.md's Slice 2b design.
             .When<ChildSagaFinished>()
                 .Then((ctx, _) => ctx.Saga.InvoiceArchived = false)
                 .TransitionTo(Abandoned)

@@ -24,7 +24,7 @@ public sealed class CallHttpTestState : SagaState
 }
 
 /// <summary>
-/// One .CallHttp step covering the full mapping table from docs/http-based-sagas.md §5.4: a 2xx, an
+/// One .CallHttp step covering the full mapping table from docs/design/http-based-sagas.md §5.4: a 2xx, an
 /// explicit status (402), and everything else (5xx or a network-level failure) each loop back as their
 /// own distinct message and drive this saga to a distinct terminal state, so a test can tell which
 /// mapping actually fired by asserting the final state alone. The target URL is never actually dialled

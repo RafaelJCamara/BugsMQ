@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace VSaga.Core.Tests;
 
 /// <summary>
-/// docs/mixed-sagas.md §3.1/§5: HandleTimeoutAsync's own drain of ctx.PublishAfterCommitAsync, and the
+/// docs/design/mixed-sagas.md §3.1/§5: HandleTimeoutAsync's own drain of ctx.PublishAfterCommitAsync, and the
 /// discard path for the race it can't avoid. See TimeoutDrainFixtures for the saga this exercises.
 /// </summary>
 public sealed class TimeoutDrainTests : IAsyncDisposable

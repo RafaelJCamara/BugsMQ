@@ -35,7 +35,7 @@ internal sealed class OrderSubmitter(IMessageTransport transport, ILogger<OrderS
         // need to track it further.
         await transport.PublishAsync(order, MessageEnvelope.From("OrderSubmitter", Guid.NewGuid()), cancellationToken);
 
-        // docs/mixed-sagas.md §7: its own fresh correlation id (never the order's), so
+        // docs/design/mixed-sagas.md §7: its own fresh correlation id (never the order's), so
         // MixedFulfilmentSaga never shares a correlation id with OrderSaga/PostShipmentChoreography and
         // gets a clean Saga Map of its own.
         await transport.PublishAsync(new FulfilmentRequested(orderId, amount), MessageEnvelope.From("OrderSubmitter", Guid.NewGuid()), cancellationToken);

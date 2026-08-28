@@ -1,0 +1,32 @@
+# Transport adapter: RabbitMQ
+
+`VSaga.Transport.RabbitMQ` is the reference `IMessageTransport` implementation, built directly on
+`RabbitMQ.Client` (no MassTransit/Wolverine/Brighter dependency). Every other adapter's design is
+judged against this one's shape.
+
+- **Topology.** One durable topic exchange (`RabbitMqOptions.ExchangeName`, default
+  `vsaga.saga.events`); `PublishAsync` routes by message-type name as the routing key. `SendAsync`
+  targets AMQP's default (nameless) exchange directly, routing key = destination — a genuine direct
+  send, not a topic-exchange trick. `SubscribeAsync` declares one durable queue per consumer, bound to
+  the shared exchange for each declared message type, plus a dead-letter exchange/queue pair
+  (`DeadLetterExchangeName`, default `vsaga.dlx`) before returning.
+- **Delivery.** `AsyncEventingBasicConsumer`, one channel per `SubscribeAsync` call,
+  `BasicQosAsync(prefetchCount: 32)` — deliveries on one subscription are handled one at a time,
+  sequentially, awaited to completion before the next. (This matters when tuning chaos-injected delay
+  against this adapter — see [`../chaos.md`](../chaos.md#running-it-against-the-sample).)
+- **Unroutable-publish detection.** Publisher confirms plus `mandatory: true` are both enabled, so a
+  broker-side nack or an unroutable message throws `MessageTransportPublishException.IsUnroutable`
+  instead of vanishing silently.
+- **Automatic recovery.** `AutomaticRecoveryEnabled`/`TopologyRecoveryEnabled` are both on
+  (`RabbitMqConnectionManager`) — a connection blip recovers without operator intervention, though a
+  message delivered-but-unacked immediately before a recovery can hit the documented RabbitMQ.Client
+  limitation where the recovered channel's restarted delivery-tag numbering can no longer ack it (a
+  transient, auto-recovering condition also seen on the Brighter adapter's gateway; see
+  [`brighter.md`](brighter.md)).
+
+Options: [`../configuration.md#rabbitmqoptions-vsagatransportrabbitmq`](../configuration.md#rabbitmqoptions-vsagatransportrabbitmq).
+
+Confirms/DLQ/redelivery, and the header-threading gotchas RabbitMQ's own adapter first surfaced (the
+`SourceService`/`CausationId` story), are covered in the general
+[production-hardening history](../history/project-origins-and-hardening-pass.md) and
+[sub-saga parent-linkage history](../history/sub-saga-parent-linkage.md).

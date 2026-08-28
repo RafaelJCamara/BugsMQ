@@ -26,7 +26,7 @@ builder.Services.AddVSagaEfCore(db => db.UseNpgsql(connectionString));
 if (builder.Configuration.GetValue("Chaos:Enabled", defaultValue: false))
     builder.Services.AddVSagaChaos(o => builder.Configuration.GetSection("Chaos").Bind(o));
 
-// Because local subscribers count as routes (docs/http-based-sagas.md §3.3a), a single process over
+// Because local subscribers count as routes (docs/design/http-based-sagas.md §3.3a), a single process over
 // the HTTP transport would resolve every message locally and perform zero HTTP — the compose run would
 // pass while exercising nothing. Role splits the one image into two processes instead: Sagas runs the
 // engine (and the order-submitting "front door"), Participants runs the downstream services, and
@@ -77,7 +77,7 @@ builder.Services.AddVSagaTopologyRecording();
 builder.Services.AddVSagaOpenTelemetry();
 
 // The HttpClient LoyaltyLookupSaga's .CallHttp(...) call resolves via ISagaContext.Services -- unrelated
-// to whichever IMessageTransport is active above (docs/http-based-sagas.md §1: the two HTTP halves share
+// to whichever IMessageTransport is active above (docs/design/http-based-sagas.md §1: the two HTTP halves share
 // nothing but the name), so this is registered unconditionally rather than gated on Transport:Provider.
 builder.Services.AddVSagaHttpCalls();
 
@@ -103,11 +103,11 @@ if (role != ServiceRole.Participants)
         .AddSaga<InvoiceDeliverySaga, InvoiceDeliveryState>()
         .AddSaga<InvoiceFollowUpSaga, InvoiceFollowUpState>()
         .AddSaga<InvoiceArchivalSaga, InvoiceArchivalState>()
-        // Live-verification vehicle for .CallHttp (docs/http-based-sagas.md §5) -- see
+        // Live-verification vehicle for .CallHttp (docs/design/http-based-sagas.md §5) -- see
         // LoyaltyLookupSaga's own doc comment. A second, independent subscriber of LoyaltyPointsAwarded,
         // same ordinary fan-out PostShipmentChoreography's own subscription already relies on.
         .AddSaga<LoyaltyLookupSaga, LoyaltyLookupSagaState>()
-        // Live-verification vehicle for mixed sagas (docs/mixed-sagas.md) -- drives a broker participant
+        // Live-verification vehicle for mixed sagas (docs/design/mixed-sagas.md) -- drives a broker participant
         // (StockService) and a REST participant (this process's own /payments endpoints) side by side,
         // under OrderSubmitter's own fresh correlation id, so it never shares an instance with OrderSaga.
         .AddSaga<MixedFulfilmentSaga, MixedFulfilmentSagaState>());
@@ -137,7 +137,7 @@ if (string.Equals(builder.Configuration["Transport:Provider"], "Http", StringCom
     app.MapVSagaHttp();
 
 // An ordinary REST API with no vSaga awareness at all -- the live-verification target for .CallHttp
-// (docs/http-based-sagas.md §5), called by LoyaltyLookupSaga over a real HTTP round trip regardless of
+// (docs/design/http-based-sagas.md §5), called by LoyaltyLookupSaga over a real HTTP round trip regardless of
 // which IMessageTransport is active. Mapped only where that saga's engine actually runs (never
 // Participants), matching where its own .CallHttp call executes.
 if (role != ServiceRole.Participants)
@@ -158,7 +158,7 @@ if (role != ServiceRole.Participants)
         return Results.Ok(new { tier });
     });
 
-    // The live-verification target for MixedFulfilmentSaga's compensating REST hop (docs/mixed-sagas.md
+    // The live-verification target for MixedFulfilmentSaga's compensating REST hop (docs/design/mixed-sagas.md
     // §7) -- an ordinary REST API with no vSaga awareness, same spirit as /loyalty/lookup above.
     app.MapPost("/payments/authorize", (AuthorizePaymentRequest request, ILogger<Program> paymentsLogger) =>
     {

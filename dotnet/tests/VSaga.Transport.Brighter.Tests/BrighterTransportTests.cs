@@ -100,7 +100,7 @@ public sealed class BrighterTransportTests : IAsyncLifetime
     }
 
     // Deviation from the RabbitMQ transport's equivalent test (see deviationsOrIssues in the build
-    // report and docs/readme-section-brighter.md): Paramore.Brighter.MessagingGateway.RMQ.Async's
+    // report and docs/transports/brighter.md): Paramore.Brighter.MessagingGateway.RMQ.Async's
     // RmqMessageProducer never sets AMQP's "mandatory" flag when publishing. Confirmed both by reading
     // the package's exchange/publish code and by direct testing against a live broker: publishing to a
     // routing key nobody has ever bound a queue to still yields a broker-side ack (Success=true) on the

@@ -701,7 +701,7 @@ public sealed class SagaOrchestrator<TState>(
     /// committed, so a publish failing here has nowhere safe to go: unlike a publish failing inside the
     /// step itself (which fails the whole step), this is caught, logged, and recorded on the timeline
     /// instead of thrown, and the saga is left Running for its own state timeout to rescue rather than
-    /// being silently discarded by the redelivery dedupe check (§3.1 of docs/http-based-sagas.md).
+    /// being silently discarded by the redelivery dedupe check (§3.1 of docs/design/http-based-sagas.md).
     /// <see cref="EnqueueOutboxRowsAsync"/>'s durability copies were committed by the persist that
     /// preceded this drain -- each is marked Dispatched right after its matching send succeeds, so the
     /// recovery poller only ever sees rows for a publish that hasn't actually gone out yet.
@@ -727,7 +727,7 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     /// <summary>
-    /// docs/mixed-sagas.md §5: the timeout's own final persist lost the optimistic-concurrency race, so
+    /// docs/design/mixed-sagas.md §5: the timeout's own final persist lost the optimistic-concurrency race, so
     /// the state transition that queued these was never actually committed -- publishing them now would
     /// announce a transition nobody recorded. Reuses DrainDeferredPublishesAsync's own "leave the saga
     /// for its own timeout to rescue it" policy (one DeliveryExhausted entry per dropped publish, logged

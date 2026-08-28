@@ -3,7 +3,7 @@ import type { ResolvedHttpTransportOptions } from './options.js';
 /**
  * Resolves a message type name (publish) or an explicit destination name (send) to the base
  * URL(s) of the remote endpoint(s) to POST to. Deliberately does not know about local
- * subscribers -- that union (docs/http-based-sagas.md §3.3a) is HttpMessageTransport's job, so
+ * subscribers -- that union (docs/design/http-based-sagas.md §3.3a) is HttpMessageTransport's job, so
  * this stays a pure function of config. Mirrors
  * dotnet/src/VSaga.Transport.Http/IHttpRouteTable.cs.
  */

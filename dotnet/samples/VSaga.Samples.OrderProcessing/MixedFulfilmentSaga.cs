@@ -37,7 +37,7 @@ public sealed class MixedFulfilmentSagaState : SagaState
 }
 
 /// <summary>
-/// docs/mixed-sagas.md: a saga that drives a RabbitMQ participant and a REST participant side by side --
+/// docs/design/mixed-sagas.md: a saga that drives a RabbitMQ participant and a REST participant side by side --
 /// authorizes payment over REST, then reserves stock over the broker -- and whose compensation unwinds
 /// both kinds of hop: on stock failure or timeout, it releases the stock over the broker and voids the
 /// authorization over REST, waiting for the void to confirm before calling itself Failed. Both hops are
