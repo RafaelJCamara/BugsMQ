@@ -36,8 +36,10 @@ import { type HttpRouteTable, createConfigRouteTable } from './route-table.js';
  * here is what turns "was rejected" into a message naming the actual problem.
  */
 function describeFetchFailure(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'TimeoutError') return 'the request timed out';
-  if (error instanceof DOMException && error.name === 'AbortError') return 'the request was aborted';
+  if (error instanceof DOMException && error.name === 'TimeoutError')
+    return 'the request timed out';
+  if (error instanceof DOMException && error.name === 'AbortError')
+    return 'the request was aborted';
 
   for (let current: unknown = error, depth = 0; current !== undefined && depth < 4; depth++) {
     if (current instanceof AggregateError && current.errors.length > 0) {

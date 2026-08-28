@@ -53,7 +53,10 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 function envOrThrow(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`${name} is required. See typescript/samples/notification-participant/README.md.`);
+  if (!value)
+    throw new Error(
+      `${name} is required. See typescript/samples/notification-participant/README.md.`,
+    );
   return value;
 }
 

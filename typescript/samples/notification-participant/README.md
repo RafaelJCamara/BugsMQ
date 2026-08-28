@@ -26,10 +26,10 @@ service changed language.
 
 ## What it handles
 
-| Receives | Published by | Replies |
-| --- | --- | --- |
-| `OrderShipped` | `ShippingService`, as a broadcast event | `CustomerNotified` |
-| `SendInvoiceEmail` | `InvoiceDeliverySaga`, as a command | `InvoiceEmailSent`, or `InvoiceEmailBounced` ~15% of the time |
+| Receives           | Published by                            | Replies                                                       |
+| ------------------ | --------------------------------------- | ------------------------------------------------------------- |
+| `OrderShipped`     | `ShippingService`, as a broadcast event | `CustomerNotified`                                            |
+| `SendInvoiceEmail` | `InvoiceDeliverySaga`, as a command     | `InvoiceEmailSent`, or `InvoiceEmailBounced` ~15% of the time |
 
 The bounce rate is deliberate and matches the .NET participant's: it keeps `InvoiceDeliverySaga`'s
 failure branch exercised on every run instead of leaving it a path nobody sees.
@@ -42,18 +42,18 @@ Three things carry the compatibility, all of them in `@vsaga/protocol`:
    `x-vsaga-message-type` header and the same derived routing key as .NET's `typeof(OrderShipped).Name`.
    Declare the same name on both sides and the message round-trips.
 2. **Bodies are PascalCase JSON**, which the protocol codec reads and writes natively.
-3. **`ctx.reply` stamps the inbound message id as the causation id** and mints a *fresh* message id
+3. **`ctx.reply` stamps the inbound message id as the causation id** and mints a _fresh_ message id
    for the reply. Both halves matter: causation is what draws the edge on the Saga Map, and reusing
    the inbound id would make the orchestrator dedupe the reply away, leaving the saga to sit until
    its timeout looking like a hung participant.
 
 ## Configuration
 
-| Variable | Meaning |
-| --- | --- |
+| Variable                     | Meaning                                            |
+| ---------------------------- | -------------------------------------------------- |
 | `RABBITMQ__CONNECTIONSTRING` | AMQP URL, e.g. `amqp://guest:guest@rabbitmq:5672/` |
-| `DASHBOARD__BASEURL` | Dashboard API base URL, for topology registration |
-| `DASHBOARD__APIKEY` | Dashboard API key |
+| `DASHBOARD__BASEURL`         | Dashboard API base URL, for topology registration  |
+| `DASHBOARD__APIKEY`          | Dashboard API key                                  |
 
 All three are required and the process exits at startup naming any that are missing.
 

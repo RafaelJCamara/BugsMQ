@@ -11,13 +11,25 @@ Must stay clean with **zero warnings** — `TreatWarningsAsErrors` is on
 Meziantou.Analyzer, and AsyncFixer.
 
 ```bash
-cd typescript && npm install && npm run lint && npm run typecheck && npm run build
+cd typescript && npm install && npm run lint && npm run format:check && npm run typecheck && npm run build
 cd typescript/dashboard-web && npm install && npx ng build
 ```
 
 The first command covers `typescript/packages/*` (the SDK) and `typescript/samples/*` (runnable
 participants), which are one npm workspace. `dashboard-web` is deliberately not a member of it and
 needs its own `npm install` — hence the second line.
+
+`format:check` is separate from `lint` and CI fails on it independently, so running ESLint alone is
+not enough to know a change will pass. `npm run format` fixes what it reports.
+
+On Windows, `format:check` also flags every file with CRLF endings, which is most of a fresh
+checkout — Prettier defaults to `endOfLine: "lf"` and this repo has no `.gitattributes`. Those are
+working-copy artifacts: Git stores LF, so CI never sees them. To find only what CI will reject,
+check the committed content rather than the working copy:
+
+```bash
+git show ":typescript/$FILE" | npx prettier --check --stdin-filepath "$FILE"
+```
 
 ## Test
 
