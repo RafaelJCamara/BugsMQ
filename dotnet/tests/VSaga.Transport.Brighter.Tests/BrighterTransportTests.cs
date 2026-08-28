@@ -1,3 +1,4 @@
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Testcontainers.RabbitMq;
@@ -151,5 +152,43 @@ public sealed class BrighterTransportTests : IAsyncLifetime
         Assert.Equal(headers[MessageEnvelope.CausationIdHeader], received.Headers[MessageEnvelope.CausationIdHeader]);
         Assert.Equal(headers[MessageEnvelope.ParentSagaTypeHeader], received.Headers[MessageEnvelope.ParentSagaTypeHeader]);
         Assert.Equal(headers[MessageEnvelope.ParentCorrelationIdHeader], received.Headers[MessageEnvelope.ParentCorrelationIdHeader]);
+    }
+
+    /// <summary>
+    /// §6/production-readiness §8.17: BuildReceivedMessage filters MessageHeader.Bag to the
+    /// "x-vsaga-" prefix on receipt, to keep Brighter's own CloudEvents-flavored Bag noise out of
+    /// ReceivedMessage.Headers. `traceparent`/`tracestate` carry no such prefix by design
+    /// (interoperability with a non-vSaga consumer is the point), so they need allowlisting by exact
+    /// name alongside that filter or they're silently dropped on receipt even though PublishAsync
+    /// already writes every envelope header into the Bag unfiltered.
+    /// </summary>
+    [Fact]
+    public async Task PublishAndSubscribe_PropagatesTraceParentAndTraceStateHeaders()
+    {
+        var correlationId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var subscription = new TransportSubscription("TestConsumer4", [typeof(PingMessage)], "vsaga.brighter.test.trace-queue");
+        using var handle = await _transport.SubscribeAsync(subscription, async (received, ct) =>
+        {
+            tcs.TrySetResult(received);
+            await received.Ack.AckAsync(ct);
+        });
+
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [VSagaDiagnostics.TraceParentHeader] = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            [VSagaDiagnostics.TraceStateHeader] = "vendor1=value1,vendor2=value2",
+        };
+        var envelope = MessageEnvelope.New(correlationId, headers);
+
+        await _transport.PublishAsync(new PingMessage("traced"), envelope);
+
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(tcs.Task, completed);
+
+        var received = await tcs.Task;
+        Assert.Equal(headers[VSagaDiagnostics.TraceParentHeader], received.Headers[VSagaDiagnostics.TraceParentHeader]);
+        Assert.Equal(headers[VSagaDiagnostics.TraceStateHeader], received.Headers[VSagaDiagnostics.TraceStateHeader]);
     }
 }

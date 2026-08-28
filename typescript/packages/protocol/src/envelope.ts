@@ -55,7 +55,9 @@ export function envelopeFrom(
 /**
  * The three reserved headers plus every envelope header, matching
  * RabbitMqTransport.BuildHeaders / HttpMessageTransport.ApplyVSagaHeaders. Envelope headers are
- * applied last so they can't be shadowed by the reserved three -- same ordering as .NET.
+ * applied last so they can't be shadowed by the reserved three -- same ordering as .NET. Nothing
+ * here special-cases `traceparent`/`tracestate`: once a caller has put them in `envelope.headers`
+ * (see `envelopeFrom`'s callers), they ride along like any other envelope header.
  */
 export function buildHeaders(
   envelope: MessageEnvelope,

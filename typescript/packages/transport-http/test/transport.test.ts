@@ -8,6 +8,8 @@ import {
   PARENT_SAGA_TYPE_HEADER,
   type ReceivedMessage,
   SOURCE_SERVICE_HEADER,
+  TRACE_PARENT_HEADER,
+  TRACE_STATE_HEADER,
   envelopeFrom,
   newCorrelationId,
   newEnvelope,
@@ -363,6 +365,69 @@ describe('createHttpTransport', () => {
 
     const message = await received.promise;
     expect(message.headers['x-vsaga-delivery-attempt']).toBe('3');
+  });
+
+  /**
+   * production-readiness.md §6/§8.17: `traceparent`/`tracestate` carry no `x-vsaga-` prefix on
+   * purpose (interoperability with a non-vSaga consumer is the point), so extractVSagaHeaders needs
+   * the two bare names allowlisted explicitly or they're silently dropped by the prefix filter.
+   * Exercises both directions of one HTTP round trip: the inbound publish and the synchronous reply
+   * that comes back, mirroring dotnet/tests/VSaga.Transport.Http.Tests's own version of this test.
+   */
+  it('traceparent and tracestate headers survive both directions of an HTTP round trip', async () => {
+    const receiverNode = await node();
+    const senderNode = await node();
+
+    const receiver = receiverNode.bind();
+    const sender = senderNode.bind({
+      endpoints: { receiver: receiverNode.baseUrl },
+      routes: { Command: ['receiver'] },
+    });
+
+    const traceParent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+    const traceState = 'vendor1=value1,vendor2=value2';
+
+    // Reply carries the same trace context back, exactly as an instrumented participant threading
+    // the inbound trace onto its reply would -- unroutable on the receiver side, so it's captured as
+    // this handler's own synchronous reply.
+    await receiver.subscribe(
+      {
+        consumerName: 'TraceReceiver',
+        messageTypeNames: ['Command'],
+        queueNameHint: 'receiver-trace-queue',
+      },
+      async (message) => {
+        expect(message.headers[TRACE_PARENT_HEADER]).toBe(traceParent);
+        expect(message.headers[TRACE_STATE_HEADER]).toBe(traceState);
+
+        await receiver.publish('Reply', Buffer.from(JSON.stringify({ text: 'ok' })), {
+          correlationId: message.correlationId,
+          messageId: newMessageId(),
+          headers: { [TRACE_PARENT_HEADER]: traceParent, [TRACE_STATE_HEADER]: traceState },
+        });
+      },
+    );
+
+    const replyReceived = deferred<ReceivedMessage>();
+    await sender.subscribe(
+      {
+        consumerName: 'TraceReplyListener',
+        messageTypeNames: ['Reply'],
+        queueNameHint: 'sender-trace-reply-queue',
+      },
+      async (message) => replyReceived.resolve(message),
+    );
+
+    const correlationId = newCorrelationId();
+    await sender.publish('Command', Buffer.from(JSON.stringify({ text: 'charge' })), {
+      correlationId,
+      messageId: newMessageId(),
+      headers: { [TRACE_PARENT_HEADER]: traceParent, [TRACE_STATE_HEADER]: traceState },
+    });
+
+    const reply = await replyReceived.promise;
+    expect(reply.headers[TRACE_PARENT_HEADER]).toBe(traceParent);
+    expect(reply.headers[TRACE_STATE_HEADER]).toBe(traceState);
   });
 
   /**

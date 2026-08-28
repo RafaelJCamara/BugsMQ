@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
@@ -266,11 +267,17 @@ public sealed class BrighterTransport : IMessageTransport
         // ReceivedMessage.Headers limited to what VSaga itself ever writes (every real VSaga header,
         // including MessageTypeHeader above and Core's own delivery-attempt header, uses this prefix), so
         // redelivery (which round-trips received.Headers back through PublishRawAsync) doesn't also carry
-        // that Brighter-internal noise forward as bogus outbound headers.
+        // that Brighter-internal noise forward as bogus outbound headers. The two bare W3C trace context
+        // headers are the one deliberate exception -- named allowlist entries, not a loosening of the
+        // prefix filter, since interoperability requires they never carry the "x-vsaga-" prefix.
         var headers = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (key, value) in message.Header.Bag)
         {
-            if (value is null || !key.StartsWith("x-vsaga-", StringComparison.Ordinal))
+            var isVSagaHeader = key.StartsWith("x-vsaga-", StringComparison.Ordinal);
+            var isTraceContextHeader = string.Equals(key, VSagaDiagnostics.TraceParentHeader, StringComparison.Ordinal)
+                || string.Equals(key, VSagaDiagnostics.TraceStateHeader, StringComparison.Ordinal);
+
+            if (value is null || !(isVSagaHeader || isTraceContextHeader))
                 continue;
 
             headers[key] = value.ToString() ?? string.Empty;

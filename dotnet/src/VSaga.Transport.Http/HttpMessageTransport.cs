@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 using Microsoft.Extensions.Logging;
 
@@ -197,10 +198,14 @@ public sealed class HttpMessageTransport(
         }
     }
 
+    /// <summary>Everything <c>x-vsaga-</c>-prefixed, plus the two bare W3C trace context headers (never prefixed -- interoperability with non-vSaga consumers is the point).</summary>
     internal static IReadOnlyDictionary<string, string> ExtractVSagaHeaders(HttpHeaders headers)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var header in headers.Where(h => h.Key.StartsWith(VSagaHeaderPrefix, StringComparison.OrdinalIgnoreCase)))
+        foreach (var header in headers.Where(h =>
+                     h.Key.StartsWith(VSagaHeaderPrefix, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(h.Key, VSagaDiagnostics.TraceParentHeader, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(h.Key, VSagaDiagnostics.TraceStateHeader, StringComparison.OrdinalIgnoreCase)))
             result[header.Key] = string.Join(",", header.Value);
 
         return result;

@@ -1,3 +1,4 @@
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -62,12 +63,15 @@ public static class VSagaHttpEndpointExtensions
         }
     }
 
+    /// <summary>Everything <c>x-vsaga-</c>-prefixed, plus the two bare W3C trace context headers (never prefixed -- interoperability with non-vSaga consumers is the point).</summary>
     private static IReadOnlyDictionary<string, string> ExtractVSagaHeaders(IHeaderDictionary headers)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, values) in headers)
         {
-            if (key.StartsWith("x-vsaga-", StringComparison.OrdinalIgnoreCase))
+            if (key.StartsWith("x-vsaga-", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, VSagaDiagnostics.TraceParentHeader, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, VSagaDiagnostics.TraceStateHeader, StringComparison.OrdinalIgnoreCase))
                 result[key] = StringValues.IsNullOrEmpty(values) ? string.Empty : values.ToString();
         }
 

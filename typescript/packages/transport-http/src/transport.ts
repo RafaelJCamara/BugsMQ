@@ -7,6 +7,8 @@ import {
   MessageTransportPublishError,
   type ReceivedMessage,
   type Subscription,
+  TRACE_PARENT_HEADER,
+  TRACE_STATE_HEADER,
   type TransportSubscription,
   VSAGA_HEADER_PREFIX,
   assertHeadersSafe,
@@ -329,11 +331,23 @@ class HttpMessageTransportImpl implements HttpTransport {
  * the parser, which is what satisfies docs/http-based-sagas.md §3.3b's case-insensitivity
  * requirement without an explicit OrdinalIgnoreCase lookup -- the `.toLowerCase()` below is only
  * a defensive normalization for a hand-built (e.g. test) headers object.
+ *
+ * `traceparent`/`tracestate` are allowlisted by exact name alongside the prefix check -- the two
+ * bare W3C trace context headers never carry the `x-vsaga-` prefix (interoperability is the whole
+ * point), so they would otherwise be silently dropped here on both the inbound-request and
+ * sync-reply paths.
  */
 function extractVSagaHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase().startsWith(VSAGA_HEADER_PREFIX)) result[key.toLowerCase()] = value;
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey.startsWith(VSAGA_HEADER_PREFIX) ||
+      lowerKey === TRACE_PARENT_HEADER ||
+      lowerKey === TRACE_STATE_HEADER
+    ) {
+      result[lowerKey] = value;
+    }
   }
   return result;
 }

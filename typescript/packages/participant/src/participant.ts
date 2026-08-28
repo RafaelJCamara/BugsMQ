@@ -4,6 +4,8 @@ import {
   type ReceivedMessage,
   type Subscription,
   type TopologyReporter,
+  TRACE_PARENT_HEADER,
+  TRACE_STATE_HEADER,
   decodeBody,
   encodeBody,
   envelopeFrom,
@@ -244,7 +246,16 @@ export function createParticipant(options: ParticipantOptions): Participant {
       causationId: string | undefined,
       destination?: string,
     ): Promise<void> => {
-      const envelope = envelopeFrom(serviceName, received.correlationId, causationId);
+      // envelopeFrom builds the reply's headers from scratch (it does not copy received.headers),
+      // so the W3C trace context must be threaded through explicitly or a reply silently roots a
+      // new trace instead of continuing the one that caused it.
+      const inboundTraceParent = received.headers[TRACE_PARENT_HEADER];
+      const inboundTraceState = received.headers[TRACE_STATE_HEADER];
+      const traceHeaders: Record<string, string> = {};
+      if (inboundTraceParent !== undefined) traceHeaders[TRACE_PARENT_HEADER] = inboundTraceParent;
+      if (inboundTraceState !== undefined) traceHeaders[TRACE_STATE_HEADER] = inboundTraceState;
+
+      const envelope = envelopeFrom(serviceName, received.correlationId, causationId, traceHeaders);
       const encoded = encodeBody(body);
 
       if (destination !== undefined) {

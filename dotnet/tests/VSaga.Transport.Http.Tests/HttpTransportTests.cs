@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 
 namespace VSaga.Transport.Http.Tests;
@@ -314,6 +315,67 @@ public sealed class HttpTransportTests
         var received = await tcs.Task.WaitAsync(Timeout);
         Assert.True(received.Headers.TryGetValue("x-vsaga-delivery-attempt", out var value));
         Assert.Equal("3", value);
+    }
+
+    /// <summary>
+    /// §6/production-readiness §8.17: `traceparent`/`tracestate` carry no `x-vsaga-` prefix on
+    /// purpose (interoperability with a non-vSaga consumer is the point), so both of this
+    /// transport's ExtractVSagaHeaders methods -- VSagaHttpEndpointExtensions's on the inbound
+    /// request side, HttpMessageTransport's own on the sync-reply response side -- need the two
+    /// bare names allowlisted explicitly or they're silently dropped by the prefix filter. Exercises
+    /// both directions of one HTTP round trip: the inbound publish (endpoint-side extractor) and the
+    /// synchronous reply that comes back (transport-side extractor on the response).
+    /// </summary>
+    [Fact]
+    public async Task TraceParentAndTraceStateHeaders_SurviveBothDirectionsOfAnHttpRoundTrip()
+    {
+        var registry = new NodeRegistry();
+        await using var receiver = await HttpTestNode.StartAsync("receiver.test", registry, _ => { });
+        await using var sender = await HttpTestNode.StartAsync("sender.test", registry, o =>
+        {
+            o.Endpoints["receiver"] = "http://receiver.test";
+            o.Routes["Command"] = ["receiver"];
+        });
+
+        var receiverTransport = receiver.GetRequiredService<HttpMessageTransport>();
+        var senderTransport = sender.GetRequiredService<HttpMessageTransport>();
+
+        const string traceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        const string traceState = "vendor1=value1,vendor2=value2";
+
+        // Reply carries the same trace context back, exactly as an instrumented participant threading
+        // the inbound trace onto its reply would -- unroutable on the receiver side, so it's captured
+        // as this handler's own synchronous reply.
+        await receiverTransport.SubscribeAsync(new TransportSubscription("TraceReceiver", [typeof(Command)], "receiver-trace-queue"),
+            async (received, ct) =>
+            {
+                Assert.Equal(traceParent, received.Headers[VSagaDiagnostics.TraceParentHeader]);
+                Assert.Equal(traceState, received.Headers[VSagaDiagnostics.TraceStateHeader]);
+
+                var replyHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [VSagaDiagnostics.TraceParentHeader] = traceParent,
+                    [VSagaDiagnostics.TraceStateHeader] = traceState,
+                };
+                await receiverTransport.PublishAsync(new Reply("ok"),
+                    new MessageEnvelope(received.CorrelationId, Guid.NewGuid().ToString("N"), replyHeaders), ct);
+            });
+
+        var replyTcs = new TaskCompletionSource<ReceivedMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await senderTransport.SubscribeAsync(new TransportSubscription("TraceReplyListener", [typeof(Reply)], "sender-trace-reply-queue"),
+            (received, _) => { replyTcs.TrySetResult(received); return Task.CompletedTask; });
+
+        var correlationId = Guid.NewGuid();
+        var outboundHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [VSagaDiagnostics.TraceParentHeader] = traceParent,
+            [VSagaDiagnostics.TraceStateHeader] = traceState,
+        };
+        await senderTransport.PublishAsync(new Command("charge"), new MessageEnvelope(correlationId, Guid.NewGuid().ToString("N"), outboundHeaders));
+
+        var reply = await replyTcs.Task.WaitAsync(Timeout);
+        Assert.Equal(traceParent, reply.Headers[VSagaDiagnostics.TraceParentHeader]);
+        Assert.Equal(traceState, reply.Headers[VSagaDiagnostics.TraceStateHeader]);
     }
 
     /// <summary>

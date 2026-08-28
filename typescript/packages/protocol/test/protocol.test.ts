@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CAUSATION_ID_HEADER,
   CORRELATION_ID_HEADER,
+  ENGINE_OWNED_HEADERS,
   MESSAGE_ID_HEADER,
   MESSAGE_TYPE_HEADER,
   SOURCE_SERVICE_HEADER,
+  TRACE_PARENT_HEADER,
+  TRACE_STATE_HEADER,
   assertHeadersSafe,
   buildHeaders,
   decodeBody,
@@ -94,6 +97,31 @@ describe('envelopeFrom', () => {
       Array.from({ length: 100 }, () => envelopeFrom('S', CORRELATION).messageId),
     );
     expect(ids.size).toBe(100);
+  });
+
+  // production-readiness.md §6/§8.17: unlike x-vsaga-delivery-attempt, traceparent/tracestate must
+  // propagate onto a reply rather than be stripped -- a reply belongs in the same trace as the
+  // message that caused it. This is the mirror image of "never propagates engine-owned headers".
+  it('propagates traceparent/tracestate onto a reply -- they are not engine-owned', () => {
+    const envelope = envelopeFrom('ShippingService', CORRELATION, newMessageId(), {
+      [TRACE_PARENT_HEADER]: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      [TRACE_STATE_HEADER]: 'vendor1=value1',
+    });
+
+    expect(envelope.headers[TRACE_PARENT_HEADER]).toBe(
+      '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+    );
+    expect(envelope.headers[TRACE_STATE_HEADER]).toBe('vendor1=value1');
+  });
+});
+
+describe('ENGINE_OWNED_HEADERS', () => {
+  // Pins the deliberate decision documented on the constant itself: traceparent/tracestate must
+  // survive onto a reply, so they must never be added here even though the reply envelope, like
+  // every engine-owned header's target, is built from scratch.
+  it('does not include the W3C trace context headers', () => {
+    expect(ENGINE_OWNED_HEADERS).not.toContain(TRACE_PARENT_HEADER);
+    expect(ENGINE_OWNED_HEADERS).not.toContain(TRACE_STATE_HEADER);
   });
 });
 

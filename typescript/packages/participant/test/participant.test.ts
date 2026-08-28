@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CAUSATION_ID_HEADER,
   SOURCE_SERVICE_HEADER,
+  TRACE_PARENT_HEADER,
+  TRACE_STATE_HEADER,
   decodeBody,
   message,
   newCorrelationId,
@@ -255,6 +257,45 @@ describe('reply', () => {
     const decoded = decodeBody<OrderShippedBody>(transport.published[0]!.body);
     expect(decoded.TrackingNumber).toBe('TRK-1');
     expect(decoded).not.toHaveProperty('trackingNumber');
+  });
+
+  it('threads traceparent/tracestate from the inbound message onto the reply (production readiness §8.17)', async () => {
+    const transport = new FakeTransport();
+    await started(transport, (body, ctx) =>
+      ctx.reply(OrderShipped, {
+        CorrelationId: ctx.correlationId,
+        OrderId: body.OrderId,
+        TrackingNumber: 'TRK-1',
+      }),
+    );
+
+    const traceParent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+    const traceState = 'vendor1=value1,vendor2=value2';
+    await transport.deliver({
+      ...shipOrder(),
+      headers: { [TRACE_PARENT_HEADER]: traceParent, [TRACE_STATE_HEADER]: traceState },
+    });
+
+    const published = transport.published[0]!;
+    expect(published.envelope.headers[TRACE_PARENT_HEADER]).toBe(traceParent);
+    expect(published.envelope.headers[TRACE_STATE_HEADER]).toBe(traceState);
+  });
+
+  it('omits traceparent/tracestate from the reply when the inbound message carried none', async () => {
+    const transport = new FakeTransport();
+    await started(transport, (body, ctx) =>
+      ctx.reply(OrderShipped, {
+        CorrelationId: ctx.correlationId,
+        OrderId: body.OrderId,
+        TrackingNumber: 'TRK-1',
+      }),
+    );
+
+    await transport.deliver(shipOrder());
+
+    const published = transport.published[0]!;
+    expect(published.envelope.headers).not.toHaveProperty(TRACE_PARENT_HEADER);
+    expect(published.envelope.headers).not.toHaveProperty(TRACE_STATE_HEADER);
   });
 
   it('publish() omits the causation link', async () => {
