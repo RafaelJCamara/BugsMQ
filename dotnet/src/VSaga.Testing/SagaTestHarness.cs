@@ -53,8 +53,29 @@ public sealed class SagaTestHarness<TDefinition, TState> : IAsyncDisposable
         _transport = (InMemoryMessageTransport)_provider.GetRequiredService<IMessageTransport>();
         Saga = _provider.GetRequiredService<TDefinition>();
 
+        // SagaTimeoutDispatcherHostedService and SagaOutboxDispatcherHostedService are both
+        // production crash-recovery pollers, driven by a TimeProvider-sourced PeriodicTimer -- the
+        // same FakeTimeProvider this harness hands out above. Left running, TimeProvider.Advance()
+        // inside AdvanceTimeByAsync (below) wakes their timers too, so their own background poll can
+        // race the harness's own explicit ClaimDueAsync/HandleTimeoutAsync call for the very timeout
+        // AdvanceTimeByAsync is trying to fire deterministically: if the poller's untracked background
+        // Task claims it first, AdvanceTimeByAsync's own claim comes back empty and returns before that
+        // Task has actually finished handling it, so an assertion running immediately after can see a
+        // stale, not-yet-transitioned state. This is exactly what made
+        // Timeout_FiresDeterministicallyWithoutRealWaiting fail intermittently in CI (never locally,
+        // where the race window is narrower) -- not a flaky test, a real design gap: a harness whose
+        // whole purpose is "no real waiting, no non-determinism" cannot also run a background service
+        // whose only job is to act on the passage of time on its own schedule. Neither poller does
+        // anything AdvanceTimeByAsync doesn't already do deterministically itself for a saga under
+        // test, and the harness's in-process, no-real-crash nature means neither's actual
+        // crash-recovery purpose ever applies here anyway.
         foreach (var hosted in _provider.GetServices<IHostedService>())
+        {
+            if (hosted is SagaTimeoutDispatcherHostedService or SagaOutboxDispatcherHostedService)
+                continue;
+
             hosted.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
     }
 
     /// <summary>Sets the correlation id subsequent When/Assert calls act on. Defaults to a fresh random id.</summary>

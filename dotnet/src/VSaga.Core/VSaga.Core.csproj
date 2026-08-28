@@ -5,6 +5,11 @@
          request/reply timeline entries, the same reason VSaga.Dashboard.Api.Tests gets this for
          SagaChangePollingService. -->
     <InternalsVisibleTo Include="VSaga.Http" />
+    <!-- SagaTestHarness needs to type-check for SagaTimeoutDispatcherHostedService/SagaOutboxDispatcherHostedService
+         so it can skip starting them: both are TimeProvider-driven background pollers that would
+         otherwise race the harness's own deterministic AdvanceTimeByAsync claim-and-handle path the
+         moment its FakeTimeProvider is advanced. -->
+    <InternalsVisibleTo Include="VSaga.Testing" />
   </ItemGroup>
 
   <ItemGroup>
