@@ -1,8 +1,11 @@
 # Design: production readiness (packaging, outbox, correlation, tracing, docs)
 
-**Status: planned, nothing built.** Five independent workstreams, sequenced in §8. Unlike the other
-three files in this folder, no part of this has shipped — every "would" below is a proposal, not a
-description. The README describes only what exists; this describes what does not.
+**Status: shipped.** All 19 items in §8 are committed as of 2026-08-28, plus a follow-up fix round
+(same day) closing bugs an adversarial-review workflow found in items 14/15/18 — see §8's own progress
+note and §9 for what "shipped" was actually verified against. This file is kept as the historical
+design record rather than rewritten past tense throughout; treat every "would"/"is planned" below as
+describing intent that was in fact carried out, not a still-open proposal, unless a progress note says
+otherwise.
 
 Written to be picked up cold in a later session: every claim about the current codebase carries a
 `file:line` so it can be re-checked rather than trusted. Line numbers were accurate at commit
@@ -568,12 +571,30 @@ features preceding them. `LICENSE` lands with packaging, not with the restructur
 
 One commit each, per this repo's habit, and no commit depending on one not yet verified:
 
-**Progress: items 1–11 committed, plus one unplanned fix between 10 and its predecessors.** That fix
-(`Commit outbox rows atomically with the snapshot`) repaired the §4.1 step 2 violation described in
-that section's callout — it is not an extra feature, it restores the behaviour item 8 was supposed to
-have had. Item 11 is next. Caveat carried forward from items 7–10: Docker was unavailable in those
-sessions, so the five Testcontainers-backed suites (RabbitMQ, MassTransit, Wolverine, Brighter,
-Postgres) were only compiled, never run — **run them before trusting any of items 7–11.**
+**Progress: all 19 items committed, plus two unplanned fixes.** The first
+(`Commit outbox rows atomically with the snapshot`, between items 10 and its predecessors) repaired
+the §4.1 step 2 violation described in that section's callout — it is not an extra feature, it
+restores the behaviour item 8 was supposed to have had. Docker was available from item 12 onward, so
+the five Testcontainers-backed suites (RabbitMQ, MassTransit, Wolverine, Brighter, Postgres) ran for
+real from that point on, not just compiled — the "run them before trusting" caveat carried forward
+from items 7–11 no longer applies to anything after item 11.
+
+Items 13–19 landed via a single Workflow run: implement → adversarial review (two independent lenses —
+correctness and concurrency — on the riskier items, 14/15/18) → fix only if a finding reached "high"
+severity, which none did. That review process still surfaced two genuine bugs the plan's own prose
+didn't anticipate, closed in a second unplanned fix (`Discard staged outbox rows and fix
+metric/dead-letter bookkeeping on a lost persist race`, plus a docs-only commit restoring findings the
+§7 restructure had dropped): `HandleStepSuccessAsync`'s final persist had no failure handling at all,
+so a lost `SagaConcurrencyException` race (exactly the one §5.4 verifies reaches redelivery) left a
+staged outbox row durably queued on the in-memory provider — the recovery poller would later dispatch
+it for a transition the snapshot never actually recorded — and separately recorded a phantom
+`SagaDuration` for the same phantom transition. Both are fixed now (the persist is wrapped in a
+try/catch that discards the staged publishes and defers the duration recording until after a
+successful commit, then re-throws so redelivery is unaffected), and the identical gap in
+`HandleStepFailureAsync`'s own `ChildSagaFinished` staging was found and closed the same way while
+fixing the first. Every fix is mutation-tested (the fix temporarily reverted, the new test confirmed
+to fail, then restored) — this repo's established discipline, applied to review findings the same way
+it's applied to planned work. Full suite as of the fix round: 318/318.
 
 1. `LICENSE` + `Directory.Build.props` packaging metadata + MinVer, with `fetch-depth: 0` added to
    every CI checkout in the same commit — MinVer silently produces `0.0.0` on a shallow clone, and a
