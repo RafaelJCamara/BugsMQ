@@ -15,6 +15,17 @@ export default tseslint.config(
     },
   },
   {
+    // Node-executed build/tooling scripts, run directly by `node` rather than bundled -- they see
+    // Node's ambient globals.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
+  {
     // The layering rule that keeps a future @vsaga/core drop-in: transports and the participant
     // runtime see only the wire contract, mirroring how the .NET transport adapters reference
     // VSaga.Abstractions and never VSaga.Core (dotnet/src/VSaga.Abstractions/Transport/IMessageTransport.cs).
