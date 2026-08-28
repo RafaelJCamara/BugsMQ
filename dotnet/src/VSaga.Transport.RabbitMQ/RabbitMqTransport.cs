@@ -144,11 +144,19 @@ public sealed class RabbitMqTransport(
         var correlationId = ParseCorrelationId(ea.BasicProperties.CorrelationId, headers);
         var messageId = ea.BasicProperties.MessageId ?? GetHeaderString(headers, MessageIdHeader) ?? ea.DeliveryTag.ToString(CultureInfo.InvariantCulture);
 
+        // ea.Body is only valid for the duration of this event handler -- RabbitMQ.Client 7.x backs it
+        // with pooled/rented memory that can be reused for a later delivery on this same connection the
+        // moment this handler yields on an await (or, worse, after it returns while a handler that
+        // captured `received` keeps a reference into it, as this transport's own tests eventually caught
+        // intermittently in CI: garbage bytes surviving into a JSON deserialize as "'0x01' is an invalid
+        // start of a value"). Copying into a freshly-owned array here is the one place that can fix it
+        // for every caller at once, since ReceivedMessage.Body is handed to arbitrary handler code with
+        // no guarantee it's read back before the next frame arrives.
         var received = new ReceivedMessage(
             messageTypeName,
             correlationId,
             messageId,
-            ea.Body,
+            ea.Body.ToArray(),
             ToStringHeaders(headers),
             new RabbitMqAckContext(channel, ea.DeliveryTag));
 
