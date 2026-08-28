@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -564,5 +564,96 @@ public sealed class SagaEndpointsTests : IAsyncDisposable
         Assert.Equal("InvoiceDeliverySaga", edge.ToNodeId);
         var startedEvent = Assert.Single(map.Events, e => e.EntryType == SagaEntryType.ChildSagaStarted);
         Assert.Equal(edge.Id, startedEvent.EdgeId);
+    }
+
+    // The registration half of the Saga Map's topology, used by participants that can't write to the
+    // store directly -- @vsaga/participant's httpTopologyReporter is the reason it exists.
+    [Fact]
+    public async Task RecordTopology_UpsertsRegistrationsAndResolvesThemOnTheMap()
+    {
+        var response = await _client.PostAsJsonAsync("/api/topology/registrations", new[]
+        {
+            new TopologyRegistration("NotificationService", "OrderShipped", "vsaga.participant.notification"),
+            new TopologyRegistration("NotificationService", "SendInvoiceEmail", "vsaga.participant.notification"),
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        var recorded = await _factory.Services.GetRequiredService<IServiceTopologyStore>().GetAllAsync();
+        Assert.Equal(2, recorded.Count(e => string.Equals(e.ServiceName, "NotificationService", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task RecordTopology_IsIdempotent_SoAParticipantMayReReportOnEveryRestart()
+    {
+        var registrations = new[] { new TopologyRegistration("NotificationService", "OrderShipped", "vsaga.participant.notification") };
+
+        await _client.PostAsJsonAsync("/api/topology/registrations", registrations);
+        await _client.PostAsJsonAsync("/api/topology/registrations", registrations);
+
+        var recorded = await _factory.Services.GetRequiredService<IServiceTopologyStore>().GetAllAsync();
+        Assert.Single(recorded, e => string.Equals(e.ServiceName, "NotificationService", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RecordTopology_EmptyBatch_Returns204()
+    {
+        var response = await _client.PostAsJsonAsync("/api/topology/registrations", Array.Empty<TopologyRegistration>());
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecordTopology_BlankField_Returns400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/topology/registrations", new[]
+        {
+            new TopologyRegistration("NotificationService", "", "vsaga.participant.notification"),
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecordTopology_WithoutApiKey_Returns401()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/topology/registrations", new[]
+        {
+            new TopologyRegistration("NotificationService", "OrderShipped", "vsaga.participant.notification"),
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // Every 401 carries a ProblemDetails body naming the accepted credentials: a bare status code left
+    // the most common setup mistake (no key at all) with nothing to go on from curl.
+    [Fact]
+    public async Task MissingApiKey_ReturnsProblemDetailsNamingTheAcceptedCredentials()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/api/sagas");
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("X-Api-Key", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    // Identical for a wrong key and a missing one: a differing response would let the endpoint be used
+    // to probe whether a guessed key was close to correct.
+    [Fact]
+    public async Task WrongApiKey_ReturnsTheSameBodyAsAMissingOne()
+    {
+        using var missingKeyClient = _factory.CreateClient();
+        using var wrongKeyClient = _factory.CreateClient();
+        wrongKeyClient.DefaultRequestHeaders.Add("X-Api-Key", "not-the-configured-key");
+
+        var missing = await (await missingKeyClient.GetAsync("/api/sagas")).Content.ReadAsStringAsync();
+        var wrong = await (await wrongKeyClient.GetAsync("/api/sagas")).Content.ReadAsStringAsync();
+
+        Assert.Equal(missing, wrong);
     }
 }

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
 namespace VSaga.Dashboard.Api.Auth;
@@ -57,6 +58,38 @@ public sealed class ApiKeyAuthenticationHandler(
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, ApiKeyAuthenticationDefaults.SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+
+    /// <summary>
+    /// The default challenge writes a bare 401 with no body, which leaves the most common setup
+    /// mistake — a caller who simply forgot the key — with nothing to go on but a status code.
+    /// This says which credentials the endpoint accepts and where they are documented.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately identical for a missing key, a wrong key, and an unconfigured server: the reason
+    /// is logged server-side (<see cref="AuthenticateResult.Fail(string)"/>) but never echoed, so a
+    /// response can't be used to probe whether a particular key was close to correct.
+    /// </remarks>
+    protected override Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        Response.StatusCode = StatusCodes.Status401Unauthorized;
+        Response.Headers.WWWAuthenticate = ApiKeyAuthenticationDefaults.SchemeName;
+
+        var problem = new ProblemDetails
+        {
+            Status = StatusCodes.Status401Unauthorized,
+            Title = "Unauthorized",
+            Detail =
+                $"Provide the dashboard API key as the '{ApiKeyAuthenticationDefaults.HeaderName}' header, "
+                + $"an 'Authorization: {ApiKeyAuthenticationDefaults.BearerPrefix.Trim()} <key>' header, or the "
+                + $"'{ApiKeyAuthenticationDefaults.QueryStringParameterName}' query string. "
+                + "See docs/dashboard.md#authentication.",
+            Instance = Request.Path,
+        };
+
+        // The contentType argument is load-bearing: WriteAsJsonAsync sets "application/json" itself and
+        // would overwrite a Response.ContentType assigned before the call.
+        return Response.WriteAsJsonAsync(problem, options: null, contentType: "application/problem+json");
     }
 
     private static string? GetBearerToken(string? authorizationHeader) =>
