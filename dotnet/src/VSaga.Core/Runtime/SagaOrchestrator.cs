@@ -226,9 +226,9 @@ public sealed class SagaOrchestrator<TState>(
             await LogAsync(SagaLogEntry.Create(timeout.CorrelationId, SagaType, SagaEntryType.TimeoutScheduled, toState: outcome.ToState), cancellationToken);
         }
 
-        // §4.1 step 2's outbox rows, written before this persist -- see EnqueueOutboxRowsAsync's own doc
-        // for the race-loss caveat specific to this call site.
-        var outboxIds = await EnqueueOutboxRowsAsync(timeout.CorrelationId, context, cancellationToken);
+        // §4.1 step 2's outbox rows, staged so the persist below commits them with the snapshot -- or,
+        // if it loses its race, leaves them uncommitted for the discard path to drop.
+        await EnqueueOutboxRowsAsync(timeout.CorrelationId, context, cancellationToken);
 
         // The claim above only closes the race up to this point — definition.HandleTimeoutAsync just
         // ran real Compensate()/Publish() I/O (and any step-level RetryPolicy delays), which is real
@@ -243,7 +243,7 @@ public sealed class SagaOrchestrator<TState>(
             return;
         }
 
-        await DrainDeferredPublishesAsync(timeout.CorrelationId, context, outboxIds, cancellationToken);
+        await DrainDeferredPublishesAsync(timeout.CorrelationId, context, cancellationToken);
         await RecordTimeoutOutcomeAsync(state, outcome, cancellationToken);
     }
 
@@ -483,14 +483,14 @@ public sealed class SagaOrchestrator<TState>(
         if (outcome.FinalStatus is not null)
             await LogAsync(SagaLogEntry.Create(correlationId, SagaType, SagaEntryType.SagaCompleted, toState: outcome.ToState), cancellationToken);
 
-        // production-readiness.md §4.1 step 2: written immediately before this persist so a crash
-        // between the persist committing and the inline drain just below still leaves a durable Pending
-        // row for the recovery poller to pick up.
-        var outboxIds = await EnqueueOutboxRowsAsync(correlationId, context, cancellationToken);
+        // production-readiness.md §4.1 step 2: staged immediately before this persist, which commits
+        // them with the snapshot in one implicit transaction, so a crash between that commit and the
+        // inline drain just below still leaves a durable Pending row for the recovery poller.
+        await EnqueueOutboxRowsAsync(correlationId, context, cancellationToken);
 
         await PersistAsync(state, isNew, expectedVersion, cancellationToken);
 
-        await DrainDeferredPublishesAsync(correlationId, context, outboxIds, cancellationToken);
+        await DrainDeferredPublishesAsync(correlationId, context, cancellationToken);
 
         if (isNew)
             VSagaDiagnostics.SagasStarted.Add(1, new KeyValuePair<string, object?>(VSagaDiagnostics.TagSagaType, SagaType));
@@ -509,35 +509,21 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     /// <summary>
-    /// Writes one durable outbox row per message queued via ctx.PublishAfterCommitAsync, in the same
-    /// order they'll be drained — production-readiness.md §4.1 step 2. Sequential, not Task.WhenAll, for
-    /// the same reason DrainDeferredPublishesAsync below is. The returned ids line up positionally with
-    /// <see cref="ISagaContextDeferredPublisher.DeferredPublishes"/> so the inline drain can mark each
-    /// row Dispatched directly by id once its own send succeeds.
-    /// <para>
-    /// Called before an uncertain persist (HandleTimeoutAsync's final, race-checked one) as well as a
-    /// certain one (HandleStepSuccessAsync's): if that persist then loses its optimistic-concurrency
-    /// race, the rows written here are already durably Pending with no way to cancel them -- a narrower
-    /// version of the same residual gap §4.4 documents for the in-memory provider's lack of a unit of
-    /// work. Harmless until production-readiness §8 item 9's recovery poller exists to claim Pending
-    /// rows at all; worth revisiting once it does.
-    /// </para>
+    /// Stages one durable outbox row per message queued via ctx.PublishAfterCommitAsync —
+    /// production-readiness.md §4.1 step 2. Called immediately before a PersistAsync so that persist's
+    /// own SaveChangesAsync commits the rows and the snapshot in one implicit transaction: nothing here
+    /// is durable yet on return, which is exactly the point. A persist that then throws (including
+    /// HandleTimeoutAsync's race-checked one) leaves these uncommitted, and
+    /// DiscardDeferredPublishesAsync drops them from the unit of work before anything else can flush
+    /// them.
     /// </summary>
-    private async Task<IReadOnlyList<long>> EnqueueOutboxRowsAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
+    private async Task EnqueueOutboxRowsAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
     {
-        if (publisher.DeferredPublishes.Count == 0)
-            return [];
-
-        var ids = new List<long>(publisher.DeferredPublishes.Count);
-
         foreach (var publish in publisher.DeferredPublishes)
         {
-            var id = await outboxStore.EnqueueAsync(SagaType, correlationId, publish.MessageId, publish.MessageType,
+            await outboxStore.EnqueueAsync(SagaType, correlationId, publish.MessageId, publish.MessageType,
                 publish.Body, destination: null, publish.Headers, timeProvider.GetUtcNow(), cancellationToken);
-            ids.Add(id);
         }
-
-        return ids;
     }
 
     /// <summary>
@@ -549,21 +535,18 @@ public sealed class SagaOrchestrator<TState>(
     /// step itself (which fails the whole step), this is caught, logged, and recorded on the timeline
     /// instead of thrown, and the saga is left Running for its own state timeout to rescue rather than
     /// being silently discarded by the redelivery dedupe check (§3.1 of docs/http-based-sagas.md).
-    /// <paramref name="outboxIds"/> are <see cref="EnqueueOutboxRowsAsync"/>'s durability copies, written
-    /// just before the persist that preceded this drain -- each row is marked Dispatched right after its
-    /// matching send succeeds, so the recovery poller only ever sees rows for a publish that hasn't
-    /// actually gone out yet.
+    /// <see cref="EnqueueOutboxRowsAsync"/>'s durability copies were committed by the persist that
+    /// preceded this drain -- each is marked Dispatched right after its matching send succeeds, so the
+    /// recovery poller only ever sees rows for a publish that hasn't actually gone out yet.
     /// </summary>
-    private async Task DrainDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, IReadOnlyList<long> outboxIds, CancellationToken cancellationToken)
+    private async Task DrainDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
     {
-        var publishes = publisher.DeferredPublishes;
-
-        for (var i = 0; i < publishes.Count; i++)
+        foreach (var publish in publisher.DeferredPublishes)
         {
             try
             {
-                await publishes[i].SendAsync();
-                await outboxStore.MarkDispatchedAsync(outboxIds[i], cancellationToken);
+                await publish.SendAsync();
+                await outboxStore.MarkDispatchedAsync(publish.MessageId, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -582,11 +565,17 @@ public sealed class SagaOrchestrator<TState>(
     /// announce a transition nobody recorded. Reuses DrainDeferredPublishesAsync's own "leave the saga
     /// for its own timeout to rescue it" policy (one DeliveryExhausted entry per dropped publish, logged
     /// and swallowed, never thrown) rather than inventing a second one -- the only difference from a
-    /// drain is that these are never sent at all. The outbox rows EnqueueOutboxRowsAsync already wrote
-    /// for the same batch are not touched here and stay Pending -- see the caller's note on that gap.
+    /// drain is that these are never sent at all.
     /// </summary>
     private async Task DiscardDeferredPublishesAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, string forState, CancellationToken cancellationToken)
     {
+        // Before the LogAsync calls below, not after: those append to the event log through the same
+        // shared unit of work, so their SaveChangesAsync would commit the very outbox rows this discard
+        // exists to suppress -- turning each dropped publish into one the recovery poller then sends
+        // anyway, ~DispatchGracePeriod later.
+        await outboxStore.DiscardPendingAsync(
+            publisher.DeferredPublishes.Select(publish => publish.MessageId).ToList(), cancellationToken);
+
         foreach (var messageType in publisher.DeferredPublishes.Select(publish => publish.MessageType))
         {
             logger.LogWarning(

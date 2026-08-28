@@ -342,6 +342,9 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
         {
             var store = new EfCoreSagaOutboxStore(db);
             await store.EnqueueAsync("OrderSaga", correlationId, "m1", "InventoryReserved", body, destination: null, headers, now.AddMinutes(-1));
+            // EnqueueAsync only stages; in production the snapshot store's own PersistAsync is what
+            // commits this, atomically with the snapshot.
+            await db.SaveChangesAsync();
         }
 
         await using (var db2 = NewContext())
@@ -366,23 +369,74 @@ public sealed class EfCoreStoreTests : IAsyncDisposable
     public async Task Outbox_MarkDispatchedDirectly_ExcludesItFromTheRecoveryClaim()
     {
         var now = DateTimeOffset.UtcNow;
-        long id;
 
         await using (var db = NewContext())
         {
             var store = new EfCoreSagaOutboxStore(db);
             await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), "m2", "ChargePayment", "{}"u8.ToArray(),
                 destination: "payments", new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
-            id = Assert.Single(db.SagaOutboxMessages).Id;
+            await db.SaveChangesAsync();
         }
 
-        // The inline drain's path: mark dispatched directly by id, right after sending it synchronously.
-        // It never goes through ClaimPendingAsync at all.
+        // The inline drain's path: mark dispatched directly by message id, right after sending it
+        // synchronously. It never goes through ClaimPendingAsync at all.
         await using (var db2 = NewContext())
-            await new EfCoreSagaOutboxStore(db2).MarkDispatchedAsync(id);
+            await new EfCoreSagaOutboxStore(db2).MarkDispatchedAsync("m2");
 
         await using var db3 = NewContext();
         Assert.Empty(await new EfCoreSagaOutboxStore(db3).ClaimPendingAsync(now, batchSize: 10));
+    }
+
+    /// <summary>
+    /// production-readiness.md §4.1 step 2's whole point: the row must not reach the database until the
+    /// caller's own PersistAsync commits it alongside the snapshot. An EnqueueAsync that saved on its
+    /// own would reopen the dual-write window — a persist that then threw would leave a durable Pending
+    /// row describing a transition that never committed, which the recovery poller would publish.
+    /// </summary>
+    [Fact]
+    public async Task Outbox_EnqueueAsync_StagesWithoutCommitting_SoAnAbandonedUnitOfWorkLeavesNoRow()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        await using (var db = NewContext())
+        {
+            await new EfCoreSagaOutboxStore(db).EnqueueAsync("OrderSaga", Guid.NewGuid(), "m3", "InventoryReserved",
+                "{}"u8.ToArray(), destination: null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
+
+            // Disposed without ever calling SaveChangesAsync — standing in for a persist that threw.
+        }
+
+        await using var db2 = NewContext();
+        Assert.Empty(db2.SagaOutboxMessages);
+    }
+
+    /// <summary>
+    /// The discard path's real hazard: SagaOrchestrator.DiscardDeferredPublishesAsync writes one event-log
+    /// entry per dropped publish through this same context, and that AppendAsync calls SaveChangesAsync —
+    /// so without an explicit detach, the abandoned rows would be committed by the very code that exists
+    /// to suppress them, and the poller would publish them anyway.
+    /// </summary>
+    [Fact]
+    public async Task Outbox_DiscardPendingAsync_SurvivesALaterSaveOnTheSameContext()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var correlationId = Guid.NewGuid();
+
+        await using (var db = NewContext())
+        {
+            var store = new EfCoreSagaOutboxStore(db);
+            await store.EnqueueAsync("OrderSaga", correlationId, "m4", "InventoryReserved", "{}"u8.ToArray(),
+                destination: null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
+
+            await store.DiscardPendingAsync(["m4"]);
+
+            // Exactly what the discard path does next, through the same shared context.
+            await new EfCoreSagaEventLogStore(db).AppendAsync(SagaLogEntry.Create(correlationId, "OrderSaga",
+                SagaEntryType.DeliveryExhausted, messageType: "InventoryReserved"));
+        }
+
+        await using var db2 = NewContext();
+        Assert.Empty(db2.SagaOutboxMessages);
     }
 
     [Fact]

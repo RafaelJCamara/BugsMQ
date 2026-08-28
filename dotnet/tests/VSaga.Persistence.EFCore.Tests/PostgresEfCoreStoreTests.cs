@@ -186,6 +186,8 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
                 new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-1));
             await store.EnqueueAsync("OrderSaga", early, "m-early", "InventoryReserved", "{}"u8.ToArray(), null,
                 new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-5));
+            // EnqueueAsync stages only — in production the snapshot store's PersistAsync commits these.
+            await db.SaveChangesAsync();
         }
 
         await using var db2 = NewContext();
@@ -209,6 +211,8 @@ public sealed class PostgresEfCoreStoreTests : IAsyncLifetime
                 await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), $"m{i}", "InventoryReserved", "{}"u8.ToArray(),
                     null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddSeconds(-1));
             }
+
+            await db.SaveChangesAsync();
         }
 
         // Two dispatcher instances (separate DbContexts/connections) racing on the same 20 stale rows --

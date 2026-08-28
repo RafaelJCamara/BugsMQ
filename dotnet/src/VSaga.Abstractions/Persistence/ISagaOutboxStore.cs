@@ -31,24 +31,50 @@ public sealed record SagaOutboxMessage(
 public interface ISagaOutboxStore
 {
     /// <summary>
-    /// Durably records one queued publish and returns its row id, so a caller that enqueues inline (the
-    /// orchestrator's own pre-persist write, per production-readiness.md §4.1 step 2) can pass it
-    /// straight to <see cref="MarkDispatchedAsync"/> once the matching send succeeds. <paramref
-    /// name="messageId"/> and <paramref name="createdAtUtc"/> are supplied by the caller rather than
-    /// minted here — the row must describe the exact same message identity as the in-memory dispatch
-    /// closure it backs, and the caller's own <c>TimeProvider</c> is what every other timestamp in a
-    /// saga's timeline already goes through.
+    /// Stages one queued publish for durable recording. <paramref name="messageId"/> and
+    /// <paramref name="createdAtUtc"/> are supplied by the caller rather than minted here — the row must
+    /// describe the exact same message identity as the in-memory dispatch closure it backs, and the
+    /// caller's own <c>TimeProvider</c> is what every other timestamp in a saga's timeline already goes
+    /// through.
     /// </summary>
-    Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    /// <remarks>
+    /// <b>Does not commit on its own.</b> production-readiness.md §4.1 step 2: the orchestrator calls
+    /// this immediately before its own <c>PersistAsync</c>, and because every EF store shares one
+    /// <c>VSagaDbContext</c> per message, it is the snapshot store's <c>SaveChangesAsync</c> that
+    /// commits these rows and the snapshot together, in one implicit transaction. An implementation
+    /// that commits here instead would reopen exactly the dual-write window the outbox exists to close
+    /// — a crash, or a persist that loses its optimistic-concurrency race, would leave a durable
+    /// Pending row describing a state transition that never committed, which
+    /// <see cref="ClaimPendingAsync"/>'s poller would then faithfully publish.
+    /// </remarks>
+    Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Marks one row Dispatched directly, by id — the inline drain's path, called right after it sends
-    /// the message synchronously. Never goes through <see cref="ClaimPendingAsync"/>, which is only ever
-    /// reached by the recovery poller.
+    /// Marks one row Dispatched directly, by the message id it was enqueued under — the inline drain's
+    /// path, called right after it sends the message synchronously. Never goes through
+    /// <see cref="ClaimPendingAsync"/>, which is only ever reached by the recovery poller. Keyed on
+    /// <c>messageId</c> rather than a row id because <see cref="EnqueueAsync"/> deliberately doesn't
+    /// commit, so no database-generated id exists yet at enqueue time; every message id here is a
+    /// freshly minted GUID from <c>MessageEnvelope.From</c>, so it identifies exactly one row.
     /// </summary>
-    Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default);
+    Task MarkDispatchedAsync(string messageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Drops staged-but-uncommitted rows for <paramref name="messageIds"/>, for the paths that abandon a
+    /// batch of deferred publishes instead of draining it (<c>SagaOrchestrator.DiscardDeferredPublishesAsync</c>
+    /// — a timeout whose persist lost its concurrency race, or a step that threw).
+    /// </summary>
+    /// <remarks>
+    /// Necessary because <see cref="EnqueueAsync"/> leaves its rows pending in the shared unit of work:
+    /// left staged, the very next <c>ISagaEventLogStore.AppendAsync</c> on that same context — which the
+    /// discard path itself performs, one entry per dropped publish — would flush them, resurrecting the
+    /// exact publishes the discard exists to suppress. Discarding is not a status change: the rows must
+    /// leave the unit of work entirely, since a Pending *or* Dispatched row would both be wrong for a
+    /// transition that was never recorded.
+    /// </remarks>
+    Task DiscardPendingAsync(IReadOnlyCollection<string> messageIds, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Atomically claims (marks Dispatched) and returns up to <paramref name="batchSize"/> rows still

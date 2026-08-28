@@ -54,11 +54,33 @@ public sealed class InMemoryOutboxStoreTests
         var pendingRightNow = await store.ClaimPendingAsync(now.AddMinutes(-10), batchSize: 10);
         Assert.Empty(pendingRightNow); // not yet past its grace period
 
-        // The inline drain's path: mark dispatched directly by id, right after sending it synchronously.
-        // Never goes through ClaimPendingAsync -- a fresh store's first enqueued row is always id 1.
-        await store.MarkDispatchedAsync(1);
+        // The inline drain's path: mark dispatched directly by message id, right after sending it
+        // synchronously. Never goes through ClaimPendingAsync.
+        await store.MarkDispatchedAsync("m2");
 
         Assert.Empty(await store.ClaimPendingAsync(now, batchSize: 10));
+    }
+
+    /// <summary>
+    /// The abandon paths (SagaOrchestrator.DiscardDeferredPublishesAsync: a timeout whose persist lost
+    /// its concurrency race, or a step that threw) must leave nothing for the recovery poller to find —
+    /// otherwise the discard is cosmetic and every dropped publish goes out anyway, one grace period later.
+    /// </summary>
+    [Fact]
+    public async Task DiscardPendingAsync_LeavesNothingForTheRecoveryPoller()
+    {
+        var store = NewStore();
+        var now = DateTimeOffset.UtcNow;
+
+        await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), "kept", "InventoryReserved", "{}"u8.ToArray(),
+            destination: null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
+        await store.EnqueueAsync("OrderSaga", Guid.NewGuid(), "dropped", "ChargePayment", "{}"u8.ToArray(),
+            destination: null, new Dictionary<string, string>(StringComparer.Ordinal), now.AddMinutes(-1));
+
+        await store.DiscardPendingAsync(["dropped"]);
+
+        var claimed = Assert.Single(await store.ClaimPendingAsync(now, batchSize: 10));
+        Assert.Equal("kept", claimed.MessageId);
     }
 
     [Fact]

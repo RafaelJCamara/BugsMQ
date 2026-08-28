@@ -53,6 +53,22 @@ public sealed class VSagaDbContext(DbContextOptions<VSagaDbContext> options) : D
             b.HasIndex(x => new { x.Status, x.DueAtUtc });
         });
 
+        ConfigureSagaOutboxMessages(modelBuilder);
+
+        modelBuilder.Entity<SagaConsumerRegistrationEntity>(b =>
+        {
+            b.ToTable("SagaConsumerRegistrations");
+            b.HasKey(x => new { x.ServiceName, x.MessageType });
+            b.Property(x => x.ServiceName).HasMaxLength(200).IsRequired();
+            b.Property(x => x.MessageType).HasMaxLength(400).IsRequired();
+            b.Property(x => x.QueueName).HasMaxLength(400).IsRequired();
+            b.HasIndex(x => x.MessageType);
+        });
+    }
+
+    /// <summary>Split out of <see cref="OnModelCreating"/> only for length, like <see cref="ConfigureSagaInstances"/>.</summary>
+    private static void ConfigureSagaOutboxMessages(ModelBuilder modelBuilder)
+    {
         modelBuilder.Entity<SagaOutboxMessageEntity>(b =>
         {
             b.ToTable("SagaOutboxMessages");
@@ -65,16 +81,11 @@ public sealed class VSagaDbContext(DbContextOptions<VSagaDbContext> options) : D
             b.Property(x => x.HeadersJson).IsRequired();
             // Claim index, matching SagaTimeouts' (Status, DueAtUtc) shape above.
             b.HasIndex(x => new { x.Status, x.CreatedAtUtc });
-        });
-
-        modelBuilder.Entity<SagaConsumerRegistrationEntity>(b =>
-        {
-            b.ToTable("SagaConsumerRegistrations");
-            b.HasKey(x => new { x.ServiceName, x.MessageType });
-            b.Property(x => x.ServiceName).HasMaxLength(200).IsRequired();
-            b.Property(x => x.MessageType).HasMaxLength(400).IsRequired();
-            b.Property(x => x.QueueName).HasMaxLength(400).IsRequired();
-            b.HasIndex(x => x.MessageType);
+            // The inline drain's MarkDispatchedAsync lookup, which runs once per deferred publish on
+            // every committed step. Not unique: MessageId is a minted GUID so collisions aren't
+            // expected, but a uniqueness constraint here would turn an unforeseen reuse into a failed
+            // save on the hot path rather than a duplicate row the poller resolves.
+            b.HasIndex(x => x.MessageId);
         });
     }
 

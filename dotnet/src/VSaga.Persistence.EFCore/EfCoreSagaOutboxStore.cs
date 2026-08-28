@@ -6,11 +6,16 @@ namespace VSaga.Persistence.EFCore;
 
 public sealed class EfCoreSagaOutboxStore(VSagaDbContext db) : ISagaOutboxStore
 {
-    public async Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    /// <remarks>
+    /// Adds to the change tracker without saving, per <see cref="ISagaOutboxStore.EnqueueAsync"/>'s
+    /// contract: the caller's own <c>PersistAsync</c> is what commits this row, atomically with the
+    /// snapshot it belongs to, through this same shared <see cref="VSagaDbContext"/>.
+    /// </remarks>
+    public Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default)
     {
-        var entity = new SagaOutboxMessageEntity
+        db.SagaOutboxMessages.Add(new SagaOutboxMessageEntity
         {
             CorrelationId = correlationId,
             SagaType = sagaType,
@@ -21,21 +26,42 @@ public sealed class EfCoreSagaOutboxStore(VSagaDbContext db) : ISagaOutboxStore
             HeadersJson = JsonSerializer.Serialize(headers),
             Status = SagaOutboxStatus.Pending,
             CreatedAtUtc = createdAtUtc,
-        };
+        });
 
-        db.SagaOutboxMessages.Add(entity);
-        await db.SaveChangesAsync(cancellationToken);
-        return entity.Id;
+        return Task.CompletedTask;
     }
 
-    public async Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default)
+    public async Task MarkDispatchedAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        var message = await db.SagaOutboxMessages.FindAsync([id], cancellationToken);
+        var message = await db.SagaOutboxMessages.FirstOrDefaultAsync(x => x.MessageId == messageId, cancellationToken);
         if (message is null)
             return;
 
         message.Status = SagaOutboxStatus.Dispatched;
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <remarks>
+    /// Detaches rather than deletes: these rows were only ever staged in the change tracker by
+    /// <see cref="EnqueueAsync"/> and never committed, so there is nothing in the database to remove —
+    /// the entire point is to drop them before something else's <c>SaveChangesAsync</c> flushes them.
+    /// Matching on the change tracker directly (not a query) for the same reason.
+    /// </remarks>
+    public Task DiscardPendingAsync(IReadOnlyCollection<string> messageIds, CancellationToken cancellationToken = default)
+    {
+        if (messageIds.Count == 0)
+            return Task.CompletedTask;
+
+        var ids = messageIds as HashSet<string> ?? new HashSet<string>(messageIds, StringComparer.Ordinal);
+
+        var staged = db.ChangeTracker.Entries<SagaOutboxMessageEntity>()
+            .Where(e => e.State == EntityState.Added && ids.Contains(e.Entity.MessageId))
+            .ToList();
+
+        foreach (var entry in staged)
+            entry.State = EntityState.Detached;
+
+        return Task.CompletedTask;
     }
 
     private const string NpgsqlProviderName = "Npgsql.EntityFrameworkCore.PostgreSQL";

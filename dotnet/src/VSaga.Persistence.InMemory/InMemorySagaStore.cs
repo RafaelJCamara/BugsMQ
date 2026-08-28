@@ -264,20 +264,48 @@ public sealed class InMemorySagaStore : ISagaSummaryReader, ISagaEventLogStore, 
         return Task.FromResult<IReadOnlyList<SagaTimeout>>(claimed);
     }
 
-    public Task<long> EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
+    // Writes immediately, unlike the EF provider, which stages the row in a shared unit of work its
+    // caller then commits atomically with the snapshot: a ConcurrentDictionary has no unit of work to
+    // enlist in, so the residual gap production-readiness.md §4.4 documents applies here — a crash
+    // between this and the snapshot write is not covered. DiscardPendingAsync below still removes the
+    // rows on the abandon paths, so the observable behaviour matches the EF provider's everywhere
+    // except an actual process crash. Dev/test-only provider.
+    public Task EnqueueAsync(string sagaType, Guid correlationId, string messageId, string messageTypeName,
         ReadOnlyMemory<byte> body, string? destination, IReadOnlyDictionary<string, string> headers,
         DateTimeOffset createdAtUtc, CancellationToken cancellationToken = default)
     {
         var id = Interlocked.Increment(ref _outboxMessageId);
         _outboxMessages[id] = new SagaOutboxMessage(id, correlationId, sagaType, messageId, messageTypeName,
             body, destination, headers, SagaOutboxStatus.Pending, createdAtUtc);
-        return Task.FromResult(id);
+        return Task.CompletedTask;
     }
 
-    public Task MarkDispatchedAsync(long id, CancellationToken cancellationToken = default)
+    public Task MarkDispatchedAsync(string messageId, CancellationToken cancellationToken = default)
     {
-        if (_outboxMessages.TryGetValue(id, out var message))
-            _outboxMessages.TryUpdate(id, message with { Status = SagaOutboxStatus.Dispatched }, message);
+        foreach (var (id, message) in _outboxMessages)
+        {
+            if (string.Equals(message.MessageId, messageId, StringComparison.Ordinal))
+            {
+                _outboxMessages.TryUpdate(id, message with { Status = SagaOutboxStatus.Dispatched }, message);
+                return Task.CompletedTask;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task DiscardPendingAsync(IReadOnlyCollection<string> messageIds, CancellationToken cancellationToken = default)
+    {
+        if (messageIds.Count == 0)
+            return Task.CompletedTask;
+
+        var ids = messageIds as HashSet<string> ?? new HashSet<string>(messageIds, StringComparer.Ordinal);
+
+        foreach (var (id, message) in _outboxMessages)
+        {
+            if (message.Status == SagaOutboxStatus.Pending && ids.Contains(message.MessageId))
+                _outboxMessages.TryRemove(id, out _);
+        }
 
         return Task.CompletedTask;
     }
