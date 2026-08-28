@@ -529,12 +529,12 @@ features preceding them. `LICENSE` lands with packaging, not with the restructur
 
 One commit each, per this repo's habit, and no commit depending on one not yet verified:
 
-**Progress: items 1–10 committed, plus one unplanned fix between 10 and its predecessors.** That fix
+**Progress: items 1–11 committed, plus one unplanned fix between 10 and its predecessors.** That fix
 (`Commit outbox rows atomically with the snapshot`) repaired the §4.1 step 2 violation described in
 that section's callout — it is not an extra feature, it restores the behaviour item 8 was supposed to
 have had. Item 11 is next. Caveat carried forward from items 7–10: Docker was unavailable in those
 sessions, so the five Testcontainers-backed suites (RabbitMQ, MassTransit, Wolverine, Brighter,
-Postgres) were only compiled, never run — **run them before trusting any of items 7–10.**
+Postgres) were only compiled, never run — **run them before trusting any of items 7–11.**
 
 1. `LICENSE` + `Directory.Build.props` packaging metadata + MinVer, with `fetch-depth: 0` added to
    every CI checkout in the same commit — MinVer silently produces `0.0.0` on a shallow clone, and a
@@ -561,14 +561,23 @@ Postgres) were only compiled, never run — **run them before trusting any of it
    `VSaga.Http.Tests` suite are the canaries that catch a regression here.
 9. `SagaOutboxDispatcherHostedService` (the crash-recovery poller), scoped correctly per item 4.
 10. `PublishChildSagaFinishedAsync` routes through the outbox.
-11. `Outbox:Mode=All`. **Not a mechanical extension of items 8/10, despite reading like one.** Every row
-    staged so far is atomic with a persist because a committed state transition is what justifies the
-    publish. `ctx.PublishAsync`/`SendAsync` fire *mid-step*, before any persist — there is no committed
-    transition to bind them to, and the step may still throw or retry afterwards (`StepExecutor`'s
-    replay-from-zero). Decide deliberately what `All` means before implementing: staging mid-step rows
-    that a subsequent `ClearDeferredPublishes`-style abandon must then discard, versus accepting that
-    immediate publishes are simply outside the outbox's guarantee and scoping `All` to something
-    narrower. `SagaOutboxOptions.Mode` already exists from item 9 and is deliberately read nowhere.
+11. `Outbox:Mode=All`. **Resolved as: `All` makes every `ctx` publish deferred**, joining the same queue
+    `PublishAfterCommitAsync` uses. That is forced rather than chosen — `ctx.PublishAsync`/`SendAsync`
+    fire mid-step, so by the time any persist commits the message has already left, and a row written
+    beside a message that is already gone guarantees nothing. Deferring is the only reading of "routed
+    through the outbox" with content. The §1 decision stands: `Deferred` remains the default, so today's
+    inline semantics and every existing test are untouched, and an operator choosing `All` is knowingly
+    accepting the trade-off `ISagaContext.PublishAfterCommitAsync`'s own doc spells out (a publish that
+    fails post-commit has nowhere to go). It also buys something real: under `All` a step that publishes
+    and *then* throws no longer leaks the publish, because the failure path discards the queue.
+
+    Two things `Deferred` never exercised become load-bearing here, and both were bugs in the first
+    draft: `ctx.SendAsync` queues a **destination** (drop it and the poller broadcasts an addressed
+    message), and `StartChildAsync` queues a **fresh correlation id** while `NotifyParentAsync` queues
+    the parent's (key the row on the publishing saga and the poller recreates the child under the
+    parent's own id). `DeferredPublish` therefore carries the whole `MessageEnvelope` plus the
+    destination, and `EnqueueOutboxRowsAsync` reads the row's identity from the envelope, never from the
+    saga.
 12. `SagaState.BusinessKey` + column + partial unique index + migration + both stores + the
     reservation-insert (§5.2).
 13. `CorrelateOn` + the shared `SagaCorrelationModel<TState>` + `ISagaDefinition.TryGetCorrelationKey`

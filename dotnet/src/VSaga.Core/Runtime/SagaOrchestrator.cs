@@ -27,10 +27,14 @@ public sealed class SagaOrchestrator<TState>(
     IServiceProvider services,
     TimeProvider timeProvider,
     SagaOrchestratorOptions options,
+    SagaOutboxOptions outboxOptions,
     ILogger<SagaOrchestrator<TState>> logger)
     where TState : SagaState, new()
 {
     private const string DeliveryAttemptHeader = "x-vsaga-delivery-attempt";
+
+    /// <summary>§8 item 11: under Mode=All every ctx publish joins the deferred queue, so it gets the same outbox row and post-commit dispatch PublishAfterCommitAsync always has.</summary>
+    private bool DeferAllPublishes => outboxOptions.Mode == SagaOutboxMode.All;
 
     private readonly Dictionary<string, Type> _messageTypesByName =
         definition.MessageTypes.ToDictionary(t => t.Name, t => t, StringComparer.Ordinal);
@@ -210,7 +214,7 @@ public sealed class SagaOrchestrator<TState>(
 
         var visitedStates = await GetVisitedStatesAsync(timeout.CorrelationId, cancellationToken);
         var context = new SagaContext<TState>(state, timeout.CorrelationId, new Dictionary<string, string>(StringComparer.Ordinal), visitedStates,
-            services, transport, SagaType, inboundMessageId: null, LogAsync, cancellationToken);
+            services, transport, SagaType, inboundMessageId: null, LogAsync, DeferAllPublishes, cancellationToken);
 
         var outcome = await definition.HandleTimeoutAsync(context, timeout.ForState, cancellationToken);
         if (!outcome.WasHandled)
@@ -240,7 +244,7 @@ public sealed class SagaOrchestrator<TState>(
         // if it loses its race, leaves them uncommitted for the discard path to drop. A terminal
         // timeout's ChildSagaFinished stages in the same breath and for the same reason (§4.3's second
         // publish surface): it is justified by precisely the transition this persist is about to record.
-        await EnqueueOutboxRowsAsync(timeout.CorrelationId, context, cancellationToken);
+        await EnqueueOutboxRowsAsync(context, cancellationToken);
         var stagedChildFinished = outcome.FinalStatus is { } terminalStatus
             ? await StageChildSagaFinishedAsync(state, terminalStatus, causationMessageId: null, cancellationToken)
             : null;
@@ -411,7 +415,7 @@ public sealed class SagaOrchestrator<TState>(
             sourceService: GetSourceService(headers), causationId: GetCausationId(headers)), cancellationToken);
 
         var visitedStates = await GetVisitedStatesAsync(correlationId, cancellationToken);
-        var context = new SagaContext<TState>(state, correlationId, headers, visitedStates, services, transport, SagaType, messageId, LogAsync, cancellationToken);
+        var context = new SagaContext<TState>(state, correlationId, headers, visitedStates, services, transport, SagaType, messageId, LogAsync, DeferAllPublishes, cancellationToken);
 
         using var activity = VSagaDiagnostics.ActivitySource.StartActivity($"saga.step {SagaType}.{fromState}");
         activity?.SetTag(VSagaDiagnostics.TagSagaType, SagaType);
@@ -508,7 +512,7 @@ public sealed class SagaOrchestrator<TState>(
         // production-readiness.md §4.1 step 2: staged immediately before this persist, which commits
         // them with the snapshot in one implicit transaction, so a crash between that commit and the
         // inline drain just below still leaves a durable Pending row for the recovery poller.
-        await EnqueueOutboxRowsAsync(correlationId, context, cancellationToken);
+        await EnqueueOutboxRowsAsync(context, cancellationToken);
 
         await PersistAsync(state, isNew, expectedVersion, cancellationToken);
 
@@ -531,20 +535,25 @@ public sealed class SagaOrchestrator<TState>(
     }
 
     /// <summary>
-    /// Stages one durable outbox row per message queued via ctx.PublishAfterCommitAsync —
-    /// production-readiness.md §4.1 step 2. Called immediately before a PersistAsync so that persist's
-    /// own SaveChangesAsync commits the rows and the snapshot in one implicit transaction: nothing here
-    /// is durable yet on return, which is exactly the point. A persist that then throws (including
-    /// HandleTimeoutAsync's race-checked one) leaves these uncommitted, and
-    /// DiscardDeferredPublishesAsync drops them from the unit of work before anything else can flush
-    /// them.
+    /// Stages one durable outbox row per queued publish — production-readiness.md §4.1 step 2. Called
+    /// immediately before a PersistAsync so that persist's own SaveChangesAsync commits the rows and the
+    /// snapshot in one implicit transaction: nothing here is durable yet on return, which is exactly the
+    /// point. A persist that then throws (including HandleTimeoutAsync's race-checked one) leaves these
+    /// uncommitted, and DiscardDeferredPublishesAsync drops them from the unit of work before anything
+    /// else can flush them.
     /// </summary>
-    private async Task EnqueueOutboxRowsAsync(Guid correlationId, ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
+    private async Task EnqueueOutboxRowsAsync(ISagaContextDeferredPublisher publisher, CancellationToken cancellationToken)
     {
         foreach (var publish in publisher.DeferredPublishes)
         {
-            await outboxStore.EnqueueAsync(SagaType, correlationId, publish.MessageId, publish.MessageType,
-                publish.Body, destination: null, publish.Headers, timeProvider.GetUtcNow(), cancellationToken);
+            // The envelope's correlation id and destination, not the publishing saga's: under Mode=All a
+            // queued StartChildAsync carries a fresh id, NotifyParentAsync the parent's, and SendAsync a
+            // destination. A row keyed on the publishing saga instead would have the recovery poller
+            // republish the message under the wrong identity — see DeferredPublish's own note.
+            await outboxStore.EnqueueAsync(SagaType, publish.Envelope.CorrelationId, publish.Envelope.MessageId,
+                publish.MessageType, publish.Body, publish.Destination,
+                publish.Envelope.Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                timeProvider.GetUtcNow(), cancellationToken);
         }
     }
 
@@ -568,7 +577,7 @@ public sealed class SagaOrchestrator<TState>(
             try
             {
                 await publish.SendAsync();
-                await outboxStore.MarkDispatchedAsync(publish.MessageId, cancellationToken);
+                await outboxStore.MarkDispatchedAsync(publish.Envelope.MessageId, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -613,7 +622,7 @@ public sealed class SagaOrchestrator<TState>(
         // exists to suppress -- turning each dropped publish into one the recovery poller then sends
         // anyway, ~DispatchGracePeriod later.
         await outboxStore.DiscardPendingAsync(
-            publisher.DeferredPublishes.Select(publish => publish.MessageId).ToList(), cancellationToken);
+            publisher.DeferredPublishes.Select(publish => publish.Envelope.MessageId).ToList(), cancellationToken);
 
         foreach (var messageType in publisher.DeferredPublishes.Select(publish => publish.MessageType))
         {

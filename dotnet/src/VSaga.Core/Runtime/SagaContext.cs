@@ -16,20 +16,28 @@ internal interface ISagaContextLogSink
 }
 
 /// <summary>
-/// One queued ctx.PublishAfterCommitAsync call, named by its message type so a drain or a discard (see
+/// One queued publish — every ctx.PublishAfterCommitAsync call, plus every ordinary publish once
+/// SagaOutboxOptions.Mode is All. Named by its message type so a drain or a discard (see
 /// SagaOrchestrator.DiscardDeferredPublishesAsync) can log what it's handling rather than just count it.
 /// Carries both the durability copy (production-readiness.md §4.3's outbox row shape -- everything
 /// ISagaOutboxStore.EnqueueAsync needs) and the strongly-typed <see cref="SendAsync"/> closure the
 /// inline drain still calls, per §4.1's constraint that the inline path cannot go through
-/// PublishRawAsync without breaking TimeoutDrainTests.cs:75's typed-Message assertion. Destination is
-/// not carried: PublishAfterCommitAsync has no destination-taking overload, so every row this produces
-/// is always a broadcast publish.
+/// PublishRawAsync without breaking TimeoutDrainTests.cs:75's typed-Message assertion.
+/// <para>
+/// The whole <see cref="Envelope"/> rather than just its MessageId, and <see cref="Destination"/>
+/// alongside it, because Mode=All widened what can land here. Under Deferred these were redundant —
+/// PublishAfterCommitAsync has no destination-taking overload and always publishes under the saga's own
+/// correlation id. Under All, ctx.SendAsync queues a destination, StartChildAsync queues a *fresh*
+/// correlation id and NotifyParentAsync the parent's, so a row recording the saga's own id (or dropping
+/// the destination) would have the recovery poller republish the message somewhere it was never meant
+/// to go — creating a child saga under the parent's id, or broadcasting an addressed send.
+/// </para>
 /// </summary>
 internal readonly record struct DeferredPublish(
     string MessageType,
-    string MessageId,
+    MessageEnvelope Envelope,
     ReadOnlyMemory<byte> Body,
-    IReadOnlyDictionary<string, string> Headers,
+    string? Destination,
     Func<Task> SendAsync);
 
 /// <summary>
@@ -58,6 +66,7 @@ internal sealed class SagaContext<TState>(
     string sagaType,
     string? inboundMessageId,
     Func<SagaLogEntry, CancellationToken, Task> logAsync,
+    bool deferAllPublishes,
     CancellationToken cancellationToken) : ISagaContext<TState>, ISagaContextLogSink, ISagaContextDeferredPublisher
     where TState : SagaState
 {
@@ -76,10 +85,10 @@ internal sealed class SagaContext<TState>(
     public CancellationToken CancellationToken { get; } = cancellationToken;
 
     public Task PublishAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull =>
-        PublishInternalAsync(message, destination: null, MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId), cancellationToken);
+        RouteAsync(message, destination: null, MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId), cancellationToken);
 
     public Task SendAsync<TMessage>(string destination, TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull =>
-        PublishInternalAsync(message, destination, MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId), cancellationToken);
+        RouteAsync(message, destination, MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId), cancellationToken);
 
     public Task StartChildAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
     {
@@ -96,7 +105,7 @@ internal sealed class SagaContext<TState>(
 
         var envelope = MessageEnvelope.From(sagaType, Guid.NewGuid(), inboundMessageId, linkage);
 
-        return PublishInternalAsync(message, destination: null, envelope, cancellationToken, SagaEntryType.ChildSagaStarted);
+        return RouteAsync(message, destination: null, envelope, cancellationToken, SagaEntryType.ChildSagaStarted);
     }
 
     public Task NotifyParentAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
@@ -115,7 +124,7 @@ internal sealed class SagaContext<TState>(
         // this instance — see the "not a general publish-under-any-id overload" note on the interface.
         var envelope = MessageEnvelope.From(sagaType, parentCorrelationId, inboundMessageId);
 
-        return PublishInternalAsync(message, destination: null, envelope, cancellationToken);
+        return RouteAsync(message, destination: null, envelope, cancellationToken);
     }
 
     /// <summary>
@@ -124,12 +133,34 @@ internal sealed class SagaContext<TState>(
     /// PublishAsync's own envelope), so only the actual transport call and its timeline entry are
     /// deferred to the drain.
     /// </summary>
-    public Task PublishAfterCommitAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull
+    public Task PublishAfterCommitAsync<TMessage>(TMessage message, CancellationToken cancellationToken = default) where TMessage : notnull =>
+        QueueAsync(message, destination: null, MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId), cancellationToken);
+
+    /// <summary>
+    /// The Deferred-vs-All fork (production-readiness.md §8 item 11). Under the default Deferred mode an
+    /// ordinary publish goes out inline exactly as it always has; under All it joins the same queue
+    /// PublishAfterCommitAsync uses, which is the only way "routed through the outbox" can mean anything
+    /// for a mid-step publish — a row written while the message is already gone guarantees nothing.
+    /// PublishAfterCommitAsync itself never comes through here: it queues unconditionally, in both modes.
+    /// </summary>
+    private Task RouteAsync<TMessage>(TMessage message, string? destination, MessageEnvelope envelope,
+        CancellationToken cancellationToken, SagaEntryType? entryTypeOverride = null) where TMessage : notnull =>
+        deferAllPublishes
+            ? QueueAsync(message, destination, envelope, cancellationToken, entryTypeOverride)
+            : PublishInternalAsync(message, destination, envelope, cancellationToken, entryTypeOverride);
+
+    /// <summary>
+    /// Queues rather than sends. The closure calls <see cref="PublishInternalAsync"/> directly, never
+    /// <see cref="RouteAsync"/> — under Mode=All the latter would re-queue the message the drain is
+    /// trying to send, and nothing would ever go out.
+    /// </summary>
+    private Task QueueAsync<TMessage>(TMessage message, string? destination, MessageEnvelope envelope,
+        CancellationToken cancellationToken, SagaEntryType? entryTypeOverride = null) where TMessage : notnull
     {
-        var envelope = MessageEnvelope.From(sagaType, CorrelationId, inboundMessageId);
-        var body = JsonSerializer.SerializeToUtf8Bytes(message);
-        _deferredPublishes.Add(new DeferredPublish(typeof(TMessage).Name, envelope.MessageId, body, envelope.Headers!,
-            () => PublishInternalAsync(message, destination: null, envelope, cancellationToken)));
+        _deferredPublishes.Add(new DeferredPublish(typeof(TMessage).Name, envelope,
+            JsonSerializer.SerializeToUtf8Bytes(message), destination,
+            () => PublishInternalAsync(message, destination, envelope, cancellationToken, entryTypeOverride)));
+
         return Task.CompletedTask;
     }
 
