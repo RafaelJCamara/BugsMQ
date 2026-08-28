@@ -80,10 +80,33 @@ Pass a `topology: TopologyReporter` (`@vsaga/participant`'s `httpTopologyReporte
 Saga Map (see [`dashboard.md`](dashboard.md#saga-map)) instead of an `Unresolved` one. Registration is
 best-effort — a cold dashboard never stops a participant from starting.
 
+It posts to the Dashboard API's `POST /api/topology/registrations` rather than writing to Postgres
+the way .NET's `AddVSagaTopologyRecording` does. That asymmetry is deliberate: registering two rows
+should not require handing a Node service database credentials and a duplicate copy of the schema.
+The endpoint is an upsert keyed on `(serviceName, messageType)`, so re-reporting on every restart is
+the intended usage, not a leak.
+
+## A runnable cross-runtime example
+
+[`typescript/samples/notification-participant`](../typescript/samples/notification-participant) is
+the OrderProcessing sample's `NotificationService` rewritten in TypeScript. Layer its overlay on the
+reference stack and a Node process handles messages published by .NET sagas, replying with messages
+those sagas resume on:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.node.yml up -d --build
+docker compose logs -f notification-participant
+```
+
+The .NET side changes by exactly one flag — `Participants__NotificationInProcess=false`, which stops
+it registering the participant being replaced. Nothing else is reconfigured, because there is nothing
+else to reconfigure. See [that sample's README](../typescript/samples/notification-participant/README.md)
+for what it handles and why the wire formats line up.
+
 ## Why this SDK has its own toolchain, separate from the dashboard
 
-`typescript/` is an npm workspace (`workspaces: ["packages/*"]`) covering exactly these seven SDK
-packages. `typescript/dashboard-web` (the Angular dashboard SPA — see
+`typescript/` is an npm workspace (`workspaces: ["packages/*", "samples/*"]`) covering these seven SDK
+packages plus the runnable samples. `typescript/dashboard-web` (the Angular dashboard SPA — see
 [`dashboard.md`](dashboard.md#the-spa)) is **deliberately not a member of that workspace**: it has its
 own lockfile, its own Angular CLI toolchain, and nothing in common with a set of publishable Node SDK
 packages beyond living under the same `typescript/` directory. CI runs them as two separate jobs

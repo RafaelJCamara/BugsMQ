@@ -15,6 +15,10 @@ cd typescript && npm install && npm run lint && npm run typecheck && npm run bui
 cd typescript/dashboard-web && npm install && npx ng build
 ```
 
+The first command covers `typescript/packages/*` (the SDK) and `typescript/samples/*` (runnable
+participants), which are one npm workspace. `dashboard-web` is deliberately not a member of it and
+needs its own `npm install` — hence the second line.
+
 ## Test
 
 ```bash

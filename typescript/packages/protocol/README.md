@@ -50,9 +50,35 @@ in a dictionary keyed by `Type.Name`.
 - **`TopologyRegistration`, `TopologyReporter`** — the shape used to register a service's
   subscriptions with the Saga Map.
 
-This package is rarely used directly — install a transport (`@vsaga/transport-http`,
-`@vsaga/transport-rabbitmq`) and `@vsaga/participant` instead; both re-export what you need from
-here.
+## Publishing without a participant
+
+`@vsaga/participant` covers the receive side and gives handlers `ctx.reply`/`ctx.publish`, so most
+code never touches a transport's own `publish`. Starting a saga from Node is the exception — there
+is no inbound message to reply to — and that call takes an encoded body and an envelope rather than
+a plain object:
+
+```ts
+import { encodeBody, newEnvelope } from '@vsaga/protocol';
+import { createRabbitMqTransport } from '@vsaga/transport-rabbitmq';
+
+const transport = await createRabbitMqTransport({ connectionString: 'amqp://localhost' });
+
+// The correlation id must be a dashed Guid -- it is the id the .NET engine keys the saga instance
+// on, and newEnvelope rejects any other shape rather than letting an unroutable id reach the wire.
+const correlationId = crypto.randomUUID();
+
+await transport.publish(
+  'OrderSubmitted',
+  encodeBody({ OrderId: 'ORD-1', CustomerId: 'CUST-1', Amount: 42.5 }),
+  newEnvelope(correlationId),
+);
+```
+
+`newEnvelope` mints the fresh message id; use `envelopeFrom` instead when the publish is causally
+linked to a message you received, which is what `ctx.reply` does for you.
+
+This package is otherwise rarely used directly — install a transport (`@vsaga/transport-http`,
+`@vsaga/transport-rabbitmq`) and `@vsaga/participant`; both re-export what you need from here.
 
 ## License
 

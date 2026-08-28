@@ -15,7 +15,7 @@ SDK — seven `@vsaga/*` packages — gives Node participants the same dispatch/
 semantics, a broker transport (`transport-rabbitmq`) and a brokerless HTTP transport (`transport-http`)
 with Express/Fastify/NestJS hosting adapters, wire-compatible with their .NET counterparts. A
 saga-type-agnostic ops dashboard (ASP.NET Core API + Angular SPA) gives both runtimes live updates, a
-visual service map, and manual retry.
+per-saga visual service map, and manual retry.
 
 ## Install
 
@@ -108,8 +108,11 @@ curl -H "X-Api-Key: dev-local-only-change-me" http://localhost:5080/api/sagas
 Then serve the dashboard UI — a dev server, deliberately not part of `docker-compose.yml`:
 
 ```bash
-cd typescript/dashboard-web && npx ng serve     # http://localhost:4200
+cd typescript/dashboard-web && npm install && npx ng serve     # http://localhost:4200
 ```
+
+(`dashboard-web` has its own lockfile and toolchain — it is deliberately not part of the
+`typescript/` npm workspace, so it needs its own `npm install`.)
 
 | What | Where | Notes |
 | --- | --- | --- |
@@ -125,6 +128,19 @@ to trigger by hand. Try the chaos overlay for fault injection
 (`docker-compose.wolverine.yml`, `.masstransit.yml`, `.brighter.yml`, `.http.yml` — see
 [`docs/transports/index.md`](docs/transports/index.md)).
 
+### See both runtimes at once
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.node.yml up -d --build
+docker compose logs -f notification-participant
+```
+
+This overlay hands the sample's `NotificationService` to a Node process
+([`typescript/samples/notification-participant`](typescript/samples/notification-participant)) — same
+queue, same message types, same replies, different language. The .NET sagas are not reconfigured for
+it and the dashboard still draws `NotificationService` as a named node on the Saga Map, which is the
+whole point: nothing on either side has to know the other's runtime.
+
 > **Postgres volume note:** `docker compose up` reuses the named volume across restarts — it is not
 > reset for you. See [`docs/persistence.md`](docs/persistence.md#the-volume-caveat) if you're
 > comparing before/after counts or your volume predates the EF Core migrations pass.
@@ -136,10 +152,13 @@ dotnet/                  .NET 10 solution — engine, persistence, six transport
 typescript/
   packages/               The TypeScript SDK: @vsaga/protocol, participant, transport-http,
                            transport-rabbitmq, express, fastify, nestjs
+  samples/                Runnable Node participants — notification-participant swaps into the
+                           OrderProcessing stack via docker-compose.node.yml
   dashboard-web/          Angular 21 SPA for the dashboard (its own toolchain — see
                            docs/typescript-participants.md)
 docs/                     Reference documentation, design records, and project history — see below
-docker-compose*.yml       The reference stack plus one overlay per transport adapter and one for chaos
+docker-compose*.yml       The reference stack plus one overlay per transport adapter, one for chaos,
+                           and one that swaps in the Node participant
 ```
 
 ## Documentation
