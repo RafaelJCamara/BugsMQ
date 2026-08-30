@@ -73,10 +73,23 @@
        repo that genuinely has no tags yet: both resolve to the same 0.0.0-prefixed fallback. A shallow
        checkout hiding a real tag would otherwise pack and publish that fake version silently, which is
        worse than refusing to pack. Scoped to Pack (not Build/Test) so ordinary per-commit
-       build/test verification keeps working before the first tag exists. -->
+       build/test verification keeps working before the first tag exists.
+
+       $(MinVerVersionOverride) is empty in this genuine no-tag/shallow-checkout case and non-empty only
+       when the caller explicitly passed -p:MinVerVersionOverride=..., so the two targets below use it to
+       tell the cases apart and each report the cause that actually applies. -->
   <Target Name="VSagaFailOnUnresolvedMinVerVersion" BeforeTargets="GenerateNuspec" DependsOnTargets="MinVer"
-          Condition="'$(IsPackable)' == 'true' AND '$(MinVerMajor)' == '0' AND '$(MinVerMinor)' == '0' AND '$(MinVerPatch)' == '0'">
+          Condition="'$(IsPackable)' == 'true' AND '$(MinVerVersionOverride)' == '' AND '$(MinVerMajor)' == '0' AND '$(MinVerMinor)' == '0' AND '$(MinVerPatch)' == '0'">
     <Error Text="MinVer resolved $(MSBuildProjectName)'s version to the untagged fallback 0.0.0 (no reachable git tag). This usually means the checkout is shallow (missing fetch-depth: 0) or the repository has no version tag yet. Refusing to pack a fake 0.0.0 version. For local testing without a tag, pass -p:MinVerVersionOverride=x.y.z-local to dotnet pack." />
+  </Target>
+
+  <!-- Same 0.0.0 guard, but for when the caller passed an explicit -p:MinVerVersionOverride whose own
+       major.minor.patch is 0.0.0 (e.g. -p:MinVerVersionOverride=0.0.0-fieldtest). That is not a
+       missing-tag/shallow-checkout situation (MinVerVersionOverride bypasses tag resolution entirely),
+       so the message above would misdiagnose the cause. Point at the override itself instead. -->
+  <Target Name="VSagaFailOnZeroMinVerVersionOverride" BeforeTargets="GenerateNuspec" DependsOnTargets="MinVer"
+          Condition="'$(IsPackable)' == 'true' AND '$(MinVerVersionOverride)' != '' AND '$(MinVerMajor)' == '0' AND '$(MinVerMinor)' == '0' AND '$(MinVerPatch)' == '0'">
+    <Error Text="The -p:MinVerVersionOverride=$(MinVerVersionOverride) value passed to $(MSBuildProjectName) has a major.minor.patch of 0.0.0, which this guard also rejects (a 0.0.0 base isn't a meaningful package version even for local testing). Pick a non-zero base instead, e.g. -p:MinVerVersionOverride=1.0.0-local." />
   </Target>
 
   <!-- Static code analysis: built-in .NET analyzers + SonarQube/Meziantu/AsyncFixer, enforced via .editorconfig -->
