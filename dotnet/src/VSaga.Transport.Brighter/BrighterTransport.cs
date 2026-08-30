@@ -145,7 +145,7 @@ public sealed class BrighterTransport : IMessageTransport
         {
             var ex = new InvalidOperationException($"Broker did not confirm publish of message id '{envelope.MessageId}' on topic '{routingKey}'.");
             _logger.LogError(ex, "Publish of {MessageType} for correlation id {CorrelationId} was nacked by the broker", messageTypeName, envelope.CorrelationId);
-            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: true, ex);
+            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: false, ex);
         }
     }
 
