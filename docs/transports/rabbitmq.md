@@ -5,7 +5,10 @@
 judged against this one's shape.
 
 - **Topology.** One durable topic exchange (`RabbitMqOptions.ExchangeName`, default
-  `vsaga.saga.events`); `PublishAsync` routes by message-type name as the routing key. `SendAsync`
+  `vsaga.saga.events`); `PublishAsync` routes by a kebab-cased derivation of the message-type name as
+  the routing key (`IRoutingKeyConvention`, e.g. `OrderApproved` -> `order-approved`) — not the literal
+  PascalCase type name, which matters if you're binding a non-vSaga AMQP consumer directly to the
+  exchange. `SendAsync`
   targets AMQP's default (nameless) exchange directly, routing key = destination — a genuine direct
   send, not a topic-exchange trick. `SubscribeAsync` declares one durable queue per consumer, bound to
   the shared exchange for each declared message type, plus a dead-letter exchange/queue pair
