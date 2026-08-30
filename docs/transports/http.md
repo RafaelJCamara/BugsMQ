@@ -25,6 +25,34 @@ traffic; `.CallHttp` is for calling something that was never a vSaga participant
   publish something under its own correlation id from inside a reply handler that has a real route and
   must go out as a normal POST.
 
+## Wiring it up
+
+Register the transport and map its inbound receive endpoint — same one-call-plus-one-map shape as
+every other `AddVSaga*`/`Map*` pair:
+
+```csharp
+builder.Services.AddVSagaHttp(o =>
+{
+    o.ServiceName = "orders";
+    o.Endpoints["payments"] = "http://payments:8080";
+    o.Routes["ChargeCard"] = new List<string> { "payments" };
+});
+
+var app = builder.Build();
+app.MapVSagaHttp();
+```
+
+`AddVSagaHttp` (`ServiceCollectionExtensions.cs`) registers `HttpMessageTransport` as the host's
+`IMessageTransport`; `MapVSagaHttp` (`VSagaHttpEndpointExtensions.cs`) maps this service's own receive
+endpoint at `HttpTransportOptions.InboundPath` (default `/vsaga/messages`) and returns the
+`RouteHandlerBuilder`, so you can chain `.RequireAuthorization()` yourself — vSaga ships no auth
+opinion here. Full option reference:
+[`../configuration.md#httptransportoptions-vsagatransporthttp`](../configuration.md#httptransportoptions-vsagatransporthttp).
+
+Not to be confused with `VSaga.Http`'s `AddVSagaHttpCalls()` — a different package registering a
+transport-agnostic `.CallHttp` step, not this adapter; see
+[`saga-dsl.md`](../saga-dsl.md#callhttp-from-vsagahttp).
+
 ## A cross-process deadlock, found live
 
 A fan-out reply that routes back to its own originating service can deadlock that service's dispatch
@@ -62,3 +90,16 @@ containers so local-subscription counting as a "route" doesn't collapse into one
 
 `@vsaga/transport-http` is wire-compatible with this adapter for Node participants — see
 [`../typescript-participants.md`](../typescript-participants.md).
+
+```ts
+import { createHttpTransport } from '@vsaga/transport-http';
+import { createVSagaRouter } from '@vsaga/express'; // or @vsaga/fastify, @vsaga/nestjs
+
+const transport = createHttpTransport({
+  serviceName: 'payments',
+  endpoints: { orders: 'http://orders:8080' },
+  routes: { ChargeCard: ['orders'] },
+});
+
+app.use(createVSagaRouter(transport)); // mounts the inbound receive endpoint
+```
