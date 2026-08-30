@@ -89,6 +89,13 @@ once — see that overlay's own file header for its exact ports:
 Tear one down the same way you brought it up, naming the same `-p` project:
 `docker compose -p vsaga-wolverine down`.
 
+**Viewing an overlay's dashboard.** The dashboard SPA's API base URL is a hardcoded constant, not an
+environment variable — see `API_BASE_URL` (and `DASHBOARD_API_KEY`) in
+[`typescript/dashboard-web/src/app/api-config.ts`](../../typescript/dashboard-web/src/app/api-config.ts).
+It always points at the plain stack's `5080`. To view a specific overlay's dashboard instead, edit
+`API_BASE_URL` to that overlay's Dashboard API port from the table above (and `DASHBOARD_API_KEY` too, if
+that overlay's `Dashboard__ApiKey` differs from the default dev value) before running `ng serve`.
+
 ## What every adapter guarantees
 
 - **All four vSaga envelope headers round-trip losslessly**: `x-vsaga-source-service`,
