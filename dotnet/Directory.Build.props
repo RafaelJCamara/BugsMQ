@@ -38,13 +38,20 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
-    <!-- Each package's own README.md, when its project directory has one; see the ItemGroup below.
-         No repo-wide PackageIcon yet: that needs real artwork, not a placeholder generated here. -->
+    <!-- Each package's own README.md, when its project directory has one; see the ItemGroup below. -->
     <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)\README.md')">README.md</PackageReadmeFile>
+    <!-- Shared icon for all 16 packages, so nuget.org shows a real thumbnail instead of the generic
+         placeholder. Referenced relative to this file's own directory (not MSBuildProjectDirectory) so
+         it resolves the same regardless of which src/tests subdirectory a given project lives in. -->
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' == 'true' and Exists('$(MSBuildProjectDirectory)\README.md')">
     <None Include="$(MSBuildProjectDirectory)\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
