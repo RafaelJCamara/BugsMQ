@@ -1,13 +1,30 @@
 # Configuration
 
-None of vSaga's options classes bind from `IConfiguration` — there is no `services.Configure<T>(...)`
-step anywhere in this library, and calling one yourself is a silent no-op (it registers an `IOptions<T>`
-nobody reads; every options class below is resolved as a plain `T` singleton, not `IOptions<T>`). Every
-adapter's own options (`RabbitMqOptions`, `HttpTransportOptions`, ...) are set the same way: pass an
-`Action<TOptions>` to that adapter's `AddVSaga*` extension, e.g. `AddVSagaRabbitMq(o => o.ConnectionString = "...")`.
+This page covers the **.NET engine's** options classes specifically. None of them bind from
+`IConfiguration` — there is no `services.Configure<T>(...)` step anywhere in this library, and calling
+one yourself is a silent no-op (it registers an `IOptions<T>` nobody reads; every options class below is
+resolved as a plain `T` singleton, not `IOptions<T>`). Every adapter's own options (`RabbitMqOptions`,
+`HttpTransportOptions`, ...) are set the same way: pass an `Action<TOptions>` to that adapter's
+`AddVSaga*` extension, e.g. `AddVSagaRabbitMq(o => o.ConnectionString = "...")`.
 `SagaOrchestratorOptions`/`SagaOutboxOptions` are the two exceptions — `AddVSagaEngine` takes no
 options delegate of its own — configured instead via `SagaEngineBuilder.ConfigureOrchestrator`/
 `ConfigureOutbox`, shown below. Defaults are shown as written in source.
+
+## TypeScript SDK options
+
+The TypeScript SDK (`@vsaga/transport-rabbitmq`, `@vsaga/transport-http`, `@vsaga/participant`, ...) has
+its own options interfaces, each documented in that package's own README rather than duplicated here —
+see the package table in [`typescript-participants.md`](typescript-participants.md#packages). They mirror
+the .NET shapes below closely but are not identical; the one most worth knowing about before you cross
+runtimes:
+
+| | .NET | TypeScript |
+| --- | --- | --- |
+| HTTP request timeout | `HttpTransportOptions.RequestTimeout` — a `TimeSpan`, default `30s` | `HttpTransportOptions.requestTimeoutMs` — a plain `number` of milliseconds, default `30_000` |
+
+`@vsaga/transport-rabbitmq`'s options also add a `prefetchCount` knob (default `32`, matching the fixed
+`BasicQosAsync` call `RabbitMqTransport` already makes) that `RabbitMqOptions` on the .NET side doesn't
+expose as a setting at all.
 
 ## `SagaOrchestratorOptions`
 

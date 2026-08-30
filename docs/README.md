@@ -11,8 +11,9 @@ new here; the rest of this index is organized by topic, roughly in the order you
 - [`saga-dsl.md`](saga-dsl.md) — the full method inventory for the fluent DSL:
   `OrchestratedSagaDefinition`, `ChoreographedSagaDefinition`, `StateBuilder`, `EventBuilder`,
   `ChoreographyEventBuilder`, `TimeoutBuilder`, `RetryPolicy`, `ISagaContext`, and `.CallHttp`.
-- [`configuration.md`](configuration.md) — every options class: `SagaOrchestratorOptions`, the
-  outbox, each transport adapter, chaos, dashboard auth, OpenTelemetry wiring.
+- [`configuration.md`](configuration.md) — every **.NET** options class: `SagaOrchestratorOptions`, the
+  outbox, each transport adapter, chaos, dashboard auth, OpenTelemetry wiring (the TypeScript SDK's
+  options live in each package's own README instead, cross-linked from there).
 - [`persistence.md`](persistence.md) — EF Core/Postgres (migrations, the Postgres-volume caveat)
   and in-memory persistence.
 - [`observability.md`](observability.md) — the persisted event log, OpenTelemetry traces/metrics,

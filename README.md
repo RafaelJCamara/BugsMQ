@@ -180,8 +180,9 @@ Full index: [`docs/README.md`](docs/README.md). Straight to the reference docs:
   `@vsaga/*` packages, wire compatibility with the .NET side, dispatch semantics, and the HTTP hosting
   adapters.
 - [`docs/saga-dsl.md`](docs/saga-dsl.md) — the complete DSL method reference.
-- [`docs/configuration.md`](docs/configuration.md) — every options class, including the transactional
-  outbox and transport options.
+- [`docs/configuration.md`](docs/configuration.md) — every **.NET** options class, including the
+  transactional outbox and transport options (the TypeScript SDK's options live in each package's own
+  README instead).
 - [`docs/persistence.md`](docs/persistence.md) — EF Core/Postgres, in-memory, migrations.
 - [`docs/observability.md`](docs/observability.md) — traces, metrics, the persisted event log, OTLP
   wiring.
