@@ -7,13 +7,16 @@ broker or database. It includes a `FakeTimeProvider` so timeout behaviour is tes
 waiting.
 
 ```csharp
+var correlationId = Guid.NewGuid();
+var orderId = "ORD-1";
+
 await using var harness = new SagaTestHarness<OrderSaga, OrderSagaState>();
 
 await harness
     .Given(correlationId)
-    .WhenAsync(new OrderSubmitted(orderId, amount: 42m));
+    .WhenAsync(new OrderSubmitted(orderId, "CUST-1", Amount: 42m));
 
-await harness.AssertStateAsync(OrderSaga.AwaitingPayment);
+await harness.AssertStateAsync(harness.Saga.Gathering);
 harness.AssertPublished<ChargePayment>(m => m.Amount == 42m);
 ```
 
