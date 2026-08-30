@@ -46,13 +46,13 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@vsaga/transport-http": "0.1.0"
+    "@vsaga/transport-http": "0.1.0",
+    "@types/express": "^5.0.5"
   },
   "peerDependencies": {
     "express": "^4.19.0 || ^5.0.0"
   },
   "devDependencies": {
-    "@types/express": "^5.0.5",
     "express": "^5.1.0"
   }
 }
