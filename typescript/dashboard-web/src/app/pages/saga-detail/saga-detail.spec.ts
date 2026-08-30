@@ -225,6 +225,63 @@ describe('SagaDetail', () => {
     expect(fixture.componentInstance.loading()).toBe(false);
   });
 
+  // A failed initial REST load leaves the error state (and stale/empty timeline/map/related/
+  // children) up even after the SignalR hub itself recovers -- reconnecting only proves the push
+  // channel is back, not that the failed GETs have been retried.
+  it('re-runs the failed initial load when the hub reconnects after a prior failure', () => {
+    const detail = makeDetail();
+    apiMock = {
+      get: vi.fn().mockReturnValueOnce(throwError(() => new Error('network down'))).mockReturnValueOnce(of(detail)),
+      getTimeline: vi.fn().mockReturnValue(of([])),
+      getMap: vi.fn().mockReturnValue(of(makeMap())),
+      retry: vi.fn(),
+      findByCorrelationId: vi.fn().mockReturnValue(of([])),
+      getChildren: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      timelineEntryAdded$: new Subject<{ sagaType: string; correlationId: string; entry: SagaLogEntry }>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('disconnected'),
+      subscribeToSaga: vi.fn().mockResolvedValue(undefined),
+      unsubscribeFromSaga: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [SagaDetail],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ sagaType: 'OrderSaga', id: 'saga-1' })) } },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaDetail);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.error()).toContain('Could not load');
+    expect(apiMock.get).toHaveBeenCalledTimes(1);
+
+    hubMock.connectionState$.next('connected');
+
+    expect(apiMock.get).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.error()).toBeNull();
+    expect(fixture.componentInstance.detail()).toEqual(detail);
+  });
+
+  // Mirrors the guard hasEverConnected already uses: only a reconnect that follows an actual failure
+  // should force an extra reload. A first-ever connect (or an ordinary reconnect blip that never
+  // surfaced an error) must not double up on the load() ngOnInit already fired.
+  it('does not trigger a redundant load on an ordinary connect/reconnect when there was no prior error', () => {
+    const fixture = setup();
+
+    expect(apiMock.get).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.error()).toBeNull();
+
+    hubMock.connectionState$.next('reconnecting');
+    hubMock.connectionState$.next('connected');
+
+    expect(apiMock.get).toHaveBeenCalledTimes(1);
+  });
+
   it('unsubscribes from the hub on destroy', () => {
     const fixture = setup();
     fixture.destroy();

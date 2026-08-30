@@ -94,6 +94,60 @@ describe('SagaList', () => {
     expect(fixture.nativeElement.querySelector('.banner--error')?.textContent).toContain('Could not reach');
   });
 
+  // A failed initial REST load leaves the error banner up even after the SignalR hub itself
+  // recovers -- reconnecting only proves the push channel is back, not that the failed GET has been
+  // retried. Left unfixed, the list silently understates its rows (only what trickled in via live
+  // push since reconnecting) while the stale "Could not reach..." banner keeps showing on top.
+  it('re-runs the failed initial load and clears the error banner when the hub reconnects after a prior failure', () => {
+    const summary = makeSummary();
+    apiMock = {
+      list: vi
+        .fn()
+        .mockReturnValueOnce(throwError(() => new Error('network down')))
+        .mockReturnValueOnce(of({ items: [summary], page: 1, pageSize: 25, totalCount: 1 })),
+      getSagaTypes: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject<SagaSummary>(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('disconnected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [SagaList],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaList);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.error()).toContain('Could not reach');
+    expect(apiMock.list).toHaveBeenCalledTimes(1);
+
+    hubMock.connectionState$.next('connected');
+
+    expect(apiMock.list).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.error()).toBeNull();
+    expect(fixture.componentInstance.sagas()).toEqual([summary]);
+  });
+
+  // Mirrors the guard hasEverConnected already uses: only a reconnect that follows an actual failure
+  // should force an extra refetch. A first-ever connect (or an ordinary reconnect blip that never
+  // surfaced an error) must not double up on the refresh() ngOnInit already fired.
+  it('does not trigger a redundant refresh on an ordinary connect/reconnect when there was no prior error', () => {
+    const fixture = setup({ items: [], page: 1, pageSize: 25, totalCount: 0 });
+
+    expect(apiMock.list).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.error()).toBeNull();
+
+    hubMock.connectionState$.next('reconnecting');
+    hubMock.connectionState$.next('connected');
+
+    expect(apiMock.list).toHaveBeenCalledTimes(1);
+  });
+
   it('refresh() re-queries the API with the current filter values', () => {
     const fixture = setup();
     fixture.componentInstance.status = 'Failed';

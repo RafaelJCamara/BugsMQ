@@ -72,8 +72,19 @@ export class SagaDetail implements OnInit, OnDestroy {
         this.hasSubscribedToHub = true;
       }),
       this.hub.connectionState$.subscribe((s) => {
+        // Captured before the error signal is touched by anything below -- a reconnect after an
+        // ordinary first-ever connect (error() still null, nothing has failed yet) must not trigger
+        // a redundant extra load() on top of the one ngOnInit already fired.
+        const hadError = this.error() !== null;
         this.connectionState.set(s);
-        if (s === 'connected') this.hasEverConnected.set(true);
+        if (s === 'connected') {
+          this.hasEverConnected.set(true);
+          // A prior REST load failure (e.g. the API was down on page load) leaves the error state
+          // and stale/empty timeline/map/related/children on screen even after the hub reconnects
+          // and live push updates resume -- reconnecting only proves the SignalR channel is back,
+          // not that the failed GET requests have been retried. Re-run them now so both clear together.
+          if (hadError) this.load();
+        }
       }),
       this.hub.sagaUpdated$.subscribe((summary) => {
         // Both halves must match: the list group pushes updates for every saga, and another saga
