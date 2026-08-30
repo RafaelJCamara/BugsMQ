@@ -78,7 +78,10 @@ authentication or authorization.
 
 ## Live updates (SignalR)
 
-`SagaHub` groups connections per saga instance (`saga:{sagaType}:{correlationId}`) and per list view,
+`SagaHub` is mapped at `/hubs/saga` (see `dotnet/src/VSaga.Dashboard.Api/Program.cs`) and requires the
+same authentication as the REST routes above — see [Authentication](#authentication) for how a
+non-Angular client should supply the key on the hub connection. It groups connections per saga instance
+(`saga:{sagaType}:{correlationId}`) and per list view,
 so a detail page only receives updates for the instance it's actually viewing. Two paths push into it:
 
 - **In-process** (`SignalRSagaChangeNotifier`) — used when the hub and the saga engine share a
