@@ -114,6 +114,9 @@ Then serve the dashboard UI — a dev server, deliberately not part of `docker-c
 cd typescript/dashboard-web && npm install && npx ng serve     # http://localhost:4200
 ```
 
+> This command chains with `&&`, which Windows PowerShell 5.1 (`powershell.exe`) can't parse. Use
+> PowerShell 7+ (`pwsh`) or Git Bash/WSL, or just run each command on its own line.
+
 (`dashboard-web` has its own lockfile and toolchain — it is deliberately not part of the
 `typescript/` npm workspace, so it needs its own `npm install`.)
 
