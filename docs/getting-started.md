@@ -5,6 +5,12 @@ in-memory transport and persistence providers — no Docker, no database, no bro
 running the full reference stack (Postgres, RabbitMQ, the dashboard) instead, see
 ["Run the demo"](../README.md#run-the-demo) in the root README.
 
+> **You'll need:** the .NET SDK version pinned in [`dotnet/global.json`](../dotnet/global.json) —
+> currently `10.0.301` (`rollForward: latestFeature`, so a later `10.0.x` feature-band SDK also works,
+> but an older one doesn't). If you're also trying the TypeScript side, Node.js `>= 22`
+> (`typescript/package.json`'s `engines` field). See CONTRIBUTING.md's
+> [Prerequisites](../CONTRIBUTING.md#prerequisites) for the fuller contributor-grade list (Docker, etc.).
+
 > vSaga has not yet cut a tagged release, so the packages below aren't on nuget.org/npm yet. Reference
 > them as project references (`dotnet add reference ../path/to/VSaga.Core/VSaga.Core.csproj`) or via a
 > local `dotnet pack`/`npm pack` until the first release ships — the commands below are the shape usage
