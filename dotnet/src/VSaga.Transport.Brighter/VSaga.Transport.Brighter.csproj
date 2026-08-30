@@ -18,6 +18,12 @@
     <!-- Version bounded in Directory.Packages.props, alongside the other two bus SDK pins. -->
     <PackageReference Include="Paramore.Brighter" />
     <PackageReference Include="Paramore.Brighter.MessagingGateway.RMQ.Async" />
+    <!-- Referenced directly (not just pulled in transitively via the gateway package above) because
+         SendWithConfirmationAsync below catches RabbitMQ.Client.Exceptions.PublishException itself,
+         the exception type RabbitMQ.Client 7.2.2's own publisher-confirmation tracking throws for a
+         genuine broker-side nack, one layer below Paramore.Brighter's own abstractions. Same reasoning
+         as VSaga.Transport.RabbitMQ's identical direct reference. -->
+    <PackageReference Include="RabbitMQ.Client" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -14,6 +14,10 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!-- Referenced directly so the genuine-nack test below can declare a raw, precisely-controlled
+         queue (x-max-length 0 / x-overflow reject-publish) that BrighterTransport itself has no API
+         surface to express, and assert on RabbitMQ.Client.Exceptions.PublishException.IsReturn. -->
+    <PackageReference Include="RabbitMQ.Client" />
     <PackageReference Include="Testcontainers.RabbitMq" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">

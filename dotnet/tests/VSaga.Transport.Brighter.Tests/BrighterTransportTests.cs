@@ -1,6 +1,8 @@
 using VSaga.Abstractions.Diagnostics;
 using VSaga.Abstractions.Transport;
 using Microsoft.Extensions.Logging.Abstractions;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 using Testcontainers.RabbitMq;
 
 namespace VSaga.Transport.Brighter.Tests;
@@ -11,6 +13,8 @@ public sealed record PingMessage(string Text);
 public sealed class BrighterTransportTests : IAsyncLifetime
 {
 #pragma warning restore CA1001
+    private const string ExchangeName = "vsaga.saga.events.brighter.test";
+
     private readonly RabbitMqContainer _container = new RabbitMqBuilder("rabbitmq:4-management").Build();
     private BrighterTransport _transport = null!;
 
@@ -21,7 +25,7 @@ public sealed class BrighterTransportTests : IAsyncLifetime
         var options = new BrighterOptions
         {
             ConnectionString = _container.GetConnectionString(),
-            ExchangeName = "vsaga.saga.events.brighter.test",
+            ExchangeName = ExchangeName,
         };
 
         _transport = new BrighterTransport(options, NullLogger<BrighterTransport>.Instance);
@@ -118,6 +122,48 @@ public sealed class BrighterTransportTests : IAsyncLifetime
 
         // No exception: the broker confirms the publish even though it was never routed anywhere.
         Assert.Null(exception);
+    }
+
+    // The genuine-nack counterpart to the test above -- closes the coverage gap a prior fix (see
+    // BrighterTransport.SendWithConfirmationAsync's own remarks) left open. TransportSubscription/
+    // SubscribeAsync has no way to declare queue arguments, so this raw RabbitMQ.Client channel
+    // (against the same Testcontainers broker, same exchange BrighterTransport itself publishes to)
+    // declares a queue the broker is guaranteed to reject every publish into: x-max-length 0 with
+    // x-overflow reject-publish means even the very first message overflows. This is what proved, by
+    // direct testing, that RabbitMQ.Client 7.2.2 throws RabbitMQ.Client.Exceptions.PublishException
+    // synchronously out of SendAsync for a genuine nack -- see the comment above
+    // SendWithConfirmationAsync for the full mechanism.
+    [Fact]
+    public async Task Send_ToOverflowingQueue_ThrowsMessageTransportPublishException_NotIsUnroutable()
+    {
+        const string queueName = "vsaga.brighter.test.overflow-queue";
+
+        await using (var connection = await new ConnectionFactory { Uri = new Uri(_container.GetConnectionString()) }.CreateConnectionAsync())
+        await using (var channel = await connection.CreateChannelAsync())
+        {
+            await channel.ExchangeDeclareAsync(ExchangeName, "topic", durable: true);
+            await channel.QueueDeclareAsync(
+                queueName,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["x-max-length"] = 0,
+                    ["x-overflow"] = "reject-publish",
+                });
+            await channel.QueueBindAsync(queueName, ExchangeName, queueName);
+        }
+
+        var exception = await Record.ExceptionAsync(() =>
+            _transport.SendAsync(queueName, new PingMessage("should be rejected"), MessageEnvelope.New(Guid.NewGuid())));
+
+        var publishException = Assert.IsType<MessageTransportPublishException>(exception);
+        // isUnroutable: false -- this is a broker-side rejection of a message that WAS routed to a
+        // real, bound queue, the opposite of the zero-bound-queues scenario above.
+        Assert.False(publishException.IsUnroutable);
+        var brokerException = Assert.IsType<PublishException>(publishException.InnerException);
+        Assert.False(brokerException.IsReturn);
     }
 
     [Fact]

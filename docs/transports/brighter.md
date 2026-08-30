@@ -25,15 +25,25 @@ live-verification detail: [`../history/transport-adapter-brighter.md`](../histor
   before a fresh consumer's first receive is silently dropped. `SubscribeAsync` forces topology to
   exist before returning (the contract `IMessageTransport.SubscribeAsync` requires) with a 50ms
   warm-up receive before starting the real consume loop.
-- **Unroutable-publish detection: absent, confirmed by binary inspection and live testing.**
+- **Unroutable-publish detection: absent for the zero-bound-queues case; a genuine nack is caught, but
+  not the way an earlier version of this adapter assumed — both confirmed by live testing.**
   `RmqMessageProducer` never sets AMQP's `mandatory` flag and exposes no way to request it — publishing
-  to a routing key nobody has ever bound a queue to still yields a broker-side confirm `Success = true`.
-  `BrighterTransport.SendWithConfirmationAsync` still wires up the confirmation event and throws
-  `MessageTransportPublishException` on an explicit `Success = false` (a genuine broker-side nack, e.g.
-  a queue at its length limit) — a strictly smaller net than RabbitMQ's mandatory-plus-confirms
-  combination catches. The test
+  to a routing key nobody has ever bound a queue to still yields a broker-side confirm `Success = true`,
+  with no exception and no way to detect it (the test
   `Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway` documents this
-  verified behaviour directly.
+  directly). A genuine broker-side nack (e.g. a queue at its length limit) is a different story: Brighter
+  10.7.0 unconditionally creates every channel with RabbitMQ.Client's own publisher-confirmation
+  *tracking* enabled, so it's RabbitMQ.Client 7.2.2 itself — not Brighter's `ISupportPublishConfirmationAsync`
+  confirmation event — that detects the nack, by throwing `RabbitMQ.Client.Exceptions.PublishException`
+  synchronously out of `RmqMessageProducer.SendAsync` before that method's own Task ever completes.
+  `BrighterTransport.SendWithConfirmationAsync` catches that exception directly and rethrows it as
+  `MessageTransportPublishException` (`IsUnroutable` mapped from the underlying `PublishException.IsReturn`,
+  which is always `false` today since `mandatory` is never set) — the confirmation-event subscription this
+  method used to rely on for that same job was proven, by live testing against a real broker, to be dead
+  code for a genuine nack (the exception unwinds before that check is ever reached), and was removed. The
+  test `Send_ToOverflowingQueue_ThrowsMessageTransportPublishException_NotIsUnroutable` (a queue declared
+  with `x-max-length: 0` / `x-overflow: reject-publish`, so every publish into it is genuinely rejected)
+  documents this verified behaviour directly.
 - **Header filtering on receipt.** `ReceivedMessage.Headers` is filtered to the `x-vsaga-` prefix on
   the way in — plus the two bare W3C trace context headers, `traceparent`/`tracestate`, as a named
   allowlist exception (they interoperate only by *not* carrying the `x-vsaga-` prefix, so both still

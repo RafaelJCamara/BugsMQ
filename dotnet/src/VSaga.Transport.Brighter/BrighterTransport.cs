@@ -4,6 +4,7 @@ using VSaga.Abstractions.Transport;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.MessagingGateway.RMQ.Async;
+using RabbitMQ.Client.Exceptions;
 
 namespace VSaga.Transport.Brighter;
 
@@ -109,43 +110,47 @@ public sealed class BrighterTransport : IMessageTransport
         return new Message(header, new MessageBody(body));
     }
 
-    // Brighter's RmqMessageProducer doesn't throw synchronously on an unroutable/nacked publish; instead
-    // it awaits the broker's publisher-confirm internally (bounded by
-    // RmqPublication.WaitForConfirmsTimeOutInMilliseconds, default 500ms) and raises
-    // ISupportPublishConfirmationAsync's confirmation event. That event was confirmed, by direct testing
-    // against a live broker, to fire and complete before SendAsync's own awaited Task completes, so no
-    // separate timeout or correlation-by-id is needed: each producer instance here is single-use (see the
-    // "await using" in the caller), so there is no cross-talk to disambiguate between.
+    // CONFIRMED by direct testing against a live broker (a queue declared with x-max-length 0 /
+    // x-overflow reject-publish, forcing the broker to genuinely reject every publish to it): a genuine
+    // broker-side nack does NOT surface through Brighter's own ISupportPublishConfirmationAsync
+    // confirmation event -- it throws RabbitMQ.Client.Exceptions.PublishException synchronously, out of
+    // the awaited producer.SendAsync call itself, before that Task ever completes. This is unconditional
+    // for the currently pinned package versions, not merely something observed once: Paramore.Brighter.
+    // MessagingGateway.RMQ.Async 10.7.0's RmqMessageGateway.ConnectToBrokerAsync creates every channel
+    // with RabbitMQ.Client's own publisher-confirmation TRACKING enabled (CreateChannelOptions with both
+    // publisherConfirmationsEnabled and publisherConfirmationTrackingEnabled hardcoded to true, with no
+    // way to opt out) -- and RabbitMQ.Client 7.2.2's own tracked-publish path is documented to throw
+    // PublishException "if a nack or basic.return is returned for the message", full stop. So this
+    // method used to subscribe to the confirmation event and check its Success flag after the await --
+    // that check could never run for a genuine nack (the exception unwinds past it first), making it
+    // dead code, which direct testing here proved rather than assumed; the subscription was removed
+    // accordingly in favor of catching the exception RabbitMQ.Client actually throws.
+    //
+    // This does NOT apply to the other, separately-verified failure mode: a routing key with zero bound
+    // queues. Nothing throws there (see the still-passing
+    // Publish_ToUnboundRoutingKey_DoesNotThrow_NoMandatoryReturnSupportInBrighterRmqGateway below) --
+    // RabbitMQ.Client only throws for an actual nack or basic.return, and a publish that simply reaches
+    // no queue is still, from the broker's perspective, successfully published (Success stays true),
+    // because RmqMessageProducer never sets AMQP's "mandatory" flag (see docs/transports/brighter.md).
+    //
+    // PublishException.IsReturn is true for a basic.return (mandatory-flagged and unroutable) and false
+    // for a genuine nack -- mapping IsUnroutable straight to it, exactly like RabbitMqTransport's
+    // identical use of the same property from the same underlying exception type, keeps this adapter
+    // automatically correct if Brighter's gateway ever starts setting "mandatory" itself. IsReturn is
+    // always false today given the previous paragraph, so every throw here currently reports
+    // isUnroutable: false.
     private async Task SendWithConfirmationAsync(RmqMessageProducer producer, Message message, string messageTypeName, MessageEnvelope envelope, RoutingKey routingKey, CancellationToken cancellationToken)
     {
-        PublishConfirmationResult? confirmation = null;
-        Task OnConfirmed(PublishConfirmationResult result)
-        {
-            confirmation = result;
-            return Task.CompletedTask;
-        }
-
-        ((ISupportPublishConfirmationAsync)producer).OnMessagePublishedAsync += OnConfirmed;
         try
         {
             await producer.SendAsync(message, cancellationToken);
         }
-        finally
+        catch (PublishException ex)
         {
-            ((ISupportPublishConfirmationAsync)producer).OnMessagePublishedAsync -= OnConfirmed;
-        }
-
-        // Known gap, see docs/transports/brighter.md: Brighter's RmqMessageProducer never sets AMQP's
-        // "mandatory" flag, so a message routed to zero bound queues is still confirmed successfully by
-        // the broker (Success stays true) — there is, as of Paramore.Brighter.MessagingGateway.RMQ.Async
-        // 10.7.0, no equivalent of RabbitMqTransport's mandatory-plus-publisher-confirms unroutable-return
-        // detection. The throw below only fires for a genuine broker-side nack (e.g. a queue at its
-        // length limit), the one failure mode this package's confirmation event can actually surface.
-        if (confirmation is { Success: false })
-        {
-            var ex = new InvalidOperationException($"Broker did not confirm publish of message id '{envelope.MessageId}' on topic '{routingKey}'.");
-            _logger.LogError(ex, "Publish of {MessageType} for correlation id {CorrelationId} was nacked by the broker", messageTypeName, envelope.CorrelationId);
-            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, isUnroutable: false, ex);
+            var detail = $"topic '{routingKey}': {ex.Message}";
+            _logger.LogError(ex, "Publish of {MessageType} for correlation id {CorrelationId} was {Outcome} by the broker",
+                messageTypeName, envelope.CorrelationId, ex.IsReturn ? "returned as unroutable" : "nacked");
+            throw new MessageTransportPublishException(messageTypeName, envelope.CorrelationId, ex.IsReturn, detail, ex);
         }
     }
 
