@@ -4,6 +4,10 @@
 seam that `MiddlewarePipelineTransport` already wraps every transport in, so it works identically
 across all six adapters with no adapter-specific code. It is opt-in and never registered by default.
 
+**.NET-only, today.** There is no TypeScript equivalent of `VSaga.Chaos` — fault injection is a .NET
+runtime-only capability; a Node participant in a mixed-runtime saga cannot delay, drop, or duplicate its
+own messages this way.
+
 ```csharp
 services.AddVSagaChaos(o =>
 {
