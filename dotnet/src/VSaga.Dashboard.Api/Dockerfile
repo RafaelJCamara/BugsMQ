@@ -19,8 +19,8 @@ RUN dotnet publish src/VSaga.Dashboard.Api/VSaga.Dashboard.Api.csproj -c Release
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 # curl backs docker-compose's HEALTHCHECK against /health — order-processing depends on this container
-# reporting healthy (i.e. migrations applied) before it starts, to avoid both processes racing to
-# create the schema (order-processing's own EnsureCreatedAsync bootstrap vs. this app's MigrateAsync).
+# reporting healthy (i.e. migrations applied) before it starts, so it never begins publishing
+# messages against a schema this app's MigrateAsync hasn't finished applying yet.
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app .
 EXPOSE 8080

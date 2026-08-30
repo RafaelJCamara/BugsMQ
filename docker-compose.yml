@@ -67,9 +67,9 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      # dashboard-api now owns schema migrations (VSaga.Persistence.EFCore.Postgres); waiting for it
-      # to report healthy avoids racing its MigrateAsync against this service's own EnsureCreatedAsync
-      # bootstrap on a fresh database.
+      # dashboard-api owns schema migrations (VSaga.Persistence.EFCore.Postgres); this service does
+      # no schema bootstrapping of its own, so waiting for dashboard-api to report healthy just
+      # ensures its migrations have already landed before order-processing starts publishing messages.
       dashboard-api:
         condition: service_healthy
 
