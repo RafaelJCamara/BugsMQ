@@ -236,6 +236,22 @@ describe('SagaList', () => {
     expect(fixture.componentInstance.totalCount()).toBe(1);
   });
 
+  it('caps the rendered page-1 array at pageSize under a burst of live inserts, while totalCount keeps counting every one', () => {
+    const fixture = setup({ items: [], page: 1, pageSize: 25, totalCount: 0 });
+
+    for (let i = 0; i < 30; i++) {
+      hubMock.sagaUpdated$.next(
+        makeSummary({
+          correlationId: `new-${i}`,
+          updatedAtUtc: `2026-01-01T00:00:${String(i).padStart(2, '0')}Z`,
+        }),
+      );
+    }
+
+    expect(fixture.componentInstance.sagas().length).toBe(25);
+    expect(fixture.componentInstance.totalCount()).toBe(30);
+  });
+
   it('nextPage() requests the next page and disables itself once there is nothing further to load', () => {
     const fixture = setup({ items: [makeSummary()], page: 1, pageSize: 25, totalCount: 30 });
     apiMock.list.mockClear();

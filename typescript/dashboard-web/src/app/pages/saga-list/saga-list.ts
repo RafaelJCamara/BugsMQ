@@ -267,7 +267,13 @@ export class SagaList implements OnInit, OnDestroy {
     this.totalCount.set(this.totalCount() + 1);
 
     if (this.page() === 1) {
-      this.sagas.set([...current, summary].sort((a, b) => this.compareSagas(a, b)));
+      // totalCount tracks the real server-side total, but the rendered page-1 array must stay
+      // capped at pageSize — otherwise live inserts under sustained traffic grow the DOM without
+      // bound. Sorting first means the trimmed-off tail is whatever a server refresh would also
+      // push to page 2.
+      this.sagas.set(
+        [...current, summary].sort((a, b) => this.compareSagas(a, b)).slice(0, this.pageSize),
+      );
     } else {
       this.newSagasAvailable.set(this.newSagasAvailable() + 1);
     }
