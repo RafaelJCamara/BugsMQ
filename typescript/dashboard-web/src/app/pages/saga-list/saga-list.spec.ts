@@ -94,6 +94,37 @@ describe('SagaList', () => {
     expect(fixture.nativeElement.querySelector('.banner--error')?.textContent).toContain('Could not reach');
   });
 
+  // The error banner already explains why the table is empty; showing "No sagas match these
+  // filters yet." underneath it as well reads as contradictory (one implies zero genuine matches,
+  // the other implies the query couldn't even run).
+  it('does not show the "no sagas match" empty state alongside the error banner', () => {
+    apiMock = {
+      list: vi.fn().mockReturnValue(throwError(() => new Error('network down'))),
+      getSagaTypes: vi.fn().mockReturnValue(of([])),
+    };
+    hubMock = {
+      sagaUpdated$: new Subject(),
+      connectionState$: new BehaviorSubject<SagaHubConnectionState>('connected'),
+      subscribeToList: vi.fn().mockResolvedValue(undefined),
+    };
+
+    TestBed.configureTestingModule({
+      imports: [SagaList],
+      providers: [
+        provideRouter([]),
+        { provide: SagaApiService, useValue: apiMock },
+        { provide: SagaHubService, useValue: hubMock },
+      ],
+    });
+    const fixture = TestBed.createComponent(SagaList);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.error()).toContain('Could not reach');
+    expect(fixture.componentInstance.sagas()).toEqual([]);
+    expect(fixture.nativeElement.querySelector('.banner--error')).toBeTruthy();
+    expect(fixture.nativeElement.textContent).not.toContain('No sagas match these filters yet.');
+  });
+
   // A failed initial REST load leaves the error banner up even after the SignalR hub itself
   // recovers -- reconnecting only proves the push channel is back, not that the failed GET has been
   // retried. Left unfixed, the list silently understates its rows (only what trickled in via live
