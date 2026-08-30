@@ -15,6 +15,8 @@ Registered by `AddVSagaEngine(...)` with library defaults; override with `Config
 the same builder delegate:
 
 ```csharp
+using VSaga.Core.Runtime; // SagaOrchestratorOptions
+
 services.AddVSagaEngine(o => o
     .ConfigureOrchestrator(opt => opt.MaxDeliveryAttempts = 10)
     .AddSaga<OrderSaga, OrderSagaState>());
@@ -31,6 +33,8 @@ One tunable:
 Registered by `AddVSagaEngine(...)` with library defaults; override with `ConfigureOutbox` the same way:
 
 ```csharp
+using VSaga.Core.Runtime; // SagaOutboxOptions, SagaOutboxMode
+
 services.AddVSagaEngine(o => o
     .ConfigureOutbox(opt =>
     {
